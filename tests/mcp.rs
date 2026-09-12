@@ -905,3 +905,56 @@ fn repo_summary_returns_totals_and_top_metrics() {
     assert_eq!(result["truncated"], true);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn initialize_carries_usage_instructions() {
+    let response: Value = serde_json::from_str(
+        &handle_request(&request("initialize", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    let instructions = result_of(&response)["instructions"]
+        .as_str()
+        .expect("initialize must include usage instructions");
+    assert!(instructions.contains("analyze_changed"));
+    assert!(instructions.contains("evidence"));
+}
+
+#[test]
+fn tools_list_marks_every_tool_read_only() {
+    let response: Value = serde_json::from_str(
+        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    let tools = result_of(&response)["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 7);
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap();
+        assert!(
+            tool["annotations"]["title"].is_string(),
+            "{name} needs a display title"
+        );
+        assert_eq!(
+            tool["annotations"]["readOnlyHint"], true,
+            "{name} must advertise readOnlyHint"
+        );
+        assert_eq!(
+            tool["annotations"]["idempotentHint"], true,
+            "{name} must advertise idempotentHint"
+        );
+        assert_eq!(
+            tool["annotations"]["openWorldHint"], false,
+            "{name} must advertise a closed world"
+        );
+    }
+    let changed = tools
+        .iter()
+        .find(|tool| tool["name"] == "analyze_changed")
+        .unwrap();
+    assert!(
+        changed["description"]
+            .as_str()
+            .unwrap()
+            .contains("after editing"),
+        "descriptions must state when to reach for the tool"
+    );
+}

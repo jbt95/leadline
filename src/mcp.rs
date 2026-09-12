@@ -22,6 +22,10 @@ use std::path::{Path, PathBuf};
 /// Maximum entries returned in any result array before truncation kicks in.
 const MAX_ENTRIES: usize = 200;
 
+/// Usage guidance returned by `initialize`. Hosts may inject this into the
+/// system prompt, so it doubles as the server's self-advertisement.
+const SERVER_INSTRUCTIONS: &str = "leadline reports deterministic function-level complexity metrics (Java, JavaScript, TypeScript, TSX) without executing code or touching the network. Use analyze_changed after substantial edits to spot regressions, repo_summary for a first look at unfamiliar code, analyze_function with explain:true to see which lines drive complexity, check to gate thresholds or regressions, and test_targets to rank uncovered decision lines. Metrics are evidence, not objectives: do not refactor solely to lower a number.";
+
 /// The seven tools this server exposes. Fixed set; keep in sync with
 /// [`tools_list`] and [`dispatch_tool`].
 const TOOL_NAMES: [&str; 7] = [
@@ -1038,6 +1042,7 @@ fn initialize_result(params: &serde_json::Value) -> serde_json::Value {
             "name": "leadline",
             "version": env!("CARGO_PKG_VERSION"),
         },
+        "instructions": SERVER_INSTRUCTIONS,
     })
 }
 
@@ -1046,7 +1051,8 @@ fn tools_list_result() -> serde_json::Value {
         "tools": [
             {
                 "name": "analyze",
-                "description": "Analyze a path and return compact function metrics.",
+                "description": "Measure function complexity across a path. Use for hotspot lists (sort_by/top) or specific metrics; use analyze_changed after edits.",
+                "annotations": { "title": "Analyze complexity", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -1060,7 +1066,8 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "analyze_changed",
-                "description": "Analyze functions changed relative to a git base, with before/after deltas.",
+                "description": "Use after editing code to see which functions regressed. Compares against a git base with before/after deltas.",
+                "annotations": { "title": "Analyze changed functions", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -1078,7 +1085,8 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "analyze_function",
-                "description": "Analyze one named function in a file.",
+                "description": "Inspect one named function. Use explain:true to see the exact lines driving its complexity.",
+                "annotations": { "title": "Analyze one function", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -1091,7 +1099,8 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "check",
-                "description": "Apply quality-gate thresholds and return violations.",
+                "description": "Quality gate for thresholds or regressions. Use in CI or before committing; pass coverage so CRAP gates are meaningful.",
+                "annotations": { "title": "Run quality gate", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -1123,7 +1132,8 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "explain_metric",
-                "description": "Return the documented default-v1 definition of a metric.",
+                "description": "Look up how a metric is defined (default-v1) before interpreting its numbers.",
+                "annotations": { "title": "Explain metric", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -1134,7 +1144,8 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "repo_summary",
-                "description": "Aggregate repository totals plus the top functions by CRAP, cognitive, and cyclomatic complexity.",
+                "description": "Use as a first look at unfamiliar code: totals plus the top functions by CRAP, cognitive, and cyclomatic complexity.",
+                "annotations": { "title": "Repository summary", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -1145,7 +1156,8 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "test_targets",
-                "description": "Rank functions holding uncovered decision lines (known zero line-coverage hits) by CRAP.",
+                "description": "Use to decide what to test: ranks functions holding uncovered decision lines by CRAP. Requires coverage.",
+                "annotations": { "title": "Rank test targets", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
