@@ -1,7 +1,9 @@
-use leadline::agent::{analyze_agent_json, changed_agent_json};
+use leadline::agent::{
+    Budget, analyze_agent_json, changed_agent_json, changed_agent_json_budgeted,
+};
 use leadline::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, Language,
-    MetricSpecs,
+    MetricContribution, MetricSpecs,
 };
 use leadline::diff::{ChangedReport, FunctionChange};
 use serde_json::json;
@@ -55,6 +57,21 @@ fn function_full(name: &str, start_line: u32, metrics: FunctionMetrics) -> Funct
         metrics,
         contributions: Vec::new(),
         source_fingerprint: 0,
+    }
+}
+fn contribution(
+    rule: &str,
+    line: u32,
+    nesting: u32,
+    cognitive: u32,
+    cyclomatic: u32,
+) -> MetricContribution {
+    MetricContribution {
+        rule: rule.to_owned(),
+        line,
+        nesting,
+        cognitive,
+        cyclomatic,
     }
 }
 
@@ -202,6 +219,52 @@ fn changed_agent_json_classifies_and_handles_added_removed() {
     );
     assert_eq!(value["regressions"], json!([]));
     assert_eq!(value["improvements"], json!([]));
+}
+
+#[test]
+fn changed_agent_json_explains_only_multiset_added_regression_causes() {
+    let mut before = function_full("worse", 1, metrics(1, 1, Some(1.0), None));
+    before.contributions = vec![contribution("if", 2, 0, 1, 1)];
+    let mut after = function_full("worse", 9, metrics(2, 2, Some(2.0), None));
+    after.contributions = vec![
+        contribution("if", 20, 0, 1, 1),
+        contribution("loop", 30, 1, 2, 1),
+        contribution("loop", 31, 1, 2, 1),
+    ];
+    let mut improved = function_full("better", 40, metrics(2, 2, Some(2.0), None));
+    improved.contributions = vec![contribution("if", 40, 0, 1, 1)];
+    let report = ChangedReport {
+        schema_version: 1,
+        metric_profile: "default-v1",
+        analyzer_version: "0.1.0",
+        metric_specs: MetricSpecs::default(),
+        base: "HEAD".to_owned(),
+        functions: vec![
+            change("app.ts", "worse", Some(before), Some(after)),
+            change("app.ts", "better", Some(improved.clone()), Some(improved)),
+        ],
+        parse_errors: Vec::new(),
+    };
+
+    let default = changed_agent_json(&report);
+    assert!(default["regressions"][0].get("causes").is_none());
+    assert!(default["improvements"][0].get("causes").is_none());
+
+    let explained = changed_agent_json_budgeted(
+        &report,
+        &Budget {
+            explain: true,
+            ..Budget::default()
+        },
+    );
+    assert_eq!(
+        explained["regressions"][0]["causes"],
+        json!([
+            {"rule": "loop", "line": 30, "nesting": 1, "cognitive": 2, "cyclomatic": 1},
+            {"rule": "loop", "line": 31, "nesting": 1, "cognitive": 2, "cyclomatic": 1},
+        ])
+    );
+    assert!(explained["improvements"][0].get("causes").is_none());
 }
 
 #[test]

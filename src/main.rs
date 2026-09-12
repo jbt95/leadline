@@ -1,11 +1,11 @@
 use leadline::agent::{Budget, SortKey};
-use leadline::config::{self, Config};
+use leadline::config::{self, Config, RegressionLimits};
 use leadline::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, METRIC_PROFILE, MetricSpecs,
     OUTPUT_SCHEMA_VERSION, Thresholds,
 };
 use leadline::coverage::CoverageMap;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -98,6 +98,8 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
         "function" => function_command(&args[1..]),
         "changed" | "diff" => changed_command(command, &args[1..]),
         "check" => check_command(&args[1..]),
+        "baseline" => baseline_command(&args[1..]),
+        "test-targets" => test_targets_command(&args[1..]),
         "doctor" => doctor_command(&args[1..]),
         "mcp" => match leadline::mcp::serve() {
             Ok(()) => Ok(ExitCode::SUCCESS),
@@ -261,10 +263,25 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
     let mut path = PathBuf::from(".");
     let mut budget = Budget::default();
     let mut has_budget = false;
+    let mut staged = false;
+    let mut target = None;
+    let mut renames = false;
+    let mut explain = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--json" => json = true,
+            "--explain" => explain = true,
+            "--staged" => staged = true,
+            "--renames" => renames = true,
+            "--target" => {
+                index += 1;
+                target = Some(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--target requires a revision"))?
+                        .clone(),
+                );
+            }
             "--format" => {
                 index += 1;
                 let value = args
@@ -331,8 +348,22 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
             "budget flags (--top, --sort-by, --min-crap, --min-delta) require --format agent-json",
         ));
     }
-    let report = leadline::diff::analyze_changed(&path, base.as_deref().unwrap_or("HEAD~1"))
+    let comparison_target = match (staged, target) {
+        (true, Some(_)) => {
+            return Err(CliError::usage("--staged and --target are exclusive"));
+        }
+        (true, None) => leadline::diff::ComparisonTarget::Index,
+        (false, Some(revision)) => leadline::diff::ComparisonTarget::Revision(revision),
+        (false, None) => leadline::diff::ComparisonTarget::Worktree,
+    };
+    let options = leadline::diff::ChangeOptions {
+        base: base.unwrap_or_else(|| "HEAD~1".to_owned()),
+        target: comparison_target,
+        detect_renames: renames,
+    };
+    let report = leadline::diff::analyze_changes(&path, &options)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
+    budget.explain = explain;
     if agent_json {
         println!(
             "{}",
@@ -427,6 +458,8 @@ fn apply_config(thresholds: &mut Thresholds, config: &Config) {
 fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut thresholds = Thresholds::default();
     let mut base: Option<String> = None;
+    let mut baseline: Option<String> = None;
+    let mut regressions = false;
     let mut common = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -437,6 +470,21 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
                     .ok_or_else(|| CliError::usage("--base requires a revision"))?
                     .clone(),
             );
+            index += 1;
+            continue;
+        }
+        if args[index] == "--baseline" {
+            index += 1;
+            baseline = Some(
+                args.get(index)
+                    .ok_or_else(|| CliError::usage("--baseline requires a file"))?
+                    .clone(),
+            );
+            index += 1;
+            continue;
+        }
+        if args[index] == "--regressions" {
+            regressions = true;
             index += 1;
             continue;
         }
@@ -477,7 +525,15 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
         }
         index += 1;
     }
-    if thresholds.is_empty() {
+    if regressions && base.is_none() && baseline.is_none() {
+        return Err(CliError::usage(
+            "--regressions requires --base REV or --baseline FILE",
+        ));
+    }
+    if base.is_some() && baseline.is_some() {
+        return Err(CliError::usage("--base and --baseline are exclusive"));
+    }
+    if thresholds.is_empty() && !regressions {
         return Err(CliError::usage(
             "check requires at least one metric threshold",
         ));
@@ -488,8 +544,25 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
     if let Some(config) = &config {
         apply_config(&mut thresholds, config);
     }
+    let regression_limits = config
+        .as_ref()
+        .map(|selected| selected.regressions.clone())
+        .unwrap_or_default();
     if let Some(base) = base {
-        return check_changed(&options, &base, &thresholds);
+        return check_changed(
+            &options,
+            &base,
+            &thresholds,
+            regressions.then_some(&regression_limits),
+        );
+    }
+    if let Some(baseline) = baseline {
+        return check_baseline(
+            &options,
+            &baseline,
+            &thresholds,
+            regressions.then_some(&regression_limits),
+        );
     }
     let excludes: &[String] = config
         .as_ref()
@@ -520,25 +593,38 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// `check --base REV`: gate only on after-side violations of changed functions.
+/// `check --base REV`: gate after-side absolute and optional delta violations.
 fn check_changed(
     options: &CommonOptions,
     base: &str,
     thresholds: &Thresholds,
+    regression_limits: Option<&RegressionLimits>,
 ) -> Result<ExitCode, CliError> {
-    let changed = leadline::diff::analyze_changed(&options.path, base)
+    let mut changed = leadline::diff::analyze_changed(&options.path, base)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
-    // diff keeps its own config-shaped Thresholds; convert at the call site.
-    let gate = leadline::config::Thresholds {
-        cognitive: thresholds.cognitive,
-        cyclomatic: thresholds.cyclomatic,
-        crap: thresholds.crap,
-        max_nesting: thresholds.max_nesting,
-    };
+    if let Some(coverage) = options.coverage.as_ref() {
+        for change in &mut changed.functions {
+            apply_coverage_to_side(coverage, &change.path, &mut change.before);
+            apply_coverage_to_side(coverage, &change.path, &mut change.after);
+        }
+    }
     let mut grouped: BTreeMap<String, Vec<FunctionAnalysis>> = BTreeMap::new();
-    for change in leadline::diff::changed_violations(&changed, &gate) {
-        if let Some(after) = change.after.clone() {
-            grouped.entry(change.path.clone()).or_default().push(after);
+    for change in &changed.functions {
+        let Some(after) = change.after.as_ref() else {
+            continue;
+        };
+        let absolute = thresholds.violates(&after.metrics);
+        let delta = regression_limits.is_some_and(|limits| {
+            change
+                .before
+                .as_ref()
+                .is_some_and(|before| leadline::diff::regression_violates(before, after, limits))
+        });
+        if absolute || delta {
+            grouped
+                .entry(change.path.clone())
+                .or_default()
+                .push(after.clone());
         }
     }
     let files: Vec<FileAnalysis> = grouped
@@ -561,9 +647,342 @@ fn check_changed(
         files,
     };
     let has_findings = !report.files.is_empty();
-    options.print_report_or(&report, has_findings, "No violations.", thresholds)?;
+    let mut output_thresholds = thresholds.clone();
+    if let Some(limits) = regression_limits {
+        for change in &changed.functions {
+            let Some((before, after)) = change.before.as_ref().zip(change.after.as_ref()) else {
+                continue;
+            };
+            let dimensions = leadline::diff::regression_dimensions(before, after, limits);
+            if dimensions[0] && output_thresholds.cognitive.is_none() {
+                output_thresholds.cognitive = Some(0);
+            }
+            if dimensions[1] && output_thresholds.cyclomatic.is_none() {
+                output_thresholds.cyclomatic = Some(0);
+            }
+            if dimensions[2] && output_thresholds.crap.is_none() {
+                output_thresholds.crap = Some(0.0);
+            }
+            if dimensions[3] && output_thresholds.max_nesting.is_none() {
+                output_thresholds.max_nesting = Some(0);
+            }
+        }
+    }
+    options.print_report_or(&report, has_findings, "No violations.", &output_thresholds)?;
     if has_findings {
         return Ok(ExitCode::from(1));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `check --baseline FILE`: gate current functions against a saved snapshot.
+///
+/// Paired functions fail on absolute violations or (with `--regressions`)
+/// positive deltas over the snapshot; new functions fail only on absolute
+/// thresholds; deleted functions are ignored.
+fn check_baseline(
+    options: &CommonOptions,
+    baseline_path: &str,
+    thresholds: &Thresholds,
+    regression_limits: Option<&RegressionLimits>,
+) -> Result<ExitCode, CliError> {
+    let baseline = leadline::baseline::Baseline::read(Path::new(baseline_path))
+        .map_err(|error| CliError::incomplete(error.to_string()))?;
+    let config = load_config_for(&options.path)?;
+    let excludes: &[String] = config
+        .as_ref()
+        .map(|selected| selected.analysis_excludes.as_slice())
+        .unwrap_or(&[]);
+    let report = analyze_with_cache(
+        &options.path,
+        options.coverage.as_ref(),
+        excludes,
+        options.cache_dir.as_deref(),
+    )?;
+    if report.files.is_empty() {
+        return Err(CliError::incomplete(format!(
+            "no supported files found under {}",
+            options.path.display()
+        )));
+    }
+    let regressions = match regression_limits {
+        Some(limits) => baseline.compare(&report, limits),
+        None => Vec::new(),
+    };
+    let regressed: BTreeSet<(String, String)> = regressions
+        .iter()
+        .map(|finding| (finding.path.clone(), finding.id.clone()))
+        .collect();
+    let mut output_thresholds = thresholds.clone();
+    if let Some(limits) = regression_limits {
+        for finding in &regressions {
+            let dimensions = leadline::diff::regression_dimensions(
+                &finding.before.to_analysis(),
+                &finding.after,
+                limits,
+            );
+            if dimensions[0] && output_thresholds.cognitive.is_none() {
+                output_thresholds.cognitive = Some(0);
+            }
+            if dimensions[1] && output_thresholds.cyclomatic.is_none() {
+                output_thresholds.cyclomatic = Some(0);
+            }
+            if dimensions[2] && output_thresholds.crap.is_none() {
+                output_thresholds.crap = Some(0.0);
+            }
+            if dimensions[3] && output_thresholds.max_nesting.is_none() {
+                output_thresholds.max_nesting = Some(0);
+            }
+        }
+    }
+    let mut filtered = report;
+    filtered.files.retain_mut(|file| {
+        file.functions.retain(|function| {
+            thresholds.violates(&function.metrics)
+                || (regression_limits.is_some()
+                    && regressed.contains(&(file.path.clone(), function.id.clone())))
+        });
+        !file.functions.is_empty() || !file.parse_errors.is_empty()
+    });
+    let has_findings = !filtered.files.is_empty();
+    options.print_report_or(
+        &filtered,
+        has_findings,
+        "No violations.",
+        &output_thresholds,
+    )?;
+    if has_findings {
+        return Ok(ExitCode::from(1));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `baseline PATH --output FILE`: snapshot current function metrics.
+///
+/// Writes schema-versioned JSON atomically (sibling temp file, then
+/// rename). Review the file, commit it, and gate later edits with
+/// `check --baseline FILE --regressions`.
+fn baseline_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut path = PathBuf::from(".");
+    let mut seen_path = false;
+    let mut output: Option<String> = None;
+    let mut coverage = CoverageMap::default();
+    let mut has_coverage = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--output" => {
+                index += 1;
+                output = Some(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--output requires a file"))?
+                        .clone(),
+                );
+            }
+            "--lcov" => {
+                index += 1;
+                let file = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--lcov requires a file"))?;
+                coverage.merge(load_coverage(file, CoverageFormat::Lcov)?);
+                has_coverage = true;
+            }
+            "--jacoco" => {
+                index += 1;
+                let file = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--jacoco requires a file"))?;
+                coverage.merge(load_coverage(file, CoverageFormat::Jacoco)?);
+                has_coverage = true;
+            }
+            "--coverage" => {
+                index += 1;
+                let file = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--coverage requires a file"))?;
+                coverage.merge(load_coverage(file, CoverageFormat::Auto)?);
+                has_coverage = true;
+            }
+            value if !value.starts_with('-') && !seen_path => {
+                path = PathBuf::from(value);
+                seen_path = true;
+            }
+            value => {
+                return Err(CliError::usage(format!(
+                    "unknown baseline option '{value}'"
+                )));
+            }
+        }
+        index += 1;
+    }
+    let Some(output) = output else {
+        return Err(CliError::usage("baseline requires --output FILE"));
+    };
+    let config = load_config_for(&path)?;
+    let excludes: &[String] = config
+        .as_ref()
+        .map(|selected| selected.analysis_excludes.as_slice())
+        .unwrap_or(&[]);
+    let report = analyze_with_cache(&path, has_coverage.then_some(&coverage), excludes, None)?;
+    if report.files.is_empty() {
+        return Err(CliError::incomplete(format!(
+            "no supported files found under {}",
+            path.display()
+        )));
+    }
+    let baseline = leadline::baseline::Baseline::from_report(&report);
+    let count = baseline.functions.len();
+    baseline
+        .write(Path::new(&output))
+        .map_err(|error| CliError::incomplete(error.to_string()))?;
+    println!("Wrote {count} functions to {output}");
+    Ok(ExitCode::SUCCESS)
+}
+
+fn apply_coverage_to_side(coverage: &CoverageMap, path: &str, side: &mut Option<FunctionAnalysis>) {
+    let Some(function) = side.take() else {
+        return;
+    };
+    let Some(language) = leadline::parser::detect_language(path) else {
+        *side = Some(function);
+        return;
+    };
+    let mut file = FileAnalysis {
+        path: path.to_owned(),
+        language,
+        functions: vec![function],
+        parse_errors: Vec::new(),
+    };
+    coverage.apply(&mut file);
+    *side = file.functions.pop();
+}
+
+/// Default cap for `test-targets` rows, mirroring the MCP truncation bound so
+/// agent output stays bounded even without `--top`.
+const TEST_TARGETS_MAX: usize = 200;
+
+fn test_targets_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut path = PathBuf::from(".");
+    let mut seen_path = false;
+    let mut agent_json = false;
+    let mut top: Option<usize> = None;
+    let mut coverage = CoverageMap::default();
+    let mut has_coverage = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--format" => {
+                index += 1;
+                match args.get(index).map(String::as_str) {
+                    Some("agent-json") => agent_json = true,
+                    Some(value) => {
+                        return Err(CliError::usage(format!(
+                            "unknown --format '{value}': expected 'agent-json'"
+                        )));
+                    }
+                    None => return Err(CliError::usage("--format requires a value")),
+                }
+            }
+            "--top" => {
+                index += 1;
+                top = Some(parse_top(args.get(index))?);
+            }
+            "--lcov" => {
+                index += 1;
+                let file = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--lcov requires a file"))?;
+                coverage.merge(load_coverage(file, CoverageFormat::Lcov)?);
+                has_coverage = true;
+            }
+            "--jacoco" => {
+                index += 1;
+                let file = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--jacoco requires a file"))?;
+                coverage.merge(load_coverage(file, CoverageFormat::Jacoco)?);
+                has_coverage = true;
+            }
+            "--coverage" => {
+                index += 1;
+                let file = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--coverage requires a file"))?;
+                coverage.merge(load_coverage(file, CoverageFormat::Auto)?);
+                has_coverage = true;
+            }
+            value if !value.starts_with('-') && !seen_path => {
+                path = PathBuf::from(value);
+                seen_path = true;
+            }
+            value => {
+                return Err(CliError::usage(format!(
+                    "unknown test-targets option '{value}'"
+                )));
+            }
+        }
+        index += 1;
+    }
+    if !has_coverage {
+        return Err(CliError::usage(
+            "test-targets requires coverage: pass --coverage, --lcov, or --jacoco",
+        ));
+    }
+    let config = load_config_for(&path)?;
+    let excludes: &[String] = config
+        .as_ref()
+        .map(|selected| selected.analysis_excludes.as_slice())
+        .unwrap_or(&[]);
+    let report = analyze_with_cache(&path, Some(&coverage), excludes, None)?;
+    if report.files.is_empty() {
+        return Err(CliError::incomplete(format!(
+            "no supported files found under {}",
+            path.display()
+        )));
+    }
+    let targets = leadline::test_targets::test_targets(&report, &coverage);
+    let total = targets.len();
+    let limit = top.unwrap_or(TEST_TARGETS_MAX).min(total);
+    let truncated = total > limit;
+    let kept = &targets[..limit];
+    if agent_json {
+        let value = serde_json::json!({
+            "schema_version": OUTPUT_SCHEMA_VERSION,
+            "analyzer_version": env!("CARGO_PKG_VERSION"),
+            "metric_profile": METRIC_PROFILE,
+            "tool": "test-targets",
+            "path": path.display().to_string(),
+            "targets": kept,
+            "truncated": truncated,
+            "total": total,
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&value).map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if kept.is_empty() {
+        println!("No test targets: no known-zero-hit decision lines.");
+    } else {
+        for target in kept {
+            println!(
+                "{}:{} {} (crap {}, coverage {}): {} uncovered, {} unknown",
+                target.path,
+                target.line,
+                target.function,
+                target
+                    .crap
+                    .map_or("n/a".to_owned(), |crap| format!("{crap:.1}")),
+                target.coverage.map_or("n/a".to_owned(), |coverage| format!(
+                    "{:.0}%",
+                    coverage * 100.0
+                )),
+                target.uncovered.len(),
+                target.unknown.len()
+            );
+        }
+        if truncated {
+            println!("... truncated: showing {limit} of {total} (use --top N)");
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -1037,5 +1456,5 @@ fn load_coverage(path: &str, format: CoverageFormat) -> Result<CoverageMap, CliE
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline changed [--base REV] [--path PATH] [--json] [--format agent-json] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--path PATH] [--json] [--format agent-json] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline doctor [PATH]\n  leadline mcp\n  leadline skill\n  leadline version\n  leadline --version"
+    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp\n  leadline skill\n  leadline version\n  leadline --version"
 }

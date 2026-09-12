@@ -113,6 +113,12 @@ impl CoverageMap {
             apply_coverage(function, ratio);
         }
     }
+    /// Execution hits for one exact source line: `Some(count)` when the line
+    /// is known, `None` when no coverage record covers the path/line.
+    /// Line coverage only; branch data is never consulted.
+    pub fn hits(&self, path: &str, line: u32) -> Option<u64> {
+        self.lines_for_path(path)?.get(&line).copied()
+    }
 
     fn insert(&mut self, path: String, line: u32, count: u64) {
         self.files

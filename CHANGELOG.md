@@ -16,6 +16,11 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 - `--format sarif` output on `analyze` and `check`.
 - Output budgets (`--top`, `--sort-by`, `--min-crap`, `--min-delta`) with `truncated` signaling on agent JSON.
 - `--cache-dir` content-hash incremental file cache for `analyze` and `check`.
+- Comparison targets on `changed`/`diff`: `--staged`, `--target REV`, and `--renames` (Git file renames only, no fuzzy function matching).
+- Changed-regression explanations: `--explain` adds multiset-added contribution causes to regression rows.
+- Regression-only gates: `[regressions]` config with allowed deltas and `check --base REV --regressions`.
+- Coverage-aware test targets: `leadline test-targets` CLI and read-only MCP `test_targets` tool (line coverage only).
+- Saved baselines: `leadline baseline --output FILE` snapshots and `check --baseline FILE` gates; MCP `check` accepts a read-only `baseline` path and never writes snapshots.
 
 ## 0.1.0 - 2026-09-12
 

@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::config::Thresholds;
+use crate::config::{RegressionLimits, Thresholds};
 use crate::core::{
     FunctionAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION, ParseDiagnostic,
 };
@@ -35,6 +35,80 @@ pub struct ChangedReport {
     pub parse_errors: Vec<ChangedParseDiagnostics>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum ComparisonTarget {
+    Worktree,
+    Index,
+    Revision(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChangeOptions {
+    pub base: String,
+    pub target: ComparisonTarget,
+    pub detect_renames: bool,
+}
+
+/// Returns which metric deltas exceed their configured limits, in gate order.
+pub fn regression_dimensions(
+    before: &FunctionAnalysis,
+    after: &FunctionAnalysis,
+    limits: &RegressionLimits,
+) -> [bool; 4] {
+    [
+        after
+            .metrics
+            .cognitive
+            .saturating_sub(before.metrics.cognitive)
+            > limits.cognitive,
+        after
+            .metrics
+            .cyclomatic
+            .saturating_sub(before.metrics.cyclomatic)
+            > limits.cyclomatic,
+        match (before.metrics.crap, after.metrics.crap) {
+            (Some(before), Some(after)) if before.is_finite() && after.is_finite() => {
+                after - before > limits.crap
+            }
+            _ => false,
+        },
+        after
+            .metrics
+            .max_nesting
+            .saturating_sub(before.metrics.max_nesting)
+            > limits.max_nesting,
+    ]
+}
+
+/// Returns true when a paired function exceeds any allowed positive metric delta.
+pub fn regression_violates(
+    before: &FunctionAnalysis,
+    after: &FunctionAnalysis,
+    limits: &RegressionLimits,
+) -> bool {
+    regression_dimensions(before, after, limits)
+        .into_iter()
+        .any(|value| value)
+}
+
+/// Changed paired functions that exceed regression limits, in deterministic report order.
+pub fn changed_regressions<'a>(
+    report: &'a ChangedReport,
+    limits: &RegressionLimits,
+) -> Vec<&'a FunctionChange> {
+    report
+        .functions
+        .iter()
+        .filter(|change| {
+            change
+                .before
+                .as_ref()
+                .zip(change.after.as_ref())
+                .is_some_and(|(before, after)| regression_violates(before, after, limits))
+        })
+        .collect()
+}
+
 // ponytail: mirrors core::Thresholds::violates; unify the two Thresholds types if this drifts.
 pub fn changed_violations<'a>(
     report: &'a ChangedReport,
@@ -62,20 +136,33 @@ pub fn changed_violations<'a>(
         .collect()
 }
 
+/// Compatibility wrapper: worktree comparison, no rename detection.
 pub fn analyze_changed(path: &Path, base: &str) -> Result<ChangedReport> {
-    validate_revision(base)?;
-    let requested = strip_verbatim_prefix(&std::fs::canonicalize(path)?);
-    let start = if requested.is_dir() {
-        requested.as_path()
-    } else {
-        requested.parent().unwrap_or(Path::new("."))
-    };
-    let root_output = git(start, ["rev-parse", "--show-toplevel"])?;
+    analyze_changes(
+        path,
+        &ChangeOptions {
+            base: base.to_owned(),
+            target: ComparisonTarget::Worktree,
+            detect_renames: false,
+        },
+    )
+}
+
+pub fn analyze_changes(path: &Path, options: &ChangeOptions) -> Result<ChangedReport> {
+    validate_revision(&options.base)?;
+    if let ComparisonTarget::Revision(target) = &options.target {
+        validate_revision(target)?;
+    }
+    let (requested, start) =
+        resolve_requested(path, !matches!(options.target, ComparisonTarget::Worktree))?;
+    let root_output = git(&start, ["rev-parse", "--show-toplevel"])?;
     let toplevel = String::from_utf8(root_output.stdout)?;
     let root = strip_verbatim_prefix(&std::fs::canonicalize(toplevel.trim())?);
     let scope = crate::normalized_relative_path(&requested, &root);
-    let mut paths = changed_paths(&root, base)?;
-    paths.extend(untracked_paths(&root)?);
+    let (mut paths, renames) = diff_paths(&root, options)?;
+    if matches!(options.target, ComparisonTarget::Worktree) {
+        paths.extend(untracked_paths(&root)?);
+    }
     if !scope.is_empty() {
         let prefix = format!("{scope}/");
         paths.retain(|candidate| candidate == &scope || candidate.starts_with(&prefix));
@@ -87,14 +174,13 @@ pub fn analyze_changed(path: &Path, base: &str) -> Result<ChangedReport> {
         if detect_language(&relative).is_none() {
             continue;
         }
-        let before = git_optional(&root, ["show", &format!("{base}:{relative}")])?
-            .map(|source| crate::analyze_source(&relative, &source))
+        let before_path = renames
+            .get(&relative)
+            .map_or(relative.as_str(), String::as_str);
+        let before = git_optional(&root, ["show", &format!("{}:{before_path}", options.base)])?
+            .map(|source| crate::analyze_source(before_path, &source))
             .transpose()?;
-        let after_path = root.join(&relative);
-        let after = after_path
-            .is_file()
-            .then(|| std::fs::read(&after_path))
-            .transpose()?
+        let after = read_after(&root, &relative, &options.target)?
             .map(|source| crate::analyze_source(&relative, &source))
             .transpose()?;
         let before_errors = before
@@ -138,18 +224,117 @@ pub fn analyze_changed(path: &Path, base: &str) -> Result<ChangedReport> {
         metric_profile: METRIC_PROFILE,
         analyzer_version: env!("CARGO_PKG_VERSION"),
         metric_specs: MetricSpecs::default(),
-        base: base.to_owned(),
+        base: options.base.clone(),
         functions,
         parse_errors,
     })
 }
 
-fn changed_paths(root: &Path, base: &str) -> Result<BTreeSet<String>> {
-    let output = git(
-        root,
-        ["diff", "--no-renames", "--name-only", "-z", base, "--"],
-    )?;
-    nul_paths(&output.stdout)
+fn resolve_requested(path: &Path, allow_missing: bool) -> Result<(PathBuf, PathBuf)> {
+    if !allow_missing {
+        let requested = strip_verbatim_prefix(&std::fs::canonicalize(path)?);
+        let start = if requested.is_dir() {
+            requested.clone()
+        } else {
+            requested.parent().unwrap_or(Path::new(".")).to_path_buf()
+        };
+        return Ok((requested, start));
+    }
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let ancestor = absolute
+        .ancestors()
+        .find(|candidate| candidate.exists())
+        .ok_or("path has no existing ancestor")?;
+    let resolved_ancestor = strip_verbatim_prefix(&std::fs::canonicalize(ancestor)?);
+    let requested = resolved_ancestor.join(absolute.strip_prefix(ancestor)?);
+    let start = if resolved_ancestor.is_dir() {
+        resolved_ancestor
+    } else {
+        resolved_ancestor
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf()
+    };
+    Ok((requested, start))
+}
+
+/// Reads after-side content per target: worktree file, staged (index) blob,
+/// or a blob from the comparison revision. Revision never touches the
+/// worktree or index, so a dirty tree cannot leak into that comparison.
+fn read_after(root: &Path, relative: &str, target: &ComparisonTarget) -> Result<Option<Vec<u8>>> {
+    match target {
+        ComparisonTarget::Worktree => {
+            let after_path = root.join(relative);
+            after_path
+                .is_file()
+                .then(|| std::fs::read(&after_path))
+                .transpose()
+                .map_err(Into::into)
+        }
+        ComparisonTarget::Index => git_optional(root, ["show", &format!(":{relative}")]),
+        ComparisonTarget::Revision(revision) => {
+            git_optional(root, ["show", &format!("{revision}:{relative}")])
+        }
+    }
+}
+
+fn diff_paths(
+    root: &Path,
+    options: &ChangeOptions,
+) -> Result<(BTreeSet<String>, BTreeMap<String, String>)> {
+    let mut args: Vec<String> = vec!["diff".to_owned()];
+    args.push(if options.detect_renames {
+        "-M".to_owned()
+    } else {
+        "--no-renames".to_owned()
+    });
+    args.push("--name-status".to_owned());
+    args.push("-z".to_owned());
+    if matches!(options.target, ComparisonTarget::Index) {
+        args.push("--cached".to_owned());
+    }
+    args.push(options.base.clone());
+    if let ComparisonTarget::Revision(revision) = &options.target {
+        args.push(revision.clone());
+    }
+    args.push("--".to_owned());
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = git(root, refs)?;
+    parse_name_status(&output.stdout)
+}
+
+/// Parses `git diff --name-status -z` output. A rename record is
+/// `R<score>\0old\0new`; every other status is `<status>\0path`. Only the
+/// new path enters the returned path set, so scope filtering and output
+/// naturally land on the renamed file's current location.
+fn parse_name_status(bytes: &[u8]) -> Result<(BTreeSet<String>, BTreeMap<String, String>)> {
+    let fields: Vec<String> = bytes
+        .split(|byte| *byte == 0)
+        .filter(|value| !value.is_empty())
+        .map(|value| Ok(std::str::from_utf8(value)?.to_owned()))
+        .collect::<Result<_>>()?;
+    let mut paths = BTreeSet::new();
+    let mut renames = BTreeMap::new();
+    let mut index = 0;
+    while index < fields.len() {
+        if fields[index].starts_with('R') {
+            let old = fields.get(index + 1).ok_or("malformed rename status")?;
+            let new = fields.get(index + 2).ok_or("malformed rename status")?;
+            renames.insert(new.clone(), old.clone());
+            paths.insert(new.clone());
+            index += 3;
+        } else {
+            let path = fields.get(index + 1).ok_or("malformed status")?;
+            paths.insert(path.clone());
+            index += 2;
+        }
+    }
+    Ok((paths, renames))
 }
 
 fn untracked_paths(root: &Path) -> Result<BTreeSet<String>> {

@@ -4,10 +4,10 @@
 
 | Schema | Current | Bumped when |
 | --- | --- | --- |
-| CLI (flags, commands, exit codes) | 1.0 | A flag, command, or exit code is added, changed, or removed. |
+| CLI (flags, commands, exit codes) | 1.1 | A flag, command, or exit code is added, changed, or removed. |
 | JSON schema (`schema_version`) | `1` | An envelope or function field is added, changed, or removed. |
 | Metric spec (`metric_profile`, `metric_specs`) | `default-v1` | Any metric rule changes. Per-family versions allow one family to move (e.g. `cognitive: default-v2`) without renaming the rest. |
-| MCP tools | 1.0 | A tool, input, or output shape changes. |
+| MCP tools | 1.1 | A tool, input, or output shape changes. |
 
 ## Rules
 

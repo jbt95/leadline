@@ -35,6 +35,7 @@ fn parses_full_config() {
                 crap: Some(30.0),
                 max_nesting: Some(4),
             },
+            regressions: config::RegressionLimits::default(),
         }
     );
     config.validate().unwrap();
@@ -131,6 +132,26 @@ fn load_from_reads_and_validates_temp_dir_file() {
     .unwrap();
     assert!(load_from(&root).is_err());
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn parses_regression_limits_with_zero_defaults() {
+    let config = parse_str("[regressions]\ncognitive = 2\ncrap = 1.5\n").unwrap();
+    assert_eq!(config.regressions.cognitive, 2);
+    assert_eq!(config.regressions.cyclomatic, 0);
+    assert_eq!(config.regressions.crap, 1.5);
+    assert_eq!(config.regressions.max_nesting, 0);
+}
+
+#[test]
+fn rejects_negative_regression_limits() {
+    for key in ["cognitive", "cyclomatic", "max_nesting"] {
+        assert!(
+            parse_str(&format!("[regressions]\n{key} = -1\n")).is_err(),
+            "accepted negative {key}"
+        );
+    }
+    assert!(parse_str("[regressions]\ncrap = -0.5\n").is_err());
 }
 
 fn temporary_directory() -> PathBuf {

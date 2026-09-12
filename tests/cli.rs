@@ -354,8 +354,24 @@ fn agent_json_shape_on_changed() {
     assert!(output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["summary"]["changed_functions"], 1);
-    assert!(value["regressions"].is_array());
-    assert!(value["improvements"].is_array());
+    assert!(value["regressions"][0].get("causes").is_none());
+
+    let explained = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args([
+            "changed",
+            "--base",
+            "HEAD",
+            "--format",
+            "agent-json",
+            "--explain",
+        ])
+        .output()
+        .unwrap();
+    assert!(explained.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&explained.stdout).unwrap();
+    assert_eq!(value["regressions"][0]["causes"][0]["line"], 1);
+    assert_eq!(value["regressions"][0]["causes"][0]["rule"], "if");
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -563,6 +579,411 @@ fn config_exclude_filters_directory_but_not_explicit_file() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn changed_staged_and_target_are_mutually_exclusive() {
+    let root = temporary_directory();
+    git(&root, &["init"]);
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["changed", "--staged", "--target", "HEAD"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("exclusive"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn changed_staged_flag_excludes_unstaged_edits() {
+    let root = temporary_directory();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { return x; }\n",
+    )
+    .unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "init", "-q"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { if (x > 0) return x; return 0; }\n",
+    )
+    .unwrap();
+    git(&root, &["add", "."]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { if (x > 0) { if (x > 1) return 2; return x; } return 0; }\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["changed", "--base", "HEAD", "--staged", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["functions"][0]["after"]["metrics"]["cyclomatic"], 2);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn changed_target_flag_compares_two_revisions() {
+    let root = temporary_directory();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { return x; }\n",
+    )
+    .unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "base", "-q"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { if (x > 0) return x; return 0; }\n",
+    )
+    .unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "target", "-q"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { return 1; }\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["changed", "--base", "HEAD~1", "--target", "HEAD", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["functions"][0]["after"]["metrics"]["cyclomatic"], 2);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn changed_renames_flag_pairs_renamed_file_function() {
+    let root = temporary_directory();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function keep(): number {\n  return 1;\n}\n\nfunction calc(x: number) {\n  return x;\n}\n",
+    )
+    .unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "base", "-q"]);
+    git(&root, &["mv", "calc.ts", "calc2.ts"]);
+    std::fs::write(
+        root.join("calc2.ts"),
+        "function keep(): number {\n  return 1;\n}\n\nfunction calc(x: number) {\n  if (x > 0) return x;\n  return 0;\n}\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["changed", "--base", "HEAD", "--renames", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let functions = report["functions"].as_array().unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0]["path"], "calc2.ts");
+    assert_eq!(functions[0]["name"], "calc");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn changed_help_documents_target_selectors() {
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["--help"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("--staged"), "missing --staged in:\n{text}");
+    assert!(
+        text.contains("--target REV"),
+        "missing --target REV in:\n{text}"
+    );
+    assert!(text.contains("--renames"), "missing --renames in:\n{text}");
+}
+
+#[test]
+fn check_regressions_allows_regression_only_mode() {
+    let root = temporary_directory();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { return x; }\n",
+    )
+    .unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "base", "-q"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { if (x > 0) return x; return 0; }\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["check", ".", "--base", "HEAD", "--regressions", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["files"][0]["functions"][0]["name"], "calc");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn check_regressions_requires_base_revision() {
+    let root = temporary_directory();
+    let file = root.join("calc.ts");
+    std::fs::write(
+        &file,
+        "function calc(x: number) { if (x > 0) return x; return 0; }\n",
+    )
+    .unwrap();
+    let output = check(&file, &["--cyclomatic", "100", "--regressions"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("requires --base"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn check_regressions_reports_delta_only_findings_in_sarif() {
+    let root = temporary_directory();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::write(
+        root.join("leadline.toml"),
+        "[regressions]\ncognitive = 0\ncyclomatic = 100\nmax_nesting = 100\ncrap = 100.0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { return x; }\n",
+    )
+    .unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "base", "-q"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { if (x > 0) return x; return 0; }\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args([
+            "check",
+            ".",
+            "--base",
+            "HEAD",
+            "--regressions",
+            "--cyclomatic",
+            "100",
+            "--format",
+            "sarif",
+        ])
+        .output()
+        .unwrap();
+    let sarif: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = sarif["runs"][0]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["ruleId"], "leadline/cognitive");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn check_regressions_applies_coverage_for_crap_delta() {
+    let root = temporary_directory();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::write(
+        root.join("leadline.toml"),
+        "[regressions]\ncognitive = 100\ncyclomatic = 100\nmax_nesting = 100\ncrap = 0.0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { return x; }\n",
+    )
+    .unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "base", "-q"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { if (x > 0) return x; return 0; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("coverage.info"),
+        "TN:\nSF:calc.ts\nDA:1,1\nend_of_record\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args([
+            "check",
+            ".",
+            "--base",
+            "HEAD",
+            "--regressions",
+            "--coverage",
+            "coverage.info",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn check_regressions_uses_configured_allowed_delta() {
+    let root = temporary_directory();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::write(
+        root.join("leadline.toml"),
+        "[regressions]\ncognitive = 1\ncyclomatic = 1\nmax_nesting = 1\ncrap = 0.0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { return x; }\n",
+    )
+    .unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "base", "-q"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { if (x > 0) return x; return 0; }\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["check", ".", "--base", "HEAD", "--regressions", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn check_regressions_combines_absolute_and_delta_gates() {
+    let root = temporary_directory();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { return x; }\n",
+    )
+    .unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "base", "-q"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { if (x > 0) return x; return 0; }\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args([
+            "check",
+            ".",
+            "--base",
+            "HEAD",
+            "--regressions",
+            "--cyclomatic",
+            "100",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["files"][0]["functions"][0]["name"], "calc");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn test_targets_requires_coverage() {
+    let root = temporary_directory();
+    let file = root.join("branch.ts");
+    std::fs::write(
+        &file,
+        "function branch(x: boolean) { if (x) return 1; return 0; }\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("test-targets")
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .to_ascii_lowercase()
+            .contains("coverage")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn test_targets_lists_uncovered_and_caps_output() {
+    let root = temporary_directory();
+    std::fs::write(
+        root.join("a.ts"),
+        "function alpha(x: boolean) { if (x) return 1; return 0; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("b.ts"),
+        "function beta(x: boolean) { if (x) return 2; return 0; }\n",
+    )
+    .unwrap();
+    let lcov = root.join("lcov.info");
+    std::fs::write(
+        &lcov,
+        "TN:\nSF:a.ts\nDA:1,0\nend_of_record\nTN:\nSF:b.ts\nDA:1,0\nend_of_record\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("test-targets")
+        .arg(&root)
+        .arg("--coverage")
+        .arg(&lcov)
+        .args(["--format", "agent-json", "--top", "1"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let targets = value["targets"].as_array().unwrap();
+    assert_eq!(targets.len(), 1);
+    assert_eq!(value["total"], 2);
+    assert_eq!(value["truncated"], true);
+    assert!(!targets[0]["uncovered"].as_array().unwrap().is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
 fn git(dir: &Path, args: &[&str]) {
     let output = Command::new("git")
         .current_dir(dir)
@@ -570,4 +991,173 @@ fn git(dir: &Path, args: &[&str]) {
         .output()
         .unwrap();
     assert!(output.status.success(), "git {args:?} failed: {output:?}");
+}
+
+#[test]
+fn baseline_requires_an_output_file() {
+    let root = temporary_directory();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("baseline")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--output"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn baseline_write_and_check_regression_gate() {
+    let root = temporary_directory();
+    let file = root.join("calc.ts");
+    std::fs::write(&file, "function calc(x: boolean) { return 1; }\n").unwrap();
+    let snapshot = root.join("baseline.json");
+
+    let written = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("baseline")
+        .arg(&root)
+        .arg("--output")
+        .arg(&snapshot)
+        .output()
+        .unwrap();
+    assert!(
+        written.status.success(),
+        "{}",
+        String::from_utf8_lossy(&written.stderr)
+    );
+    let stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&snapshot).unwrap()).unwrap();
+    assert_eq!(stored["schema_version"], 1);
+    assert_eq!(stored["metric_profile"], "default-v1");
+    assert_eq!(stored["functions"][0]["name"], "calc");
+
+    std::fs::write(
+        &file,
+        "function calc(x: boolean) { if (x) { if (!x) { return 2; } return 1; } return 0; }\n",
+    )
+    .unwrap();
+    let failed = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("check")
+        .arg(&root)
+        .arg("--baseline")
+        .arg(&snapshot)
+        .args(["--regressions", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&failed.stdout).unwrap();
+    assert_eq!(report["files"][0]["functions"][0]["name"], "calc");
+
+    std::fs::write(
+        root.join("leadline.toml"),
+        "[regressions]\ncognitive = 100\ncyclomatic = 100\nmax_nesting = 100\ncrap = 100.0\n",
+    )
+    .unwrap();
+    let passed = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("check")
+        .arg(&root)
+        .arg("--baseline")
+        .arg(&snapshot)
+        .args(["--regressions", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        passed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&passed.stderr)
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn baseline_new_function_fails_only_on_absolute_thresholds() {
+    let root = temporary_directory();
+    let file = root.join("calc.ts");
+    std::fs::write(&file, "function calc(x: boolean) { return 1; }\n").unwrap();
+    let snapshot = root.join("baseline.json");
+    let written = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("baseline")
+        .arg(&root)
+        .arg("--output")
+        .arg(&snapshot)
+        .output()
+        .unwrap();
+    assert!(
+        written.status.success(),
+        "{}",
+        String::from_utf8_lossy(&written.stderr)
+    );
+
+    std::fs::write(
+        &file,
+        "function calc(x: boolean) { return 1; }\nfunction fresh() { return 2; }\n",
+    )
+    .unwrap();
+    let passed = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("check")
+        .arg(&root)
+        .arg("--baseline")
+        .arg(&snapshot)
+        .args(["--regressions", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        passed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&passed.stderr)
+    );
+
+    let failed = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("check")
+        .arg(&root)
+        .arg("--baseline")
+        .arg(&snapshot)
+        .args(["--cognitive", "0", "--cyclomatic", "0", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(1));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn check_rejects_base_and_baseline_together() {
+    let root = temporary_directory();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("check")
+        .arg(&root)
+        .args([
+            "--base",
+            "HEAD",
+            "--baseline",
+            "snapshot.json",
+            "--regressions",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("exclusive"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn help_lists_new_workflows() {
+    let help = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    let text = String::from_utf8_lossy(&help.stdout);
+    for expected in [
+        "leadline baseline",
+        "--baseline FILE",
+        "--output FILE",
+        "--regressions",
+        "--staged",
+        "--target REV",
+        "--renames",
+        "--explain",
+        "leadline test-targets",
+    ] {
+        assert!(text.contains(expected), "help is missing {expected}");
+    }
 }

@@ -18,6 +18,15 @@ refactors, logic bug fixes). Scope follow-ups to flagged functions:
 leadline changed --base <rev> --format agent-json
 ```
 
+## Workflows
+
+Shortest post-edit commands (all deterministic, JSON with `--format agent-json`):
+
+- Explain a regression: `leadline changed --base <rev> --format agent-json --explain` (adds `causes` to regression rows only).
+- Gate deltas: `leadline check . --base <rev> --regressions` (zero-tolerance unless `leadline.toml` sets `[regressions]` allowances).
+- Target tests: `leadline test-targets . --coverage <file>` (line coverage only; unknown lines are reported, never called uncovered).
+- Snapshot without Git history: `leadline baseline . --output <file>`, then `leadline check . --baseline <file> --regressions`.
+
 ## Rules
 
 1. Metrics are signals, not objectives.

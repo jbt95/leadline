@@ -13,8 +13,12 @@
 //! cyclomatic = 10
 //! crap = 30.0
 //! max_nesting = 4
+//! [regressions]
+//! cognitive = 1
+//! cyclomatic = 0
+//! crap = 0.0
+//! max_nesting = 0
 //! ```
-//!
 //! Every threshold is optional. Unknown sections or keys are errors, never
 //! ignored, so no `include`/`exec` style key can ever slip through: config
 //! never executes commands by construction.
@@ -35,6 +39,16 @@ pub struct Config {
     pub cyclomatic_profile: String,
     pub cognitive_profile: String,
     pub thresholds: Thresholds,
+    pub regressions: RegressionLimits,
+}
+
+/// Allowed positive metric deltas for regression-only gates.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RegressionLimits {
+    pub cognitive: u32,
+    pub cyclomatic: u32,
+    pub crap: f64,
+    pub max_nesting: u32,
 }
 
 /// Optional per-function thresholds; `None` means "no limit".
@@ -76,12 +90,13 @@ impl Default for Config {
             cyclomatic_profile: DEFAULT_PROFILE.to_string(),
             cognitive_profile: DEFAULT_PROFILE.to_string(),
             thresholds: Thresholds::default(),
+            regressions: RegressionLimits::default(),
         }
     }
 }
 
 impl Config {
-    /// Rejects unknown profiles and negative thresholds.
+    /// Rejects unknown profiles and negative thresholds or deltas.
     pub fn validate(&self) -> Result<(), ConfigError> {
         for (name, profile) in [
             ("cyclomatic_profile", &self.cyclomatic_profile),
@@ -98,6 +113,12 @@ impl Config {
         {
             return Err(ConfigError::new(format!(
                 "threshold crap must be >= 0, got {crap}"
+            )));
+        }
+        if !self.regressions.crap.is_finite() || self.regressions.crap < 0.0 {
+            return Err(ConfigError::new(format!(
+                "regression crap delta must be >= 0, got {}",
+                self.regressions.crap
             )));
         }
         Ok(())
@@ -131,6 +152,7 @@ pub fn parse_str(text: &str) -> Result<Config, ConfigError> {
             "analysis" => read_analysis(&mut config, value)?,
             "metrics" => read_metrics(&mut config, value)?,
             "thresholds" => read_thresholds(&mut config, value)?,
+            "regressions" => read_regressions(&mut config, value)?,
             _ if !value.is_table() => {
                 return Err(ConfigError::new(format!(
                     "key `{section}` outside any section"
@@ -209,6 +231,53 @@ fn read_metrics(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
         }
     }
     Ok(())
+}
+fn read_regressions(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| ConfigError::new("expected table for [regressions]".to_string()))?;
+    for (key, item) in table {
+        match key.as_str() {
+            "cognitive" => config.regressions.cognitive = read_regression_limit(key, item)?,
+            "cyclomatic" => config.regressions.cyclomatic = read_regression_limit(key, item)?,
+            "max_nesting" => config.regressions.max_nesting = read_regression_limit(key, item)?,
+            "crap" => config.regressions.crap = read_regression_score(item)?,
+            _ => {
+                return Err(ConfigError::new(format!(
+                    "unknown key `{key}` in [regressions]"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_regression_limit(key: &str, value: &Value) -> Result<u32, ConfigError> {
+    match value {
+        Value::Integer(n) if (0..=i64::from(u32::MAX)).contains(n) => Ok(*n as u32),
+        _ => Err(ConfigError::new(format!(
+            "regression `{key}` delta must be >= 0, got `{value}`"
+        ))),
+    }
+}
+
+fn read_regression_score(value: &Value) -> Result<f64, ConfigError> {
+    let score = match value {
+        Value::Integer(n) => *n as f64,
+        Value::Float(n) => *n,
+        _ => {
+            return Err(ConfigError::new(format!(
+                "regression `crap` delta must be >= 0, got `{value}`"
+            )));
+        }
+    };
+    if score.is_finite() && score >= 0.0 {
+        Ok(score)
+    } else {
+        Err(ConfigError::new(format!(
+            "regression `crap` delta must be >= 0, got `{value}`"
+        )))
+    }
 }
 
 fn read_thresholds(config: &mut Config, value: &Value) -> Result<(), ConfigError> {

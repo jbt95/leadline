@@ -27,6 +27,14 @@ fn changed_analysis_compares_function_versions() {
     assert_eq!(change.name, "choose");
     assert_eq!(change.before.as_ref().unwrap().metrics.cyclomatic, 2);
     assert_eq!(change.after.as_ref().unwrap().metrics.cyclomatic, 3);
+    assert_eq!(
+        leadline::diff::changed_regressions(
+            &report,
+            &leadline::config::RegressionLimits::default()
+        )
+        .len(),
+        1
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -63,8 +71,241 @@ fn changed_analysis_honors_scope_and_reports_parse_errors() {
 
 #[test]
 fn changed_analysis_rejects_option_like_revisions() {
-    let error = leadline::diff::analyze_changed(Path::new("."), "--help").unwrap_err();
+    let error = leadline::diff::analyze_changed(Path::new("missing"), "--help").unwrap_err();
     assert!(error.to_string().contains("unsupported characters"));
+}
+
+#[test]
+fn analyze_changed_wraps_worktree_analysis() {
+    let root = temporary_directory();
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "test@example.invalid"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::write(root.join("app.ts"), "function a() { return 1; }\n").unwrap();
+    git(&root, &["add", "app.ts"]);
+    git(&root, &["commit", "-qm", "base"]);
+    std::fs::write(
+        root.join("app.ts"),
+        "function a() { if (true) return 1; return 0; }\n",
+    )
+    .unwrap();
+
+    let wrapped = leadline::diff::analyze_changed(&root, "HEAD").unwrap();
+    let direct = leadline::diff::analyze_changes(
+        &root,
+        &leadline::diff::ChangeOptions {
+            base: "HEAD".to_owned(),
+            target: leadline::diff::ComparisonTarget::Worktree,
+            detect_renames: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(wrapped, direct);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn index_target_excludes_unstaged_edits() {
+    let root = temporary_directory();
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "test@example.invalid"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::write(
+        root.join("app.ts"),
+        "function calc(x: number) {\n  return x;\n}\n",
+    )
+    .unwrap();
+    git(&root, &["add", "app.ts"]);
+    git(&root, &["commit", "-qm", "base"]);
+    std::fs::write(
+        root.join("app.ts"),
+        "function calc(x: number) {\n  if (x > 0) return x;\n  return 0;\n}\n",
+    )
+    .unwrap();
+    git(&root, &["add", "app.ts"]);
+    std::fs::write(
+        root.join("app.ts"),
+        "function calc(x: number) {\n  if (x > 0) { if (x > 1) return 2; return x; }\n  return 0;\n}\n",
+    )
+    .unwrap();
+
+    let report = leadline::diff::analyze_changes(
+        &root,
+        &leadline::diff::ChangeOptions {
+            base: "HEAD".to_owned(),
+            target: leadline::diff::ComparisonTarget::Index,
+            detect_renames: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(report.functions.len(), 1);
+    assert_eq!(
+        report.functions[0]
+            .after
+            .as_ref()
+            .unwrap()
+            .metrics
+            .cyclomatic,
+        2
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn revision_target_ignores_worktree() {
+    let root = temporary_directory();
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "test@example.invalid"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::write(
+        root.join("app.ts"),
+        "function calc(x: number) {\n  return x;\n}\n",
+    )
+    .unwrap();
+    git(&root, &["add", "app.ts"]);
+    git(&root, &["commit", "-qm", "base"]);
+    std::fs::write(
+        root.join("app.ts"),
+        "function calc(x: number) {\n  if (x > 0) return x;\n  return 0;\n}\n",
+    )
+    .unwrap();
+    git(&root, &["add", "app.ts"]);
+    git(&root, &["commit", "-qm", "target"]);
+    std::fs::write(
+        root.join("app.ts"),
+        "function calc(x: number) {\n  if (x > 0) { if (x > 1) return 2; return x; }\n  return 0;\n}\n",
+    )
+    .unwrap();
+
+    let report = leadline::diff::analyze_changes(
+        &root,
+        &leadline::diff::ChangeOptions {
+            base: "HEAD~1".to_owned(),
+            target: leadline::diff::ComparisonTarget::Revision("HEAD".to_owned()),
+            detect_renames: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(report.functions.len(), 1);
+    assert_eq!(
+        report.functions[0]
+            .after
+            .as_ref()
+            .unwrap()
+            .metrics
+            .cyclomatic,
+        2
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn revision_target_supports_scope_absent_from_worktree() {
+    let root = temporary_directory();
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "test@example.invalid"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::create_dir(root.join("archived")).unwrap();
+    std::fs::write(
+        root.join("archived/app.ts"),
+        "function calc(x: number) {\n  return x;\n}\n",
+    )
+    .unwrap();
+    git(&root, &["add", "archived/app.ts"]);
+    git(&root, &["commit", "-qm", "base"]);
+    std::fs::write(
+        root.join("archived/app.ts"),
+        "function calc(x: number) {\n  if (x > 0) return x;\n  return 0;\n}\n",
+    )
+    .unwrap();
+    git(&root, &["add", "archived/app.ts"]);
+    git(&root, &["commit", "-qm", "target"]);
+    std::fs::remove_dir_all(root.join("archived")).unwrap();
+
+    let report = leadline::diff::analyze_changes(
+        &root.join("archived"),
+        &leadline::diff::ChangeOptions {
+            base: "HEAD~1".to_owned(),
+            target: leadline::diff::ComparisonTarget::Revision("HEAD".to_owned()),
+            detect_renames: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(report.functions.len(), 1);
+    assert_eq!(report.functions[0].path, "archived/app.ts");
+    assert_eq!(
+        report.functions[0]
+            .after
+            .as_ref()
+            .unwrap()
+            .metrics
+            .cyclomatic,
+        2
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn option_like_target_revision_is_rejected() {
+    let error = leadline::diff::analyze_changes(
+        Path::new("missing"),
+        &leadline::diff::ChangeOptions {
+            base: "HEAD".to_owned(),
+            target: leadline::diff::ComparisonTarget::Revision("--evil".to_owned()),
+            detect_renames: false,
+        },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("unsupported characters"));
+}
+
+#[test]
+fn renames_pairs_git_detected_file_rename() {
+    let root = temporary_directory();
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "test@example.invalid"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::write(
+        root.join("app.ts"),
+        "function keep(): number {\n  return 1;\n}\n\nfunction foo(x: number) {\n  return x + 1;\n}\n",
+    )
+    .unwrap();
+    git(&root, &["add", "app.ts"]);
+    git(&root, &["commit", "-qm", "base"]);
+    git(&root, &["mv", "app.ts", "app2.ts"]);
+    std::fs::write(
+        root.join("app2.ts"),
+        "function keep(): number {\n  return 1;\n}\n\nfunction foo(x: number) {\n  if (x > 0) return x + 1;\n  return x;\n}\n",
+    )
+    .unwrap();
+
+    let without_renames = leadline::diff::analyze_changes(
+        &root,
+        &leadline::diff::ChangeOptions {
+            base: "HEAD".to_owned(),
+            target: leadline::diff::ComparisonTarget::Worktree,
+            detect_renames: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(without_renames.functions.len(), 4);
+
+    let with_renames = leadline::diff::analyze_changes(
+        &root,
+        &leadline::diff::ChangeOptions {
+            base: "HEAD".to_owned(),
+            target: leadline::diff::ComparisonTarget::Worktree,
+            detect_renames: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(with_renames.functions.len(), 1);
+    let change = &with_renames.functions[0];
+    assert_eq!(change.name, "foo");
+    assert_eq!(change.path, "app2.ts");
+    assert!(change.before.is_some());
+    assert!(change.after.is_some());
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 fn git(root: &Path, args: &[&str]) {
@@ -86,4 +327,76 @@ fn temporary_directory() -> PathBuf {
     let path = std::env::temp_dir().join(format!("leadline-git-{}-{id}", std::process::id()));
     std::fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn regression_analysis(name: &str, cognitive: u32) -> leadline::core::FunctionAnalysis {
+    let source = format!("function {name}() {{ return 1; }}\n");
+    let mut function = leadline::analyze_source("src/a.ts", source.as_bytes())
+        .unwrap()
+        .functions
+        .into_iter()
+        .next()
+        .unwrap();
+    function.metrics.cognitive = cognitive;
+    function
+}
+
+#[test]
+fn regression_predicate_allows_unchanged_and_improved_functions() {
+    let limits = leadline::config::RegressionLimits::default();
+    let before = regression_analysis("same", 2);
+    let unchanged = regression_analysis("same", 2);
+    assert!(!leadline::diff::regression_violates(
+        &before, &unchanged, &limits
+    ));
+    let improved = regression_analysis("same", 1);
+    assert!(!leadline::diff::regression_violates(
+        &before, &improved, &limits
+    ));
+}
+
+#[test]
+fn regression_predicate_rejects_positive_delta_over_limit() {
+    let limits = leadline::config::RegressionLimits {
+        cognitive: 1,
+        ..Default::default()
+    };
+    let before = regression_analysis("changed", 2);
+    let after = regression_analysis("changed", 4);
+    assert!(leadline::diff::regression_violates(
+        &before, &after, &limits
+    ));
+    let allowed = regression_analysis("changed", 3);
+    assert!(!leadline::diff::regression_violates(
+        &before, &allowed, &limits
+    ));
+}
+
+#[test]
+fn added_and_removed_functions_are_not_delta_regressions() {
+    let limits = leadline::config::RegressionLimits::default();
+    let added = regression_analysis("added", 99);
+    let removed = regression_analysis("removed", 99);
+    let added_change = leadline::diff::FunctionChange {
+        path: "src/a.ts".to_owned(),
+        name: "added".to_owned(),
+        before: None,
+        after: Some(added),
+    };
+    let removed_change = leadline::diff::FunctionChange {
+        path: "src/a.ts".to_owned(),
+        name: "removed".to_owned(),
+        before: Some(removed),
+        after: None,
+    };
+    let report = leadline::diff::ChangedReport {
+        schema_version: 1,
+        metric_profile: leadline::core::METRIC_PROFILE,
+        analyzer_version: "test",
+        metric_specs: leadline::core::MetricSpecs::default(),
+        base: "base".to_owned(),
+        functions: vec![added_change, removed_change],
+        parse_errors: Vec::new(),
+    };
+    assert!(leadline::diff::changed_regressions(&report, &limits).is_empty());
 }

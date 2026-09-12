@@ -1,8 +1,20 @@
 # leadline
 
-Deterministic function-level complexity analysis for Java, JavaScript, TypeScript, and TSX — built as a feedback loop for humans, CI, and AI coding agents.
+<p align="center">
+  <img src="assets/logo.svg" alt="leadline logo: a sounding line dropping into waves" width="160" />
+</p>
 
-`leadline` reports physical and logical LOC, parameters, nesting, cyclomatic complexity, cognitive complexity, Halstead metrics, maintainability, coverage, and CRAP. It parses code with Tree-sitter and never executes it: no build runtime, no network, no project scripts.
+<p>
+  <a href="https://github.com/jbt95/leadline/actions/workflows/ci.yml"><img src="https://github.com/jbt95/leadline/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+  <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="version 0.1.0" />
+  <img src="https://img.shields.io/badge/stability-beta-green" alt="stability: beta" />
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/jbt95/leadline" alt="license: MIT" /></a>
+  <img src="https://img.shields.io/badge/MSRV-1.90-orange" alt="MSRV 1.90" />
+</p>
+
+Deterministic function-level complexity analysis for Java, JavaScript, TypeScript, and TSX — a fast feedback loop for humans, CI, and AI coding agents.
+
+`leadline` reports physical and logical LOC, parameters, nesting, cyclomatic and cognitive complexity, Halstead metrics, maintainability, coverage, and CRAP. It parses code with Tree-sitter and never executes it: no build runtime, no network, no project scripts.
 
 ## Quick start
 
@@ -31,13 +43,13 @@ leadline changed --base origin/main --format agent-json
    "before": {"cognitive": 12}, "after": {"cognitive": 24}}]}
 ```
 
-**MCP server** (read-only, stdio, five tools: `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`):
+**MCP server** (read-only, stdio, six tools: `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `test_targets`):
 
 ```console
 leadline mcp
 ```
 
-**Skill and hooks.** Ship the canonical skill at `integrations/common/leadline-skill/SKILL.md` and run post-edit hooks in warn mode — surface regressions, never gate silently:
+**Skill and hooks.** Point your harness at the canonical skill in `integrations/common/leadline-skill/SKILL.md`, and run post-edit hooks in warn mode — surface regressions, never fail silently:
 
 ```console
 leadline changed --format agent-json
@@ -64,11 +76,11 @@ leadline analyze . --jacoco build/reports/jacoco/test/jacocoTestReport.xml
 leadline function src/payment.ts processPayment --json
 ```
 
-The analyzer reads and parses each file once. Rayon workers process files independently. Repository discovery follows `.gitignore`.
+The analyzer reads and parses each file once, with Rayon workers processing files independently. Repository discovery follows `.gitignore`.
 
-Generated and vendor directories are skipped by default. Explicit file paths remain analyzable.
+Generated and vendor directories are skipped by default; explicitly named files are always analyzed.
 
-JSON files are sorted by path. Functions use source order. `schema_version`, `analyzer_version`, and `metric_specs` identify output compatibility. Each file includes deterministic `parse_errors`.
+JSON output is sorted by path, with functions in source order. `schema_version`, `analyzer_version`, and `metric_specs` mark output compatibility, and each file carries deterministic `parse_errors`.
 
 ## Quality gates
 
@@ -77,7 +89,14 @@ leadline check . --cognitive 15 --cyclomatic 10 --max-nesting 4
 leadline check . --crap 30 --lcov coverage/lcov.info --json
 ```
 
-Thresholds fail only when a value exceeds its limit. A CRAP threshold also fails unavailable coverage. Thresholds can live in `leadline.toml` instead of flags; CLI flags win.
+Thresholds fail only when a value exceeds its limit. A CRAP threshold also fails when coverage is unavailable. Thresholds can live in `leadline.toml` instead of flags; CLI flags win.
+
+For refactors without useful Git history, pin a snapshot and gate against it:
+
+```console
+leadline baseline . --output .leadline-baseline.json
+leadline check . --baseline .leadline-baseline.json --regressions
+```
 
 Exit codes are stable:
 
@@ -98,17 +117,28 @@ leadline changed --base origin/main --json
 leadline diff HEAD~1
 ```
 
-Functions are paired by name and same-name source order. Renames appear as one removal and one addition.
+Functions are paired by name and same-name source order. By default a rename surfaces as one removal plus one addition; pass `--renames` to pair Git-detected file renames instead.
 
 `--format agent-json` emits the compact agent-oriented shape on `analyze`, `function`,
-`check`, `changed`, and `diff`. `leadline doctor` self-checks the parsers, coverage
+`check`, `changed`, `diff`, and `test-targets`. `leadline doctor` self-checks the parsers, coverage
 readers, `git`, and `leadline.toml`. `leadline version` prints the release version.
 
 ## Coverage limits
 
-LCOV and JaCoCo line coverage are supported. Windows and Unix report paths are normalized.
+LCOV and JaCoCo line coverage are supported, with Windows and Unix report paths normalized.
 
-Ambiguous suffix matches remain unavailable instead of attaching incorrect coverage. Nested functions can share covered lines.
+Coverage is line coverage, never branch coverage: a decision line counts as
+covered with any positive hit count, uncovered with a known zero, and unknown
+when the record names no such line. `leadline test-targets PATH --coverage
+FILE` (or the read-only MCP `test_targets` tool, which requires `coverage`)
+ranks functions holding known-zero-hit decision lines by CRAP; unknown lines
+are reported separately, never as uncovered:
+
+```console
+leadline test-targets src/payment.ts --coverage coverage/lcov.info
+```
+
+When a coverage path could match more than one file, leadline reports no coverage rather than guess. Nested functions can share covered lines.
 
 Source maps and Cobertura are not supported.
 

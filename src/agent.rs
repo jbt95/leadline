@@ -1,7 +1,8 @@
-use crate::core::{AnalysisReport, FunctionAnalysis, FunctionMetrics};
+use crate::core::{AnalysisReport, FunctionAnalysis, FunctionMetrics, MetricContribution};
 use crate::diff::ChangedReport;
 use serde_json::{Value, json};
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
 /// Sort key for budget-limited agent views.
 ///
@@ -33,6 +34,7 @@ pub struct Budget {
     pub sort_by: Option<SortKey>,
     pub min_crap: Option<f64>,
     pub min_delta: Option<f64>,
+    pub explain: bool,
 }
 
 /// Compact agent-oriented view of a full analysis report.
@@ -130,6 +132,7 @@ pub fn changed_agent_json_budgeted(report: &ChangedReport, budget: &Budget) -> V
             &change.name,
             change.before.as_ref(),
             change.after.as_ref(),
+            budget.explain,
         );
         if entry.regressed {
             regressions.push(entry);
@@ -208,9 +211,10 @@ impl Entry {
         name: &str,
         before: Option<&FunctionAnalysis>,
         after: Option<&FunctionAnalysis>,
+        explain: bool,
     ) -> Self {
         let (regressed, improved, crap_delta) = classify(before, after);
-        let value = json!({
+        let mut value = json!({
             "path": path,
             "line": after.or(before).map(|function| function.start_line),
             "function": name,
@@ -218,6 +222,9 @@ impl Entry {
             "after": after.map(|f| metric_set(&f.metrics)),
             "delta": delta(before, after),
         });
+        if explain && let Some(causes) = changed_causes(before, after) {
+            value["causes"] = causes;
+        }
         let current = after.or(before);
         Self {
             value,
@@ -236,6 +243,47 @@ impl Entry {
             name: name.to_owned(),
         }
     }
+}
+
+/// Return after-side contributions added to a regression as a multiset.
+pub fn changed_causes(
+    before: Option<&FunctionAnalysis>,
+    after: Option<&FunctionAnalysis>,
+) -> Option<Value> {
+    let (regressed, _, _) = classify(before, after);
+    let (Some(before), Some(after)) = (before, after) else {
+        return None;
+    };
+    if !regressed {
+        return None;
+    }
+    let mut remaining = BTreeMap::new();
+    for contribution in &before.contributions {
+        *remaining
+            .entry(contribution_key(contribution))
+            .or_insert(0usize) += 1;
+    }
+    let mut causes = Vec::new();
+    for contribution in &after.contributions {
+        let key = contribution_key(contribution);
+        if let Some(count) = remaining.get_mut(&key)
+            && *count > 0
+        {
+            *count -= 1;
+            continue;
+        }
+        causes.push(contribution);
+    }
+    Some(serde_json::to_value(causes).unwrap_or(Value::Null))
+}
+
+fn contribution_key(contribution: &MetricContribution) -> (String, u32, u32, u32) {
+    (
+        contribution.rule.clone(),
+        contribution.nesting,
+        contribution.cognitive,
+        contribution.cyclomatic,
+    )
 }
 
 fn metric_set(metrics: &FunctionMetrics) -> Value {

@@ -2,7 +2,7 @@
 //!
 //! Read-only by construction: the only filesystem reads are source-file
 //! analysis input, an optional coverage file, and the `git` reads already
-//! performed inside [`crate::diff::analyze_changed`]. No writes, no shell,
+//! performed inside [`crate::diff::analyze_changes`]. No writes, no shell,
 //! no network.
 //!
 //! Wire format: newline-delimited JSON-RPC 2.0 over stdin/stdout.
@@ -10,23 +10,27 @@
 //! `{jsonrpc:"2.0", id, result}` or `{jsonrpc:"2.0", id, error:{code,message}}`.
 //! Messages without an `id` are notifications and produce no response.
 
+use crate::agent::changed_causes;
+use crate::config::RegressionLimits;
 use crate::core::{
     FunctionAnalysis, FunctionMetrics, METRIC_PROFILE, OUTPUT_SCHEMA_VERSION, Thresholds,
 };
+use std::collections::BTreeSet;
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 
 /// Maximum entries returned in any result array before truncation kicks in.
 const MAX_ENTRIES: usize = 200;
 
-/// The five tools this server exposes. Fixed set; keep in sync with
+/// The six tools this server exposes. Fixed set; keep in sync with
 /// [`tools_list`] and [`dispatch_tool`].
-const TOOL_NAMES: [&str; 5] = [
+const TOOL_NAMES: [&str; 6] = [
     "analyze",
     "analyze_changed",
     "analyze_function",
     "check",
     "explain_metric",
+    "test_targets",
 ];
 
 /// Serve JSON-RPC requests from stdin, writing responses to stdout.
@@ -159,6 +163,7 @@ fn dispatch_tool(
         "analyze_function" => tool_analyze_function(params),
         "check" => tool_check(params),
         "explain_metric" => tool_explain_metric(params),
+        "test_targets" => tool_test_targets(params),
         _ => Err((-32602, format!("unknown tool '{name}'"))),
     }
 }
@@ -284,7 +289,25 @@ fn tool_analyze(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
 fn tool_analyze_changed(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     let base = opt_str(params, "base").unwrap_or("HEAD~1");
     let path = opt_str(params, "path").unwrap_or(".");
-    let report = crate::diff::analyze_changed(Path::new(path), base)
+    let target = match opt_str(params, "target") {
+        None | Some("worktree") => crate::diff::ComparisonTarget::Worktree,
+        Some("index") => crate::diff::ComparisonTarget::Index,
+        Some(revision) => crate::diff::ComparisonTarget::Revision(revision.to_owned()),
+    };
+    let detect_renames = params
+        .get("renames")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let explain = params
+        .get("explain")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let options = crate::diff::ChangeOptions {
+        base: base.to_owned(),
+        target,
+        detect_renames,
+    };
+    let report = crate::diff::analyze_changes(Path::new(path), &options)
         .map_err(|error| (-32602, error.to_string()))?;
     let mut rows = Vec::new();
     for change in &report.functions {
@@ -300,7 +323,7 @@ fn tool_analyze_changed(params: &serde_json::Value) -> Result<serde_json::Value,
             .map_or((line, line), |function| {
                 (function.start_line, function.end_line)
             });
-        rows.push(serde_json::json!({
+        let mut row = serde_json::json!({
             "path": change.path,
             "name": change.name,
             "line": line,
@@ -309,7 +332,13 @@ fn tool_analyze_changed(params: &serde_json::Value) -> Result<serde_json::Value,
             "before": change.before.as_ref().map(compact_metrics),
             "after": change.after.as_ref().map(compact_metrics),
             "delta": change_delta(change.before.as_ref(), change.after.as_ref()),
-        }));
+        });
+        if explain
+            && let Some(causes) = changed_causes(change.before.as_ref(), change.after.as_ref())
+        {
+            row["causes"] = causes;
+        }
+        rows.push(row);
     }
     let (changes, truncated, total) = cap(&mut rows);
     let mut fields = envelope_fields();
@@ -383,14 +412,69 @@ fn tool_analyze_function(params: &serde_json::Value) -> Result<serde_json::Value
 
 fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     let path = opt_str(params, "path").unwrap_or(".");
-    let thresholds = parse_thresholds(params)?;
-    let report =
-        crate::analyze_path(Path::new(path), None).map_err(|error| (-32602, error.to_string()))?;
+    let regression_limits = parse_regression_limits(params)?;
+    let base = opt_str(params, "base");
+    let baseline_path = opt_str(params, "baseline");
+    if base.is_some() && baseline_path.is_some() {
+        return Err((-32602, "base and baseline are exclusive".to_owned()));
+    }
+    if regression_limits.is_some() && base.is_none() && baseline_path.is_none() {
+        return Err((
+            -32602,
+            "check regressions requires a base revision or baseline file".to_owned(),
+        ));
+    }
+    let thresholds = parse_thresholds(params, regression_limits.is_some())?;
     let mut rows = Vec::new();
-    for file in &report.files {
-        for function in &file.functions {
-            if thresholds.violates(&function.metrics) {
-                rows.push(compact_function(&file.path, function));
+    if let Some(base) = base {
+        let report = crate::diff::analyze_changed(Path::new(path), base)
+            .map_err(|error| (-32602, error.to_string()))?;
+        for change in &report.functions {
+            let Some(after) = change.after.as_ref() else {
+                continue;
+            };
+            let absolute = thresholds.violates(&after.metrics);
+            let delta = regression_limits.as_ref().is_some_and(|limits| {
+                change
+                    .before
+                    .as_ref()
+                    .is_some_and(|before| crate::diff::regression_violates(before, after, limits))
+            });
+            if absolute || delta {
+                rows.push(compact_function(&change.path, after));
+            }
+        }
+    } else if let Some(baseline_path) = baseline_path {
+        let baseline = crate::baseline::Baseline::read(Path::new(baseline_path))
+            .map_err(|error| (-32602, error.to_string()))?;
+        let report = crate::analyze_path(Path::new(path), None)
+            .map_err(|error| (-32602, error.to_string()))?;
+        let regressed: BTreeSet<(String, String)> = match &regression_limits {
+            Some(limits) => baseline
+                .compare(&report, limits)
+                .iter()
+                .map(|finding| (finding.path.clone(), finding.id.clone()))
+                .collect(),
+            None => BTreeSet::new(),
+        };
+        for file in &report.files {
+            for function in &file.functions {
+                let absolute = thresholds.violates(&function.metrics);
+                let delta = regression_limits.is_some()
+                    && regressed.contains(&(file.path.clone(), function.id.clone()));
+                if absolute || delta {
+                    rows.push(compact_function(&file.path, function));
+                }
+            }
+        }
+    } else {
+        let report = crate::analyze_path(Path::new(path), None)
+            .map_err(|error| (-32602, error.to_string()))?;
+        for file in &report.files {
+            for function in &file.functions {
+                if thresholds.violates(&function.metrics) {
+                    rows.push(compact_function(&file.path, function));
+                }
             }
         }
     }
@@ -399,6 +483,12 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
     let mut fields = envelope_fields();
     fields.insert("tool".to_owned(), serde_json::json!("check"));
     fields.insert("path".to_owned(), serde_json::json!(path));
+    if let Some(base) = base {
+        fields.insert("base".to_owned(), serde_json::json!(base));
+    }
+    if let Some(baseline_path) = baseline_path {
+        fields.insert("baseline".to_owned(), serde_json::json!(baseline_path));
+    }
     fields.insert(
         "thresholds".to_owned(),
         serde_json::json!({
@@ -407,6 +497,17 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
             "crap": thresholds.crap,
             "max_nesting": thresholds.max_nesting,
         }),
+    );
+    fields.insert(
+        "regressions".to_owned(),
+        serde_json::json!(regression_limits.as_ref().map(|limits| {
+            serde_json::json!({
+                "cognitive": limits.cognitive,
+                "cyclomatic": limits.cyclomatic,
+                "crap": limits.crap,
+                "max_nesting": limits.max_nesting,
+            })
+        })),
     );
     fields.insert("passed".to_owned(), serde_json::Value::from(passed));
     fields.insert(
@@ -418,7 +519,57 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
     envelope(fields)
 }
 
-fn parse_thresholds(params: &serde_json::Value) -> Result<Thresholds, (i64, String)> {
+fn parse_regression_limits(
+    params: &serde_json::Value,
+) -> Result<Option<RegressionLimits>, (i64, String)> {
+    let Some(value) = params.get("regressions") else {
+        return Ok(None);
+    };
+    if value.is_null() || value == &serde_json::Value::Bool(false) {
+        return Ok(None);
+    }
+    if value == &serde_json::Value::Bool(true) {
+        return Ok(Some(RegressionLimits::default()));
+    }
+    let object = value
+        .as_object()
+        .ok_or((-32602, "regressions must be true or an object".to_owned()))?;
+    let mut limits = RegressionLimits::default();
+    for key in ["cognitive", "cyclomatic", "max_nesting"] {
+        if let Some(value) = object.get(key) {
+            let limit = value.as_u64().ok_or((
+                -32602,
+                format!("regressions.{key} must be a non-negative integer"),
+            ))?;
+            let limit = u32::try_from(limit)
+                .map_err(|_| (-32602, format!("regressions.{key} must fit in u32")))?;
+            match key {
+                "cognitive" => limits.cognitive = limit,
+                "cyclomatic" => limits.cyclomatic = limit,
+                _ => limits.max_nesting = limit,
+            }
+        }
+    }
+    if let Some(value) = object.get("crap") {
+        let limit = value.as_f64().ok_or((
+            -32602,
+            "regressions.crap must be a non-negative number".to_owned(),
+        ))?;
+        if !limit.is_finite() || limit < 0.0 {
+            return Err((
+                -32602,
+                "regressions.crap must be a non-negative number".to_owned(),
+            ));
+        }
+        limits.crap = limit;
+    }
+    Ok(Some(limits))
+}
+
+fn parse_thresholds(
+    params: &serde_json::Value,
+    allow_empty: bool,
+) -> Result<Thresholds, (i64, String)> {
     let object = match params.get("thresholds") {
         None | Some(serde_json::Value::Null) => None,
         Some(value) => Some(
@@ -470,7 +621,7 @@ fn parse_thresholds(params: &serde_json::Value) -> Result<Thresholds, (i64, Stri
             }
         }
     }
-    if thresholds.is_empty() {
+    if thresholds.is_empty() && !allow_empty {
         return Err((-32602, "check requires at least one threshold".to_owned()));
     }
     Ok(thresholds)
@@ -509,6 +660,54 @@ fn tool_explain_metric(params: &serde_json::Value) -> Result<serde_json::Value, 
     fields.insert("metric".to_owned(), serde_json::json!(name));
     fields.insert("spec".to_owned(), serde_json::json!(METRIC_PROFILE));
     fields.insert("definition".to_owned(), serde_json::Value::from(definition));
+    envelope(fields)
+}
+
+fn tool_test_targets(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    let path = opt_str(params, "path").unwrap_or(".");
+    let coverage_path = opt_str(params, "coverage").ok_or((
+        -32602,
+        "test_targets requires a coverage file path".to_owned(),
+    ))?;
+    let top = match params.get("top") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => {
+            let count = value
+                .as_u64()
+                .ok_or((-32602, "top must be a positive integer".to_owned()))?;
+            let count =
+                usize::try_from(count).map_err(|_| (-32602, "top must fit in usize".to_owned()))?;
+            if count == 0 {
+                return Err((-32602, "top must be at least 1".to_owned()));
+            }
+            Some(count)
+        }
+    };
+    let coverage = load_coverage_file(coverage_path).map_err(|message| (-32602, message))?;
+    let report = crate::analyze_path(Path::new(path), Some(&coverage))
+        .map_err(|error| (-32602, error.to_string()))?;
+    let ranked = crate::test_targets::test_targets(&report, &coverage);
+    let total = ranked.len();
+    let limit = top.unwrap_or(MAX_ENTRIES).min(total);
+    let truncated = total > limit;
+    let mut rows = Vec::with_capacity(limit);
+    for target in &ranked[..limit] {
+        rows.push(serde_json::json!({
+            "path": target.path,
+            "function": target.function,
+            "line": target.line,
+            "crap": round1_opt(target.crap),
+            "coverage": round1_opt(target.coverage),
+            "uncovered": target.uncovered,
+            "unknown": target.unknown,
+        }));
+    }
+    let mut fields = envelope_fields();
+    fields.insert("tool".to_owned(), serde_json::json!("test_targets"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    fields.insert("targets".to_owned(), serde_json::Value::Array(rows));
+    fields.insert("truncated".to_owned(), serde_json::Value::from(truncated));
+    fields.insert("total".to_owned(), serde_json::Value::from(total as u64));
     envelope(fields)
 }
 
@@ -570,6 +769,9 @@ fn tools_list_result() -> serde_json::Value {
                     "properties": {
                         "base": { "type": "string", "default": "HEAD~1" },
                         "path": { "type": "string", "default": "." },
+                        "target": { "type": "string", "default": "worktree", "description": "'worktree', 'index', or a revision to compare against base." },
+                        "renames": { "type": "boolean", "default": false, "description": "Detect Git file renames and pair old-path content with new-path content." },
+                        "explain": { "type": "boolean", "default": false, "description": "Include multiset-added contribution causes on regression rows." },
                     },
                 },
             },
@@ -592,6 +794,8 @@ fn tools_list_result() -> serde_json::Value {
                     "type": "object",
                     "properties": {
                         "path": { "type": "string", "default": "." },
+                        "base": { "type": "string", "description": "Git base revision for changed-function gates." },
+                        "baseline": { "type": "string", "description": "Baseline snapshot file for regression gates without Git. Exclusive with base; read-only, never written by this server." },
                         "thresholds": {
                             "type": "object",
                             "properties": {
@@ -599,6 +803,16 @@ fn tools_list_result() -> serde_json::Value {
                                 "cyclomatic": { "type": "integer" },
                                 "crap": { "type": "number" },
                                 "max_nesting": { "type": "integer" },
+                            },
+                        },
+                        "regressions": {
+                            "description": "true for zero-tolerance deltas, or an object of allowed non-negative deltas.",
+                            "type": ["boolean", "object"],
+                            "properties": {
+                                "cognitive": { "type": "integer", "minimum": 0 },
+                                "cyclomatic": { "type": "integer", "minimum": 0 },
+                                "crap": { "type": "number", "minimum": 0 },
+                                "max_nesting": { "type": "integer", "minimum": 0 },
                             },
                         },
                     },
@@ -613,6 +827,19 @@ fn tools_list_result() -> serde_json::Value {
                         "metric": { "type": "string", "enum": ["cyclomatic", "cognitive", "halstead", "maintainability", "crap"] },
                     },
                     "required": ["metric"],
+                },
+            },
+            {
+                "name": "test_targets",
+                "description": "Rank functions holding uncovered decision lines (known zero line-coverage hits) by CRAP.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." },
+                        "coverage": { "type": "string", "description": "Required coverage file path (.info for LCOV, .xml for JaCoCo). Line coverage only." },
+                        "top": { "type": "integer", "minimum": 1, "description": "Keep at most this many targets." },
+                    },
+                    "required": ["coverage"],
                 },
             },
         ],
