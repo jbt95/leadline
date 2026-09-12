@@ -59,6 +59,8 @@ jobs:
     continue-on-error: ${{ github.event_name == 'schedule' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install Rust
+        run: rustup update stable --no-self-update
       - name: Audit dependencies
         uses: rustsec/audit-check@v2
         with:
