@@ -25,6 +25,7 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 - MCP `check` accepts a coverage file so CRAP thresholds and CRAP deltas gate on real data.
 - MCP `analyze_function` `explain: true` returns per-decision contribution lines.
 - MCP `initialize` returns usage instructions, and each tool carries a display title plus read-only, idempotent, and closed-world annotations; descriptions now state when to reach for the tool.
+- `curl | sh` installer (`install.sh`): detects macOS/Linux and arm64/x86-64, verifies the release `SHA256SUMS`, and installs to `~/.local/bin` (`LEADLINE_INSTALL_DIR`, `LEADLINE_VERSION` overrides).
 - Saved baselines: `leadline baseline --output FILE` snapshots and `check --baseline FILE` gates; MCP `check` accepts a read-only `baseline` path and never writes snapshots.
 
 ### Fixed

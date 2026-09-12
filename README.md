@@ -31,11 +31,20 @@ flowchart LR
 
 ## Quick start
 
-Download a binary from GitHub Releases, or build with Rust 1.90 or later:
+Install the latest release (checksum-verified, into `~/.local/bin`):
+
+```console
+curl -fsSL https://raw.githubusercontent.com/jbt95/leadline/main/install.sh | sh
+leadline analyze .
+```
+
+Pin a version with `LEADLINE_VERSION=v0.1.0`, or choose a destination with
+`LEADLINE_INSTALL_DIR`. Windows users can download the `.zip` from
+[GitHub Releases](https://github.com/jbt95/leadline/releases). Or build from
+source with Rust 1.90 or later:
 
 ```console
 cargo install --path .
-leadline analyze .
 ```
 
 Release artifacts support macOS ARM64, macOS x86-64, Linux ARM64, Linux x86-64, and Windows x86-64.
