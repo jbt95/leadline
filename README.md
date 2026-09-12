@@ -16,6 +16,19 @@ Deterministic function-level complexity analysis for Java, JavaScript, TypeScrip
 
 `leadline` reports physical and logical LOC, parameters, nesting, cyclomatic and cognitive complexity, Halstead metrics, maintainability, coverage, and CRAP. It parses code with Tree-sitter and never executes it: no build runtime, no network, no project scripts.
 
+## How it works
+
+```mermaid
+flowchart LR
+    Sources["Source files: Java, JavaScript, TypeScript, TSX"] --> Discovery["Discovery: gitignore-aware, skips generated and vendor dirs"]
+    Discovery --> Workers["Rayon workers: one file per worker"]
+    Workers --> Parser["Tree-sitter parsing: ParserBackend::analyze"]
+    Parser --> Engine["Metric engine: cyclomatic, cognitive, Halstead, maintainability"]
+    Coverage["LCOV or JaCoCo"] --> Apply["Coverage merge: coverage, CRAP, test-targets"]
+    Engine --> Apply
+    Apply --> Output["Output: terminal, JSON, SARIF, agent-json"]
+```
+
 ## Quick start
 
 Download a binary from GitHub Releases, or build with Rust 1.90 or later:
@@ -60,8 +73,18 @@ leadline check . --cognitive 15 --cyclomatic 10 --max-nesting 4
 |---|---|
 | Claude Code | Plugin + MCP + skill + hooks (`integrations/claude-code/`) |
 | Pi / OMP | Native extension on the shared TS core (`integrations/agent-adapter-ts/`) |
-| OpenCode | Plugin + MCP |
+| OpenCode | Plugin (v1; v2 experimental) + MCP |
 | Codex, Gemini, Cursor, Cline, Windsurf, Copilot | MCP + skills, rules, or instructions |
+
+```mermaid
+flowchart TD
+    CLI["CLI: analyze, function, changed, diff, check, baseline, test-targets, doctor, version, skill"]
+    CLI --> Human["Humans and CI: terminal, JSON, SARIF, exit codes 0-5"]
+    CLI --> MCP["MCP server, read-only stdio: analyze, analyze_changed, analyze_function, check, explain_metric, test_targets"]
+    MCP --> Harnesses["Claude Code, Pi, OMP, OpenCode, Codex, Gemini, Cursor, Cline, Windsurf, Copilot"]
+    CLI --> Skill["Skill and hooks: SKILL.md, changed agent-json, check warn mode"]
+    Skill --> Harnesses
+```
 
 See the [agent integration guide](docs/agent-integration-guide.md), the [compatibility matrix](integrations/COMPATIBILITY.md), and [per-harness READMEs](integrations/).
 
@@ -96,6 +119,16 @@ For refactors without useful Git history, pin a snapshot and gate against it:
 ```console
 leadline baseline . --output .leadline-baseline.json
 leadline check . --baseline .leadline-baseline.json --regressions
+```
+
+```mermaid
+flowchart LR
+    Edit["Edit code"] --> Changed["changed or diff: pair functions by name and order, fingerprint detects edits"]
+    Changed --> Gate["check: absolute thresholds, baseline snapshot, regression deltas"]
+    Gate -->|pass| Next["Land change"]
+    Gate -->|violation| Target["test-targets: rank uncovered functions by CRAP"]
+    Target --> Edit
+    Gate --> Agent["Agent feedback: agent-json, skill, hooks"]
 ```
 
 Exit codes are stable:

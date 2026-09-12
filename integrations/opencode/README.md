@@ -29,6 +29,22 @@ stable tools that shell out to the same binary:
 Prefer the native plugin for daily local use; keep MCP supported
 for portability. Both return semantically identical results.
 
+## Option C — Native plugin for OpenCode V2 (experimental)
+
+> The V2 plugin API is unstable (see `plugin-v2/README.md`). The V1
+> plugin above is the stable path.
+
+`plugin-v2/` is a V2 port of Option B with the same three tools
+(`leadline_changed`, `leadline_function`, `leadline_check`) and the same
+shell-out contract. Setup and caveats are in `plugin-v2/README.md`.
+
+MCP on V2 uses a nested shape (`mcp.servers`); the local-stdio equivalent
+of Option A is:
+
+```jsonc
+{ "mcp": { "servers": { "leadline": { "type": "local", "command": ["leadline", "mcp"] } } } }
+```
+
 ## Skill
 
 `skill/SKILL.md` teaches the agent when to run analysis and how to

@@ -1,0 +1,10 @@
+{
+  "name": "leadline-opencode-plugin-v2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Experimental OpenCode V2 native plugin for leadline (thin wrapper over the leadline binary).",
+  "dependencies": {
+    "@opencode/plugin": "2.0.2"
+  }
+}

@@ -8,7 +8,7 @@
 | Claude Code | Yes | Yes | Yes | Yes | Yes | Plugin + MCP + skill + optional hooks | Not yet validated live |
 | Pi | Yes | Via extension if desired | Yes | Extension events | Yes | Native extension + skill | Not yet validated live |
 | OMP | Yes | Yes / interoperability | Yes | Yes | Yes | Native extension + skill, MCP fallback | Not yet validated live |
-| OpenCode | Yes | Yes | Instructions | Plugin hooks | Yes | Plugin + MCP | Not yet validated live |
+| OpenCode | Yes | Yes | Instructions | Plugin hooks | Yes | Plugin (v1; v2 experimental) + MCP | Not yet validated live |
 | Codex | Yes | Yes | AGENTS / skills | Harness-dependent | Evolving | MCP + skill / instructions | Not yet validated live |
 | Gemini CLI | Yes | Yes | Yes | Yes | Extension | Gemini extension | Not yet validated live |
 | Cursor | Yes | Yes | Rules / AGENTS | Limited, native evolution | — | MCP + rule | Not yet validated live |
