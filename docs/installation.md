@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Rust 1.88 or later (edition 2024, MSRV 1.88).
+- Rust 1.90 or later (edition 2024, MSRV 1.90).
 - `git` on `PATH` for `changed` / `diff` only. Other commands do not need git.
 - Supported languages: Java (`.java`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), TypeScript (`.ts`, `.mts`, `.cts`), TSX (`.tsx`).
 

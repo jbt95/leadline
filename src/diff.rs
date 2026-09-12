@@ -36,14 +36,15 @@ pub struct ChangedReport {
 
 pub fn analyze_changed(path: &Path, base: &str) -> Result<ChangedReport> {
     validate_revision(base)?;
-    let requested = std::fs::canonicalize(path)?;
+    let requested = strip_verbatim_prefix(&std::fs::canonicalize(path)?);
     let start = if requested.is_dir() {
         requested.as_path()
     } else {
         requested.parent().unwrap_or(Path::new("."))
     };
     let root_output = git(start, ["rev-parse", "--show-toplevel"])?;
-    let root = PathBuf::from(String::from_utf8(root_output.stdout)?.trim());
+    let toplevel = String::from_utf8(root_output.stdout)?;
+    let root = strip_verbatim_prefix(&std::fs::canonicalize(toplevel.trim())?);
     let scope = crate::normalized_relative_path(&requested, &root);
     let mut paths = changed_paths(&root, base)?;
     paths.extend(untracked_paths(&root)?);
@@ -193,6 +194,28 @@ fn group_by_name(functions: Vec<FunctionAnalysis>) -> BTreeMap<String, Vec<Funct
     }
     grouped
 }
+/// `std::fs::canonicalize` returns verbatim (`\\?\`) paths on Windows, which
+/// never match the plain paths git prints. Both the requested path and the
+/// git-reported root pass through canonicalization plus this strip, so scope
+/// comparison always compares like with like. Identity off Windows.
+#[cfg(windows)]
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    const UNC_PREFIX: &str = r"\\?\UNC\";
+    const VERBATIM_PREFIX: &str = r"\\?\";
+    let text = path.as_os_str().to_string_lossy();
+    if let Some(rest) = text.strip_prefix(UNC_PREFIX) {
+        return PathBuf::from(format!("\\\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(VERBATIM_PREFIX) {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
+#[cfg(not(windows))]
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
 
 fn git<'a>(cwd: &Path, args: impl IntoIterator<Item = &'a str>) -> Result<Output> {
     let output = Command::new("git").current_dir(cwd).args(args).output()?;
@@ -212,4 +235,45 @@ fn git_optional<'a>(
 ) -> Result<Option<Vec<u8>>> {
     let output = Command::new("git").current_dir(cwd).args(args).output()?;
     Ok(output.status.success().then_some(output.stdout))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_disk_prefix_strips_to_git_form() {
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\C:\repo\calc.ts")),
+            PathBuf::from(r"C:\repo\calc.ts")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_unc_prefix_strips_to_git_form() {
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\UNC\host\share\calc.ts")),
+            PathBuf::from(r"\\host\share\calc.ts")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn plain_path_is_unchanged() {
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"C:\repo\calc.ts")),
+            PathBuf::from(r"C:\repo\calc.ts")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn non_windows_path_is_unchanged() {
+        assert_eq!(
+            strip_verbatim_prefix(Path::new("/tmp/repo/calc.ts")),
+            PathBuf::from("/tmp/repo/calc.ts")
+        );
+    }
 }

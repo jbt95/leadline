@@ -44,12 +44,12 @@ jobs:
         run: cargo build --release --locked
 
   msrv:
-    name: Rust 1.88 compatibility
+    name: Rust 1.90 compatibility
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - run: rustup toolchain install 1.88 --profile minimal
-      - run: rustup run 1.88 cargo check --locked
+      - run: rustup toolchain install 1.90 --profile minimal
+      - run: rustup run 1.90 cargo check --locked
 
   supply-chain:
     name: Supply chain (audit + deny)

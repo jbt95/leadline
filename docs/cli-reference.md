@@ -11,15 +11,20 @@ leadline check [PATH] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting
 leadline changed [--base REV] [--path PATH] [--json]
 leadline diff [REV] [--path PATH] [--json]
 leadline --version
+leadline version
+leadline doctor [PATH]
+leadline mcp
+leadline skill
 ```
 
 - `analyze`: all supported functions under `PATH` (default `.`), or one file. Output sorted by path, functions in source order.
 - `function`: functions named `NAME` in `FILE` only. Errors when the name is absent.
 - `check`: like `analyze`, but keeps only violations and parse errors. Requires at least one threshold flag.
 - `changed` / `diff`: functions changed between base revision and working tree. `changed` takes `--base REV` (default `HEAD~1`); `diff` takes the revision positionally. Both accept `--path` to scope to a file or directory.
-- `--version` / `-V`: print `leadline <version>`.
-
-`version`, `doctor`, `mcp`, and `integrate` subcommands are deferred and not available in 1.0. `--format agent-json` selects the agent-oriented JSON shape (see `agent-integration-guide.md`).
+- `--version` / `-V` / `version`: print `leadline <version>`.
+- `doctor`: self-check parsers, coverage readers, `git`, and `leadline.toml`.
+- `mcp`: serve the read-only MCP tool API over stdio.
+- `skill`: print the canonical agent skill (`integrations/common/leadline-skill/SKILL.md`, baked into the binary).
 
 ## Flags
 

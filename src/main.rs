@@ -83,6 +83,13 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
         println!("{}", usage());
         return Ok(ExitCode::SUCCESS);
     }
+    /// Canonical agent skill, baked in at compile time so `leadline skill`
+    /// works wherever the binary runs.
+    const SKILL_TEXT: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/integrations/common/leadline-skill/SKILL.md"
+    ));
+
     match command {
         "analyze" => analyze_command(&args[1..]),
         "function" => function_command(&args[1..]),
@@ -93,6 +100,10 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
             Ok(()) => Ok(ExitCode::SUCCESS),
             Err(error) => Err(CliError::internal(error.to_string())),
         },
+        "skill" | "--skill" => {
+            print!("{SKILL_TEXT}");
+            Ok(ExitCode::SUCCESS)
+        }
         "version" | "--version" | "-V" => {
             println!("leadline {}", env!("CARGO_PKG_VERSION"));
             Ok(ExitCode::SUCCESS)
@@ -640,5 +651,5 @@ fn load_coverage(path: &str, format: CoverageFormat) -> Result<CoverageMap, CliE
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline function FILE NAME [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline changed [--base REV] [--path PATH] [--json] [--format agent-json]\n  leadline diff [REV] [--path PATH] [--json] [--format agent-json]\n  leadline doctor [PATH]\n  leadline mcp\n  leadline version\n  leadline --version"
+    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline function FILE NAME [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline changed [--base REV] [--path PATH] [--json] [--format agent-json]\n  leadline diff [REV] [--path PATH] [--json] [--format agent-json]\n  leadline doctor [PATH]\n  leadline mcp\n  leadline skill\n  leadline version\n  leadline --version"
 }

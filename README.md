@@ -1,18 +1,57 @@
 # leadline
 
-A native Rust CLI for deterministic function-level complexity analysis of Java, JavaScript, TypeScript, and TSX.
+Deterministic function-level complexity analysis for Java, JavaScript, TypeScript, and TSX — built as a feedback loop for humans, CI, and AI coding agents.
 
-`leadline` reports physical and logical LOC, parameters, nesting, cyclomatic complexity, cognitive complexity, Halstead metrics, maintainability, coverage, and CRAP.
+`leadline` reports physical and logical LOC, parameters, nesting, cyclomatic complexity, cognitive complexity, Halstead metrics, maintainability, coverage, and CRAP. It parses code with Tree-sitter and never executes it: no build runtime, no network, no project scripts.
 
-## Install
+## Quick start
 
-Download a binary from GitHub Releases, or build with Rust 1.88 or later:
+Download a binary from GitHub Releases, or build with Rust 1.90 or later:
 
 ```console
 cargo install --path .
+leadline analyze .
 ```
 
 Release artifacts support macOS ARM64, macOS x86-64, Linux ARM64, Linux x86-64, and Windows x86-64.
+
+## AI-agent integration
+
+`leadline` is designed to answer one question after an edit: *did this change improve or degrade maintainability?* Metrics are evidence, not objectives — use them to spot risk, then apply normal engineering judgment.
+
+**Changed-code analysis** keeps the signal small:
+
+```console
+leadline changed --base origin/main --format agent-json
+```
+
+```json
+{"summary": {"changed_functions": 1, "regressions": 1, "improvements": 0},
+ "regressions": [{"path": "payment.ts", "function": "processPayment",
+   "before": {"cognitive": 12}, "after": {"cognitive": 24}}]}
+```
+
+**MCP server** (read-only, stdio, five tools: `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`):
+
+```console
+leadline mcp
+```
+
+**Skill and hooks.** Ship the canonical skill at `integrations/common/leadline-skill/SKILL.md` and run post-edit hooks in warn mode — surface regressions, never gate silently:
+
+```console
+leadline changed --format agent-json
+leadline check . --cognitive 15 --cyclomatic 10 --max-nesting 4
+```
+
+| Harness | Integration |
+|---|---|
+| Claude Code | Plugin + MCP + skill + hooks (`integrations/claude-code/`) |
+| Pi / OMP | Native extension on the shared TS core (`integrations/agent-adapter-ts/`) |
+| OpenCode | Plugin + MCP |
+| Codex, Gemini, Cursor, Cline, Windsurf, Copilot | MCP + skills, rules, or instructions |
+
+See the [agent integration guide](docs/agent-integration-guide.md), the [compatibility matrix](integrations/COMPATIBILITY.md), and [per-harness READMEs](integrations/).
 
 ## Analyze
 
@@ -29,7 +68,7 @@ The analyzer reads and parses each file once. Rayon workers process files indepe
 
 Generated and vendor directories are skipped by default. Explicit file paths remain analyzable.
 
-JSON files are sorted by path. Functions use source order. `schema_version` identifies output compatibility. Each file includes deterministic `parse_errors`.
+JSON files are sorted by path. Functions use source order. `schema_version`, `analyzer_version`, and `metric_specs` identify output compatibility. Each file includes deterministic `parse_errors`.
 
 ## Quality gates
 
@@ -38,7 +77,7 @@ leadline check . --cognitive 15 --cyclomatic 10 --max-nesting 4
 leadline check . --crap 30 --lcov coverage/lcov.info --json
 ```
 
-Thresholds fail only when a value exceeds its limit. A CRAP threshold also fails unavailable coverage.
+Thresholds fail only when a value exceeds its limit. A CRAP threshold also fails unavailable coverage. Thresholds can live in `leadline.toml` instead of flags; CLI flags win.
 
 Exit codes are stable:
 
@@ -50,7 +89,7 @@ Exit codes are stable:
 - `5`: internal error.
 
 See the [CLI reference](docs/cli-reference.md), [JSON schema](docs/json-schema.md),
-[configuration](docs/configuration.md), and [agent integration guide](docs/agent-integration-guide.md).
+and [configuration](docs/configuration.md).
 
 ## Changed functions
 

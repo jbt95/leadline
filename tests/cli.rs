@@ -72,6 +72,23 @@ fn version_and_subcommand_help_are_available() {
 }
 
 #[test]
+fn skill_prints_canonical_skill_text() {
+    let expected = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("integrations/common/leadline-skill/SKILL.md"),
+    )
+    .unwrap();
+    for args in [&["skill"][..], &["--skill"][..]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+    }
+}
+
+#[test]
 fn mcp_serves_tool_list_over_stdio() {
     use std::io::Write;
     use std::process::Stdio;
