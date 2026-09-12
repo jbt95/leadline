@@ -6,7 +6,7 @@
 
 <p>
   <a href="https://github.com/jbt95/leadline/actions/workflows/ci.yml"><img src="https://github.com/jbt95/leadline/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
-  <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="version 0.1.0" />
+  <a href="https://github.com/jbt95/leadline/releases"><img src="https://img.shields.io/github/v/release/jbt95/leadline" alt="latest release" /></a>
   <img src="https://img.shields.io/badge/stability-beta-green" alt="stability: beta" />
   <a href="LICENSE"><img src="https://img.shields.io/github/license/jbt95/leadline" alt="license: MIT" /></a>
   <img src="https://img.shields.io/badge/MSRV-1.90-orange" alt="MSRV 1.90" />
