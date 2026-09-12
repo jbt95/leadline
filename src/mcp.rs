@@ -36,7 +36,9 @@ const TOOL_NAMES: [&str; 6] = [
 /// Serve JSON-RPC requests from stdin, writing responses to stdout.
 ///
 /// One request per line. Batch arrays are accepted when a whole line parses
-/// as a JSON array. Blank lines are ignored.
+/// as a JSON array. Blank lines are ignored. Responses are flushed after
+/// every line: live clients keep stdin open while waiting, so buffering
+/// until EOF would deadlock them into a request timeout.
 pub fn serve() -> crate::Result<()> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -49,6 +51,7 @@ pub fn serve() -> crate::Result<()> {
         if let Some(response) = handle_request(&line) {
             use std::io::Write as _;
             writeln!(out, "{response}")?;
+            out.flush()?;
         }
     }
     use std::io::Write as _;
@@ -115,19 +118,34 @@ fn handle_single(request: &serde_json::Value) -> Option<serde_json::Value> {
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     match method.as_str() {
-        "initialize" => Some(success_response(id, initialize_result())),
+        "initialize" => Some(success_response(id, initialize_result(&params))),
         "ping" => Some(success_response(id, serde_json::json!({}))),
         "tools/list" => Some(success_response(id, tools_list_result())),
         "tools/call" => match dispatch_tools_call(&params) {
-            Ok(result) => Some(success_response(id, result)),
+            Ok(result) => Some(success_response(id, tool_result(result))),
             Err((code, message)) => Some(error_response(id, code, &message)),
         },
         name if TOOL_NAMES.contains(&name) => match dispatch_tool(name, &params) {
-            Ok(result) => Some(success_response(id, result)),
+            Ok(result) => Some(success_response(id, tool_result(result))),
             Err((code, message)) => Some(error_response(id, code, &message)),
         },
         _ => Some(error_response(id, -32601, "Method not found")),
     }
+}
+
+/// Wrap a tool payload in the MCP `CallToolResult` shape: a text content
+/// block for hosts that render text, plus `structuredContent` so code-mode
+/// style hosts can hand agents native JSON. Clients that receive neither
+/// surface a null result, so this envelope is required, not cosmetic.
+fn tool_result(payload: serde_json::Value) -> serde_json::Value {
+    let text = match &payload {
+        serde_json::Value::String(text) => text.clone(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    };
+    serde_json::json!({
+        "content": [{ "type": "text", "text": text }],
+        "structuredContent": payload,
+    })
 }
 
 fn dispatch_tools_call(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
@@ -736,9 +754,17 @@ fn load_coverage_file(path: &str) -> Result<crate::coverage::CoverageMap, String
 // Protocol helpers
 // ---------------------------------------------------------------------------
 
-fn initialize_result() -> serde_json::Value {
+/// Builds the initialize result, echoing the client's requested protocol
+/// version per the spec's negotiation rules. Everything this server
+/// implements (initialize, tools/list, tools/call, ping, notifications) is
+/// version-stable, so echoing is honest; `2024-11-05` remains the fallback
+/// for clients that send no version.
+fn initialize_result(params: &serde_json::Value) -> serde_json::Value {
     serde_json::json!({
-        "protocolVersion": "2024-11-05",
+        "protocolVersion": params
+            .get("protocolVersion")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("2024-11-05"),
         "capabilities": { "tools": {} },
         "serverInfo": {
             "name": "leadline",

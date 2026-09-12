@@ -22,6 +22,12 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 - Coverage-aware test targets: `leadline test-targets` CLI and read-only MCP `test_targets` tool (line coverage only).
 - Saved baselines: `leadline baseline --output FILE` snapshots and `check --baseline FILE` gates; MCP `check` accepts a read-only `baseline` path and never writes snapshots.
 
+### Fixed
+
+- MCP stdio responses flush after every line: live clients keep stdin open while waiting, and buffering until EOF made them time out (`-32001`).
+- MCP `initialize` echoes the client's requested protocol version instead of a fixed stale one, so modern SDK clients no longer reject the handshake.
+- MCP `tools/call` success results use the standard `CallToolResult` envelope (`content` text block plus `structuredContent`); without it, hosts surfaced `null` results.
+
 ## 0.1.0 - 2026-09-12
 
 ### Added

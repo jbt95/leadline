@@ -123,6 +123,53 @@ fn mcp_serves_tool_list_over_stdio() {
     assert!(names.contains(&"explain_metric"));
 }
 
+/// Live MCP clients keep stdin open while waiting for responses, so every
+/// response must reach stdout immediately. The test above drops stdin first,
+/// which lets EOF flush the buffer and hides a missing per-response flush.
+#[test]
+fn mcp_responds_while_stdin_stays_open() {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin
+        .write_all(
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\
+              \"params\":{\"protocolVersion\":\"2025-11-25\"}}\n",
+        )
+        .unwrap();
+    stdin.flush().unwrap();
+
+    let stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        let _ = sender.send(reader.read_line(&mut line).map(|_| line));
+    });
+    let line = match receiver.recv_timeout(Duration::from_secs(10)) {
+        Ok(Ok(line)) => line,
+        other => {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("server did not answer while stdin stayed open: {other:?}");
+        }
+    };
+    let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(value["id"], 1);
+    assert_eq!(value["result"]["protocolVersion"], "2025-11-25");
+    drop(stdin);
+    let _ = child.wait();
+}
+
 fn check(file: &Path, options: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_leadline"))
         .arg("check")

@@ -17,9 +17,12 @@ fn call_tool(name: &str, arguments: Value) -> Value {
 }
 
 fn result_of(response: &Value) -> &Value {
-    response
+    let result = response
         .get("result")
-        .unwrap_or_else(|| panic!("expected result, got {response}"))
+        .unwrap_or_else(|| panic!("expected result, got {response}"));
+    // Tools/call results carry the MCP CallToolResult envelope; handshake
+    // and tools/list results keep their plain shape.
+    result.get("structuredContent").unwrap_or(result)
 }
 
 fn error_of(response: &Value) -> &Value {
@@ -160,6 +163,24 @@ fn batch_requests_return_batch_responses() {
     assert_eq!(items.len(), 2);
     assert!(items[0].get("result").is_some());
     assert_eq!(items[1]["error"]["code"], -32601);
+}
+
+#[test]
+fn tools_call_results_use_call_tool_result_envelope() {
+    let dir = fixture_dir("function calc(x: number) { return x; }\n");
+    let response = call_tool(
+        "analyze",
+        serde_json::json!({ "path": dir.to_str().unwrap() }),
+    );
+    let result = result_of(&response);
+    assert!(result["schema_version"].is_number());
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("tools/call success must carry MCP text content");
+    let from_text: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(from_text["schema_version"], result["schema_version"]);
+    assert_eq!(from_text["tool"], "analyze");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
