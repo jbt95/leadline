@@ -2,10 +2,17 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
-## Unreleased
+## 0.1.0 - 2026-09-13
 
 ### Added
 
+- Function analysis for Java, JavaScript, TypeScript, and TSX.
+- `default-v1` cyclomatic and cognitive complexity rules.
+- Physical LOC, logical LOC, parameter, nesting, Halstead, and maintainability metrics.
+- LCOV and JaCoCo coverage with function-level CRAP scores.
+- Deterministic JSON, terminal reports, function lookup, changed-function analysis, and quality gates.
+- Gitignore-aware parallel discovery and five-platform release builds.
+- Fixture tests, parser diagnostics, and 10K, 100K, and 1M line benchmarks.
 - Renamed `code-health` to `leadline`.
 - Compact `--format agent-json` output on `analyze`, `function`, `check`, `changed`, and `diff`.
 - Local MCP server module (`leadline::mcp`) for agent tool calls.
@@ -33,15 +40,3 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 - MCP stdio responses flush after every line: live clients keep stdin open while waiting, and buffering until EOF made them time out (`-32001`).
 - MCP `initialize` echoes the client's requested protocol version instead of a fixed stale one, so modern SDK clients no longer reject the handshake.
 - MCP `tools/call` success results use the standard `CallToolResult` envelope (`content` text block plus `structuredContent`); without it, hosts surfaced `null` results.
-
-## 0.1.0 - 2026-09-12
-
-### Added
-
-- Function analysis for Java, JavaScript, TypeScript, and TSX.
-- `default-v1` cyclomatic and cognitive complexity rules.
-- Physical LOC, logical LOC, parameter, nesting, Halstead, and maintainability metrics.
-- LCOV and JaCoCo coverage with function-level CRAP scores.
-- Deterministic JSON, terminal reports, function lookup, changed-function analysis, and quality gates.
-- Gitignore-aware parallel discovery and five-platform release builds.
-- Fixture tests, parser diagnostics, and 10K, 100K, and 1M line benchmarks.
