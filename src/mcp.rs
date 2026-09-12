@@ -10,7 +10,7 @@
 //! `{jsonrpc:"2.0", id, result}` or `{jsonrpc:"2.0", id, error:{code,message}}`.
 //! Messages without an `id` are notifications and produce no response.
 
-use crate::agent::changed_causes;
+use crate::agent::{SortKey, changed_causes};
 use crate::config::RegressionLimits;
 use crate::core::{
     FunctionAnalysis, FunctionMetrics, METRIC_PROFILE, OUTPUT_SCHEMA_VERSION, Thresholds,
@@ -22,14 +22,15 @@ use std::path::{Path, PathBuf};
 /// Maximum entries returned in any result array before truncation kicks in.
 const MAX_ENTRIES: usize = 200;
 
-/// The six tools this server exposes. Fixed set; keep in sync with
+/// The seven tools this server exposes. Fixed set; keep in sync with
 /// [`tools_list`] and [`dispatch_tool`].
-const TOOL_NAMES: [&str; 6] = [
+const TOOL_NAMES: [&str; 7] = [
     "analyze",
     "analyze_changed",
     "analyze_function",
     "check",
     "explain_metric",
+    "repo_summary",
     "test_targets",
 ];
 
@@ -181,6 +182,7 @@ fn dispatch_tool(
         "analyze_function" => tool_analyze_function(params),
         "check" => tool_check(params),
         "explain_metric" => tool_explain_metric(params),
+        "repo_summary" => tool_repo_summary(params),
         "test_targets" => tool_test_targets(params),
         _ => Err((-32602, format!("unknown tool '{name}'"))),
     }
@@ -264,15 +266,177 @@ fn round1_opt(value: Option<f64>) -> serde_json::Value {
     }
 }
 
-/// Cap a result array, reporting truncation explicitly instead of silently
-/// dropping entries. Returns `(kept, truncated, total)`.
+/// Cap a result array at the default bound, reporting truncation explicitly
+/// instead of silently dropping entries.
 fn cap(entries: &mut Vec<serde_json::Value>) -> (Vec<serde_json::Value>, bool, usize) {
+    cap_with_limit(entries, MAX_ENTRIES)
+}
+
+/// Cap a result array at `limit`. Returns `(kept, truncated, total)`.
+fn cap_with_limit(
+    entries: &mut Vec<serde_json::Value>,
+    limit: usize,
+) -> (Vec<serde_json::Value>, bool, usize) {
     let total = entries.len();
-    if total > MAX_ENTRIES {
-        (entries[..MAX_ENTRIES].to_vec(), true, total)
+    if total > limit {
+        (entries[..limit].to_vec(), true, total)
     } else {
         (std::mem::take(entries), false, total)
     }
+}
+
+/// Output budget for list-shaped tools, mirroring the CLI agent-json flags.
+#[derive(Clone, Copy, Debug, Default)]
+struct ToolBudget {
+    top: Option<usize>,
+    sort_by: Option<SortKey>,
+    min_crap: Option<f64>,
+    min_delta: Option<f64>,
+}
+
+impl ToolBudget {
+    fn limit(&self) -> usize {
+        self.top.unwrap_or(MAX_ENTRIES)
+    }
+}
+
+fn parse_tool_budget(
+    params: &serde_json::Value,
+    allow_min_delta: bool,
+) -> Result<ToolBudget, (i64, String)> {
+    let top = match params.get("top") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => {
+            let count = value
+                .as_u64()
+                .ok_or((-32602, "top must be a positive integer".to_owned()))?;
+            let count =
+                usize::try_from(count).map_err(|_| (-32602, "top must fit in usize".to_owned()))?;
+            if count == 0 {
+                return Err((-32602, "top must be at least 1".to_owned()));
+            }
+            Some(count)
+        }
+    };
+    let sort_by = match opt_str(params, "sort_by") {
+        None => None,
+        Some(value) => Some(SortKey::parse(value).ok_or((
+            -32602,
+            format!("unknown sort_by '{value}': expected 'crap', 'cognitive', or 'cyclomatic'"),
+        ))?),
+    };
+    let min_crap = parse_optional_f64(params, "min_crap")?;
+    let min_delta = if allow_min_delta {
+        parse_optional_f64(params, "min_delta")?
+    } else {
+        None
+    };
+    Ok(ToolBudget {
+        top,
+        sort_by,
+        min_crap,
+        min_delta,
+    })
+}
+
+fn parse_optional_f64(params: &serde_json::Value, key: &str) -> Result<Option<f64>, (i64, String)> {
+    match params.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => {
+            let number = value
+                .as_f64()
+                .ok_or((-32602, format!("{key} must be a number")))?;
+            if !number.is_finite() {
+                return Err((-32602, format!("{key} must be finite")));
+            }
+            Ok(Some(number))
+        }
+    }
+}
+
+fn row_u32(row: &serde_json::Value, key: &str) -> u32 {
+    row.get(key)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as u32
+}
+
+fn row_f64(row: &serde_json::Value, key: &str) -> Option<f64> {
+    row.get(key).and_then(serde_json::Value::as_f64)
+}
+
+/// Descending order by metric; missing values sort last.
+fn cmp_desc_f64(left: Option<f64>, right: Option<f64>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (left, right) {
+        (Some(left), Some(right)) => right.total_cmp(&left),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn row_position(row: &serde_json::Value) -> (&str, &str, u32) {
+    (
+        opt_str(row, "path").unwrap_or_default(),
+        opt_str(row, "name").unwrap_or_default(),
+        row_u32(row, "line"),
+    )
+}
+
+/// Sort compact `analyze` rows: primary metric descending (missing CRAP
+/// last), then path/name/line for determinism.
+fn sort_analyze_rows(rows: &mut [serde_json::Value], key: SortKey) {
+    rows.sort_by(|left, right| {
+        let primary = match key {
+            SortKey::Crap => cmp_desc_f64(row_f64(left, "crap"), row_f64(right, "crap")),
+            SortKey::Cognitive => row_u32(right, "cognitive").cmp(&row_u32(left, "cognitive")),
+            SortKey::Cyclomatic => row_u32(right, "cyclomatic").cmp(&row_u32(left, "cyclomatic")),
+        };
+        primary.then_with(|| row_position(left).cmp(&row_position(right)))
+    });
+}
+
+/// The current-side metrics of a changed row: after when present, else before.
+fn changed_current(row: &serde_json::Value) -> &serde_json::Value {
+    row.get("after")
+        .filter(|value| !value.is_null())
+        .or_else(|| row.get("before"))
+        .unwrap_or(row)
+}
+
+/// Max absolute delta across cognitive, cyclomatic, and CRAP; 0.0 when the
+/// row pairs no numeric delta (added or removed functions).
+fn changed_max_delta(row: &serde_json::Value) -> f64 {
+    let delta = row.get("delta");
+    ["cognitive", "cyclomatic", "crap"]
+        .iter()
+        .filter_map(|key| {
+            delta
+                .and_then(|value| value.get(key))
+                .and_then(serde_json::Value::as_f64)
+        })
+        .map(f64::abs)
+        .fold(0.0, f64::max)
+}
+
+/// Sort changed rows by current-side metric descending.
+fn sort_changed_rows(rows: &mut [serde_json::Value], key: SortKey) {
+    rows.sort_by(|left, right| {
+        let left_metric = changed_current(left);
+        let right_metric = changed_current(right);
+        let primary = match key {
+            SortKey::Crap => {
+                cmp_desc_f64(row_f64(left_metric, "crap"), row_f64(right_metric, "crap"))
+            }
+            SortKey::Cognitive => {
+                row_u32(right_metric, "cognitive").cmp(&row_u32(left_metric, "cognitive"))
+            }
+            SortKey::Cyclomatic => {
+                row_u32(right_metric, "cyclomatic").cmp(&row_u32(left_metric, "cyclomatic"))
+            }
+        };
+        primary.then_with(|| row_position(left).cmp(&row_position(right)))
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +445,7 @@ fn cap(entries: &mut Vec<serde_json::Value>) -> (Vec<serde_json::Value>, bool, u
 
 fn tool_analyze(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     let path = opt_str(params, "path").unwrap_or(".");
+    let budget = parse_tool_budget(params, false)?;
     let coverage_path = opt_str(params, "coverage");
     let coverage = coverage_path
         .map(load_coverage_file)
@@ -294,7 +459,13 @@ fn tool_analyze(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
             rows.push(compact_function(&file.path, function));
         }
     }
-    let (functions, truncated, total) = cap(&mut rows);
+    if let Some(floor) = budget.min_crap {
+        rows.retain(|row| row_f64(row, "crap").is_some_and(|score| score >= floor));
+    }
+    if let Some(key) = budget.sort_by {
+        sort_analyze_rows(&mut rows, key);
+    }
+    let (functions, truncated, total) = cap_with_limit(&mut rows, budget.limit());
     let mut fields = envelope_fields();
     fields.insert("tool".to_owned(), serde_json::json!("analyze"));
     fields.insert("path".to_owned(), serde_json::json!(path));
@@ -320,6 +491,7 @@ fn tool_analyze_changed(params: &serde_json::Value) -> Result<serde_json::Value,
         .get("explain")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let budget = parse_tool_budget(params, true)?;
     let options = crate::diff::ChangeOptions {
         base: base.to_owned(),
         target,
@@ -358,7 +530,18 @@ fn tool_analyze_changed(params: &serde_json::Value) -> Result<serde_json::Value,
         }
         rows.push(row);
     }
-    let (changes, truncated, total) = cap(&mut rows);
+    if let Some(floor) = budget.min_crap {
+        rows.retain(|row| {
+            row_f64(changed_current(row), "crap").is_some_and(|score| score >= floor)
+        });
+    }
+    if let Some(floor) = budget.min_delta {
+        rows.retain(|row| changed_max_delta(row) >= floor);
+    }
+    if let Some(key) = budget.sort_by {
+        sort_changed_rows(&mut rows, key);
+    }
+    let (changes, truncated, total) = cap_with_limit(&mut rows, budget.limit());
     let mut fields = envelope_fields();
     fields.insert("tool".to_owned(), serde_json::json!("analyze_changed"));
     fields.insert("base".to_owned(), serde_json::json!(report.base));
@@ -416,6 +599,16 @@ fn tool_analyze_function(params: &serde_json::Value) -> Result<serde_json::Value
         .iter()
         .map(|item| compact_function(&analyzed.path, item))
         .collect();
+    let explain = params
+        .get("explain")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if explain {
+        for (row, function) in rows.iter_mut().zip(&analyzed.functions) {
+            row["contributions"] =
+                serde_json::to_value(&function.contributions).unwrap_or(serde_json::Value::Null);
+        }
+    }
     let total = rows.len();
     let (functions, truncated, _) = cap(&mut rows);
     let mut fields = envelope_fields();
@@ -443,10 +636,24 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
         ));
     }
     let thresholds = parse_thresholds(params, regression_limits.is_some())?;
+    let coverage = opt_str(params, "coverage")
+        .map(load_coverage_file)
+        .transpose()
+        .map_err(|message| (-32602, message))?;
     let mut rows = Vec::new();
     if let Some(base) = base {
-        let report = crate::diff::analyze_changed(Path::new(path), base)
+        let mut report = crate::diff::analyze_changed(Path::new(path), base)
             .map_err(|error| (-32602, error.to_string()))?;
+        if let Some(coverage) = coverage.as_ref() {
+            for change in &mut report.functions {
+                if let Some(before) = change.before.as_mut() {
+                    coverage.apply_function(&change.path, before);
+                }
+                if let Some(after) = change.after.as_mut() {
+                    coverage.apply_function(&change.path, after);
+                }
+            }
+        }
         for change in &report.functions {
             let Some(after) = change.after.as_ref() else {
                 continue;
@@ -465,7 +672,7 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
     } else if let Some(baseline_path) = baseline_path {
         let baseline = crate::baseline::Baseline::read(Path::new(baseline_path))
             .map_err(|error| (-32602, error.to_string()))?;
-        let report = crate::analyze_path(Path::new(path), None)
+        let report = crate::analyze_path(Path::new(path), coverage.as_ref())
             .map_err(|error| (-32602, error.to_string()))?;
         let regressed: BTreeSet<(String, String)> = match &regression_limits {
             Some(limits) => baseline
@@ -486,7 +693,7 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
             }
         }
     } else {
-        let report = crate::analyze_path(Path::new(path), None)
+        let report = crate::analyze_path(Path::new(path), coverage.as_ref())
             .map_err(|error| (-32602, error.to_string()))?;
         for file in &report.files {
             for function in &file.functions {
@@ -681,6 +888,67 @@ fn tool_explain_metric(params: &serde_json::Value) -> Result<serde_json::Value, 
     envelope(fields)
 }
 
+fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    let path = opt_str(params, "path").unwrap_or(".");
+    let top = match params.get("top") {
+        None | Some(serde_json::Value::Null) => 5,
+        Some(value) => {
+            let count = value
+                .as_u64()
+                .ok_or((-32602, "top must be a positive integer".to_owned()))?;
+            let count =
+                usize::try_from(count).map_err(|_| (-32602, "top must fit in usize".to_owned()))?;
+            if count == 0 {
+                return Err((-32602, "top must be at least 1".to_owned()));
+            }
+            count.min(50)
+        }
+    };
+    let report =
+        crate::analyze_path(Path::new(path), None).map_err(|error| (-32602, error.to_string()))?;
+    let files = report.files.len();
+    let mut functions = 0usize;
+    let mut parse_errors = 0usize;
+    let mut rows = Vec::new();
+    for file in &report.files {
+        parse_errors += file.parse_errors.len();
+        for function in &file.functions {
+            functions += 1;
+            rows.push(compact_function(&file.path, function));
+        }
+    }
+    let top_rows = |key: SortKey| {
+        let mut selected = rows.clone();
+        sort_analyze_rows(&mut selected, key);
+        selected.truncate(top);
+        selected
+    };
+    let mut fields = envelope_fields();
+    fields.insert("tool".to_owned(), serde_json::json!("repo_summary"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    fields.insert(
+        "totals".to_owned(),
+        serde_json::json!({
+            "files": files,
+            "functions": functions,
+            "parse_errors": parse_errors,
+        }),
+    );
+    fields.insert(
+        "top".to_owned(),
+        serde_json::json!({
+            "crap": top_rows(SortKey::Crap),
+            "cognitive": top_rows(SortKey::Cognitive),
+            "cyclomatic": top_rows(SortKey::Cyclomatic),
+        }),
+    );
+    fields.insert(
+        "truncated".to_owned(),
+        serde_json::Value::from(functions > top),
+    );
+    envelope(fields)
+}
+
 fn tool_test_targets(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     let path = opt_str(params, "path").unwrap_or(".");
     let coverage_path = opt_str(params, "coverage").ok_or((
@@ -784,6 +1052,9 @@ fn tools_list_result() -> serde_json::Value {
                     "properties": {
                         "path": { "type": "string", "default": "." },
                         "coverage": { "type": ["string", "null"], "description": "Coverage file path (.info for LCOV, .xml for JaCoCo)." },
+                        "top": { "type": "integer", "minimum": 1, "description": "Keep at most this many rows." },
+                        "sort_by": { "type": "string", "enum": ["crap", "cognitive", "cyclomatic"], "description": "Sort rows by metric descending before capping." },
+                        "min_crap": { "type": "number", "description": "Drop functions whose CRAP is below this floor; unknown CRAP is dropped." },
                     },
                 },
             },
@@ -798,6 +1069,10 @@ fn tools_list_result() -> serde_json::Value {
                         "target": { "type": "string", "default": "worktree", "description": "'worktree', 'index', or a revision to compare against base." },
                         "renames": { "type": "boolean", "default": false, "description": "Detect Git file renames and pair old-path content with new-path content." },
                         "explain": { "type": "boolean", "default": false, "description": "Include multiset-added contribution causes on regression rows." },
+                        "top": { "type": "integer", "minimum": 1, "description": "Keep at most this many changes." },
+                        "sort_by": { "type": "string", "enum": ["crap", "cognitive", "cyclomatic"], "description": "Sort changes by current-side metric descending." },
+                        "min_crap": { "type": "number", "description": "Drop changes whose current-side CRAP is below this floor." },
+                        "min_delta": { "type": "number", "description": "Drop changes whose max absolute delta is below this floor." },
                     },
                 },
             },
@@ -809,6 +1084,7 @@ fn tools_list_result() -> serde_json::Value {
                     "properties": {
                         "path": { "type": "string" },
                         "function": { "type": "string" },
+                        "explain": { "type": "boolean", "default": false, "description": "Include per-decision contribution lines (rule, line, nesting, increments)." },
                     },
                     "required": ["path", "function"],
                 },
@@ -822,6 +1098,7 @@ fn tools_list_result() -> serde_json::Value {
                         "path": { "type": "string", "default": "." },
                         "base": { "type": "string", "description": "Git base revision for changed-function gates." },
                         "baseline": { "type": "string", "description": "Baseline snapshot file for regression gates without Git. Exclusive with base; read-only, never written by this server." },
+                        "coverage": { "type": "string", "description": "Coverage file path (.info for LCOV, .xml for JaCoCo) applied before CRAP gates." },
                         "thresholds": {
                             "type": "object",
                             "properties": {
@@ -853,6 +1130,17 @@ fn tools_list_result() -> serde_json::Value {
                         "metric": { "type": "string", "enum": ["cyclomatic", "cognitive", "halstead", "maintainability", "crap"] },
                     },
                     "required": ["metric"],
+                },
+            },
+            {
+                "name": "repo_summary",
+                "description": "Aggregate repository totals plus the top functions by CRAP, cognitive, and cyclomatic complexity.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." },
+                        "top": { "type": "integer", "minimum": 1, "maximum": 50, "default": 5, "description": "Functions kept per metric list." },
+                    },
                 },
             },
             {

@@ -840,21 +840,9 @@ fn baseline_command(args: &[String]) -> Result<ExitCode, CliError> {
 }
 
 fn apply_coverage_to_side(coverage: &CoverageMap, path: &str, side: &mut Option<FunctionAnalysis>) {
-    let Some(function) = side.take() else {
-        return;
-    };
-    let Some(language) = leadline::parser::detect_language(path) else {
-        *side = Some(function);
-        return;
-    };
-    let mut file = FileAnalysis {
-        path: path.to_owned(),
-        language,
-        functions: vec![function],
-        parse_errors: Vec::new(),
-    };
-    coverage.apply(&mut file);
-    *side = file.functions.pop();
+    if let Some(function) = side.as_mut() {
+        coverage.apply_function(path, function);
+    }
 }
 
 /// Default cap for `test-targets` rows, mirroring the MCP truncation bound so

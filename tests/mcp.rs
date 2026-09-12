@@ -80,6 +80,7 @@ fn initialize_and_tools_list() {
             "analyze_function",
             "check",
             "explain_metric",
+            "repo_summary",
             "test_targets"
         ]
     );
@@ -686,6 +687,7 @@ fn tools_list_check_schema_covers_baseline_and_regressions() {
     assert!(properties["baseline"].is_object());
     assert!(properties["regressions"].is_object());
     assert!(properties["thresholds"].is_object());
+    assert!(properties["coverage"].is_object());
     let changed = tools
         .iter()
         .find(|tool| tool["name"] == "analyze_changed")
@@ -694,4 +696,212 @@ fn tools_list_check_schema_covers_baseline_and_regressions() {
     assert!(changed_properties["target"].is_object());
     assert!(changed_properties["renames"].is_object());
     assert!(changed_properties["explain"].is_object());
+    assert!(changed_properties["top"].is_object());
+    assert!(changed_properties["min_delta"].is_object());
+    let analyze = tools
+        .iter()
+        .find(|tool| tool["name"] == "analyze")
+        .expect("analyze tool must be registered");
+    let analyze_properties = &analyze["inputSchema"]["properties"];
+    assert!(analyze_properties["top"].is_object());
+    assert!(analyze_properties["sort_by"].is_object());
+    assert!(analyze_properties["min_crap"].is_object());
+    assert!(tools.iter().any(|tool| tool["name"] == "repo_summary"));
+}
+
+#[test]
+fn check_accepts_coverage_for_crap_gates() {
+    let dir = fixture_dir("function calc(x: boolean) { if (x) { return 1; } return 0; }\n");
+    let path = dir.to_str().unwrap();
+    let lcov = dir.join("lcov.info");
+    std::fs::write(&lcov, "SF:sample.ts\nDA:1,1\nend_of_record\n").unwrap();
+
+    let without = call_tool(
+        "check",
+        serde_json::json!({ "path": path, "thresholds": { "crap": 2.5 } }),
+    );
+    assert_eq!(
+        result_of(&without)["passed"],
+        false,
+        "no coverage means CRAP is unavailable and must fail a CRAP gate"
+    );
+
+    let with = call_tool(
+        "check",
+        serde_json::json!({
+            "path": path,
+            "coverage": lcov.to_str().unwrap(),
+            "thresholds": { "crap": 2.5 },
+        }),
+    );
+    assert_eq!(result_of(&with)["passed"], true);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn analyze_accepts_budget_params() {
+    let dir = fixture_dir(
+        "function alpha(x: boolean) { return 1; }\nfunction beta(x: boolean) { if (x) { if (!x) { return 1; } return 2; } return 0; }\n",
+    );
+    let path = dir.to_str().unwrap();
+
+    let top = call_tool(
+        "analyze",
+        serde_json::json!({ "path": path, "top": 1, "sort_by": "cognitive" }),
+    );
+    let result = result_of(&top);
+    let functions = result["functions"].as_array().unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0]["name"], "beta");
+    assert_eq!(result["total"], 2);
+    assert_eq!(result["truncated"], true);
+
+    let lcov = dir.join("lcov.info");
+    std::fs::write(&lcov, "SF:sample.ts\nDA:1,0\nDA:2,0\nend_of_record\n").unwrap();
+    let filtered = call_tool(
+        "analyze",
+        serde_json::json!({
+            "path": path,
+            "coverage": lcov.to_str().unwrap(),
+            "min_crap": 10.0,
+        }),
+    );
+    let result = result_of(&filtered);
+    let functions = result["functions"].as_array().unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0]["name"], "beta");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn analyze_function_explains_contributions() {
+    let dir = fixture_dir(
+        "function beta(x: boolean) { if (x) { if (!x) { return 1; } return 2; } return 0; }\n",
+    );
+    let file = dir.join("sample.ts");
+
+    let plain = call_tool(
+        "analyze_function",
+        serde_json::json!({ "path": file.to_str().unwrap(), "function": "beta" }),
+    );
+    assert!(
+        result_of(&plain)["functions"][0]
+            .get("contributions")
+            .is_none()
+    );
+
+    let explained = call_tool(
+        "analyze_function",
+        serde_json::json!({
+            "path": file.to_str().unwrap(),
+            "function": "beta",
+            "explain": true,
+        }),
+    );
+    let contributions = result_of(&explained)["functions"][0]["contributions"]
+        .as_array()
+        .unwrap();
+    assert_eq!(contributions.len(), 2);
+    assert_eq!(contributions[0]["rule"], "if");
+    assert_eq!(contributions[0]["nesting"], 0);
+    assert_eq!(contributions[1]["nesting"], 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn analyze_changed_accepts_budget_params() {
+    let root = std::env::temp_dir().join(format!(
+        "leadline-mcp-budget-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let run = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+    run(&["init"]);
+    run(&["config", "user.email", "test@example.com"]);
+    run(&["config", "user.name", "Test"]);
+    std::fs::write(
+        root.join("sample.ts"),
+        "function simple(x: boolean) { return 1; }\nfunction branchy(x: boolean) { return 1; }\n",
+    )
+    .unwrap();
+    run(&["add", "."]);
+    run(&["commit", "-m", "base"]);
+    std::fs::write(
+        root.join("sample.ts"),
+        "function simple(x: boolean) { if (x) { return 1; } return 0; }\nfunction branchy(x: boolean) { if (x) { if (!x) { return 2; } return 1; } return 0; }\n",
+    )
+    .unwrap();
+
+    let filtered = call_tool(
+        "analyze_changed",
+        serde_json::json!({
+            "base": "HEAD",
+            "path": root.to_str().unwrap(),
+            "min_delta": 2.0,
+        }),
+    );
+    let result = result_of(&filtered);
+    let changes = result["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["name"], "branchy");
+
+    let topped = call_tool(
+        "analyze_changed",
+        serde_json::json!({
+            "base": "HEAD",
+            "path": root.to_str().unwrap(),
+            "top": 1,
+            "sort_by": "cognitive",
+        }),
+    );
+    let result = result_of(&topped);
+    let changes = result["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["name"], "branchy");
+    assert_eq!(result["total"], 2);
+    assert_eq!(result["truncated"], true);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn repo_summary_returns_totals_and_top_metrics() {
+    let dir = fixture_dir(
+        "function alpha(x: boolean) { return 1; }\nfunction beta(x: boolean) { if (x) { if (!x) { return 1; } return 2; } return 0; }\n",
+    );
+    let path = dir.to_str().unwrap();
+
+    let response = call_tool("repo_summary", serde_json::json!({ "path": path }));
+    let result = result_of(&response);
+    envelope_ok(result);
+    assert_eq!(result["totals"]["files"], 1);
+    assert_eq!(result["totals"]["functions"], 2);
+    assert_eq!(result["totals"]["parse_errors"], 0);
+    assert_eq!(result["top"]["cognitive"][0]["name"], "beta");
+    assert_eq!(result["top"]["cyclomatic"][0]["name"], "beta");
+    assert_eq!(result["truncated"], false);
+
+    let capped = call_tool(
+        "repo_summary",
+        serde_json::json!({ "path": path, "top": 1 }),
+    );
+    let result = result_of(&capped);
+    assert_eq!(result["top"]["cognitive"].as_array().unwrap().len(), 1);
+    assert_eq!(result["truncated"], true);
+    std::fs::remove_dir_all(dir).unwrap();
 }

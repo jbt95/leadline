@@ -121,6 +121,7 @@ fn mcp_serves_tool_list_over_stdio() {
     assert!(names.contains(&"analyze_function"));
     assert!(names.contains(&"check"));
     assert!(names.contains(&"explain_metric"));
+    assert!(names.contains(&"repo_summary"));
 }
 
 /// Live MCP clients keep stdin open while waiting for responses, so every

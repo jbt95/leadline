@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::core::{FileAnalysis, apply_coverage};
+use crate::core::{FileAnalysis, FunctionAnalysis, apply_coverage};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
@@ -118,6 +118,24 @@ impl CoverageMap {
     /// Line coverage only; branch data is never consulted.
     pub fn hits(&self, path: &str, line: u32) -> Option<u64> {
         self.lines_for_path(path)?.get(&line).copied()
+    }
+
+    /// Apply line coverage to a single function by path. Functions in files
+    /// with no supported language stay untouched.
+    pub fn apply_function(&self, path: &str, function: &mut FunctionAnalysis) {
+        let Some(language) = crate::parser::detect_language(path) else {
+            return;
+        };
+        let mut file = FileAnalysis {
+            path: path.to_owned(),
+            language,
+            functions: vec![function.clone()],
+            parse_errors: Vec::new(),
+        };
+        self.apply(&mut file);
+        if let Some(updated) = file.functions.pop() {
+            *function = updated;
+        }
     }
 
     fn insert(&mut self, path: String, line: u32, count: u64) {

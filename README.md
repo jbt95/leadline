@@ -56,7 +56,7 @@ leadline changed --base origin/main --format agent-json
    "before": {"cognitive": 12}, "after": {"cognitive": 24}}]}
 ```
 
-**MCP server** (read-only, stdio, six tools: `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `test_targets`):
+**MCP server** (read-only, stdio, seven tools: `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `test_targets`):
 
 ```console
 leadline mcp

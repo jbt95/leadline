@@ -20,6 +20,10 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 - Changed-regression explanations: `--explain` adds multiset-added contribution causes to regression rows.
 - Regression-only gates: `[regressions]` config with allowed deltas and `check --base REV --regressions`.
 - Coverage-aware test targets: `leadline test-targets` CLI and read-only MCP `test_targets` tool (line coverage only).
+- MCP `repo_summary` tool: repository totals plus top functions by CRAP, cognitive, and cyclomatic complexity.
+- MCP budget parameters on `analyze` and `analyze_changed` (`top`, `sort_by`, `min_crap`, `min_delta`) mirroring the CLI agent-json flags.
+- MCP `check` accepts a coverage file so CRAP thresholds and CRAP deltas gate on real data.
+- MCP `analyze_function` `explain: true` returns per-decision contribution lines.
 - Saved baselines: `leadline baseline --output FILE` snapshots and `check --baseline FILE` gates; MCP `check` accepts a read-only `baseline` path and never writes snapshots.
 
 ### Fixed
