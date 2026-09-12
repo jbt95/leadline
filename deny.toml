@@ -10,13 +10,23 @@
 # dependency change.
 
 [graph]
-targets = "all"
+# Target triples must be an explicit array (cargo-deny has no "all"
+# shorthand). Keep this in sync with the release workflow matrix.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
 
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
+# Vulnerability, unsound, and notice advisories always fail in current
+# cargo-deny; only the unmaintained scope stays configurable.
+# `unmaintained` takes a scope (all/workspace/transitive/none), not a lint
+# level: fail only when one of our own direct dependencies is unmaintained.
+unmaintained = "workspace"
 yanked = "deny"
-notice = "warn"
 
 [sources]
 unknown-registry = "deny"
@@ -24,9 +34,8 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 
 [licenses]
-unlicensed = "deny"
-copyleft = "deny"
-allow-osi-fsf-free = "neither"
+# Deny-by-default: anything not in `allow` fails, which covers the removed
+# `unlicensed`, `copyleft`, and `allow-osi-fsf-free` keys.
 allow = [
     "Apache-2.0",
     "BSD-2-Clause",
