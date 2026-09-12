@@ -40,6 +40,9 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --locked
+      - name: Compile benchmarks
+        if: matrix.runner == 'ubuntu-24.04'
+        run: cargo bench --bench analyzer --no-run --locked
       - name: Build release binary
         run: cargo build --release --locked
 

@@ -6,7 +6,14 @@ Run the source-analysis benchmark:
 cargo bench --bench analyzer
 ```
 
-It generates deterministic TypeScript inputs near 10K, 100K, and 1M physical lines. Criterion reports wall-clock distributions and line throughput. A 100-file, 10K-line repository case reports files per second. A separate case measures JSON serialization throughput.
+The suite measures four distinct costs:
+
+- TypeScript source scaling at 10K, 100K, and 1M physical lines.
+- Equivalent Java, JavaScript, TypeScript, and TSX workloads to catch grammar-specific regressions.
+- Recovery from a deterministic malformed TypeScript corpus.
+- Repository discovery and analysis at a fixed 10K total lines split across 1, 100, and 1,000 files, plus JSON serialization.
+
+Criterion reports wall-clock distributions and line, byte, or file throughput. Inputs and outputs are black-boxed, fixture creation is outside the timed loop, and temporary repository fixtures are removed even if a benchmark panics.
 
 Run an end-to-end repository measurement with platform tools:
 
@@ -24,6 +31,16 @@ sysctl -n machdep.cpu.brand_string
 ```
 
 Do not compare results from different machines as one series. The source case covers parsing, AST traversal, metric calculation, and function aggregation. The repository case adds discovery, file reading, parallel work, and result sorting. The serialization case isolates JSON. The platform command measures total runtime and peak memory. No benchmark result belongs in the repository without its machine details.
+
+For a same-machine before/after comparison, save a named baseline and compare against it:
+
+```console
+cargo bench --bench analyzer -- --save-baseline before
+# Make the change.
+cargo bench --bench analyzer -- --baseline before
+```
+
+Treat Criterion's statistical comparison as the regression signal. Do not add fixed wall-clock thresholds to shared CI runners.
 
 ## Baseline
 
