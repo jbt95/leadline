@@ -2,6 +2,12 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## Unreleased
+
+### Fixed
+
+- `install.sh` now verifies `SHA256SUMS` entries that carry a directory prefix (published releases list `dist/<archive>`); the release workflow now writes bare file names.
+
 ## 0.1.0 - 2026-09-13
 
 ### Added

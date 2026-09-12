@@ -110,7 +110,14 @@ else
         echo "Set LEADLINE_SKIP_CHECKSUM=1 to install without verification." >&2
         exit 1
     fi
-    expected=$(awk -v name="$archive" '$2 == name || $2 == "*" name { print $1 }' "$tmp/SHA256SUMS")
+    # SHA256SUMS lines are "<hash>  <path>"; tolerate binary-mode '*' markers
+    # and directory prefixes (older releases wrote "dist/<name>").
+    expected=$(awk -v name="$archive" '{
+        file = $2
+        sub(/^\*/, "", file)
+        sub(/^.*\//, "", file)
+        if (file == name) { print $1; exit }
+    }' "$tmp/SHA256SUMS")
     if [ -z "$expected" ]; then
         echo "error: $archive is not listed in SHA256SUMS" >&2
         exit 1
