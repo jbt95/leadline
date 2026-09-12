@@ -1,0 +1,36 @@
+# cargo-deny configuration for leadline.
+#
+# The allow list mirrors the current transitive closure in Cargo.lock:
+# MIT and Apache-2.0 cover every crate except unicode-ident (adds
+# Unicode-3.0) and zerocopy / zerocopy-derive (add BSD-2-Clause);
+# Unlicense covers the BurntSushi crates (memchr, aho-corasick, globset,
+# ignore, walkdir, same-file, winapi-util). Anything else, including
+# copyleft and unknown licenses, fails `cargo deny check licenses`.
+# Re-check the allow list with `cargo deny check licenses` after any
+# dependency change.
+
+[graph]
+targets = "all"
+
+[advisories]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "deny"
+notice = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[licenses]
+unlicensed = "deny"
+copyleft = "deny"
+allow-osi-fsf-free = "neither"
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+]

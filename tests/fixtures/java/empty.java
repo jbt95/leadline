@@ -1,0 +1,4 @@
+class Empty {
+    void empty() {
+    }
+}

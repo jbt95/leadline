@@ -1,0 +1,58 @@
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[test]
+fn discovery_honors_gitignore_and_generated_defaults() {
+    let root = temporary_directory();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("node_modules")).unwrap();
+    std::fs::create_dir_all(root.join("dist")).unwrap();
+    std::fs::write(root.join(".gitignore"), "ignored.ts\n").unwrap();
+    std::fs::write(root.join("src/main.ts"), "function main() {}\n").unwrap();
+    std::fs::write(root.join("ignored.ts"), "function ignored() {}\n").unwrap();
+    std::fs::write(
+        root.join("node_modules/vendor.js"),
+        "function vendor() {}\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("dist/output.js"), "function output() {}\n").unwrap();
+
+    let discovered = leadline::discovery::discover(&root).unwrap();
+    assert_eq!(discovered, vec![root.join("src/main.ts")]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn explicit_ignored_file_is_analyzable() {
+    let root = temporary_directory();
+    std::fs::write(root.join(".gitignore"), "ignored.ts\n").unwrap();
+    let file = root.join("ignored.ts");
+    std::fs::write(&file, "function ignored() {}\n").unwrap();
+    assert_eq!(leadline::discovery::discover(&file).unwrap(), vec![file]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn single_file_report_preserves_invoked_path() {
+    let root = temporary_directory();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    let file = root.join("src/main.ts");
+    std::fs::write(&file, "function main() {}\n").unwrap();
+
+    let single = leadline::analyze_path(&file, None).unwrap();
+    assert_eq!(single.files.len(), 1);
+    assert_eq!(single.files[0].path, leadline::normalize_path(&file));
+
+    let directory = leadline::analyze_path(&root, None).unwrap();
+    assert_eq!(directory.files.len(), 1);
+    assert_eq!(directory.files[0].path, "src/main.ts");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn temporary_directory() -> PathBuf {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("leadline-{}-{id}", std::process::id()));
+    std::fs::create_dir_all(&path).unwrap();
+    path
+}

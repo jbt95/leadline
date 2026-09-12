@@ -1,0 +1,1 @@
+{"hooks":{"AfterAgent":[{"command":"\"$GEMINI_PROJECT_DIR\"/integrations/gemini/hooks/leadline-after-tool.sh","timeout":60,"type":"command"}],"AfterTool":[{"command":"\"$GEMINI_PROJECT_DIR\"/integrations/gemini/hooks/leadline-after-tool.sh","matcher":"edit|write","timeout":60,"type":"command"}]}}

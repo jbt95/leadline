@@ -1,0 +1,23 @@
+# leadline instructions for Cline
+
+Use the leadline analyzer for complexity feedback. The analyzer is read-only.
+It never edits source code.
+
+## When to run
+
+- After a substantial edit batch, run changed-code analysis:
+  `leadline changed --base origin/main --json`
+- To inspect one function: `leadline function <file> <name> --json`
+- To apply quality gates: `leadline check . --json` with the project's
+  configured thresholds. Do not invent thresholds.
+
+## Rules
+
+- Prioritize functions changed by the current edit. Do not refactor
+  unrelated legacy code solely to improve metrics.
+- Never game metrics. Do not refactor solely to lower a number, and never
+  split functions pointlessly to satisfy a score.
+- Never sacrifice correctness to reduce a score. Preserve behavior.
+- After complexity-driven refactoring, run the project's tests.
+- If coverage is unavailable, say which metrics are missing it instead of
+  guessing.

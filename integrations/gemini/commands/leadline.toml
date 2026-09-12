@@ -1,0 +1,2 @@
+description = "Run leadline changed-code complexity analysis"
+prompt = "Run `leadline changed --format agent-json` and summarize regressions. Prioritize newly introduced complexity; do not refactor unrelated legacy code solely for metrics. Never sacrifice correctness for a score."

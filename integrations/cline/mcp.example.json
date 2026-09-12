@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "leadline": {
+      "command": "leadline",
+      "args": ["mcp"],
+      "env": {}
+    }
+  }
+}

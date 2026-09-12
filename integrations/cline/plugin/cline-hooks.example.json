@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "postEdit": {
+      "command": "integrations/cline/plugin/leadline-post-edit.sh",
+      "timeoutMs": 30000
+    }
+  }
+}

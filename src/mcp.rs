@@ -1,0 +1,650 @@
+//! Local stdio MCP-style server (hand-rolled JSON-RPC 2.0, no SDK).
+//!
+//! Read-only by construction: the only filesystem reads are source-file
+//! analysis input, an optional coverage file, and the `git` reads already
+//! performed inside [`crate::diff::analyze_changed`]. No writes, no shell,
+//! no network.
+//!
+//! Wire format: newline-delimited JSON-RPC 2.0 over stdin/stdout.
+//! Requests look like `{jsonrpc:"2.0", id, method, params}`; responses are
+//! `{jsonrpc:"2.0", id, result}` or `{jsonrpc:"2.0", id, error:{code,message}}`.
+//! Messages without an `id` are notifications and produce no response.
+
+use crate::core::{
+    FunctionAnalysis, FunctionMetrics, METRIC_PROFILE, OUTPUT_SCHEMA_VERSION, Thresholds,
+};
+use std::io::BufRead as _;
+use std::path::{Path, PathBuf};
+
+/// Maximum entries returned in any result array before truncation kicks in.
+const MAX_ENTRIES: usize = 200;
+
+/// The five tools this server exposes. Fixed set; keep in sync with
+/// [`tools_list`] and [`dispatch_tool`].
+const TOOL_NAMES: [&str; 5] = [
+    "analyze",
+    "analyze_changed",
+    "analyze_function",
+    "check",
+    "explain_metric",
+];
+
+/// Serve JSON-RPC requests from stdin, writing responses to stdout.
+///
+/// One request per line. Batch arrays are accepted when a whole line parses
+/// as a JSON array. Blank lines are ignored.
+pub fn serve() -> crate::Result<()> {
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(response) = handle_request(&line) {
+            use std::io::Write as _;
+            writeln!(out, "{response}")?;
+        }
+    }
+    use std::io::Write as _;
+    out.flush()?;
+    Ok(())
+}
+
+/// Handle one raw input line, returning the response line if any.
+///
+/// Pure function (no I/O beyond analysis reads) so tests can drive it
+/// directly without subprocesses. Returns `None` for notifications
+/// (requests without an `id`) and for blank input.
+pub fn handle_request(raw: &str) -> Option<String> {
+    if raw.trim().is_empty() {
+        return None;
+    }
+    let value: serde_json::Value = match serde_json::from_str(raw) {
+        Ok(value) => value,
+        Err(_) => return Some(parse_error_response()),
+    };
+    if let serde_json::Value::Array(batch) = value {
+        let mut responses = Vec::new();
+        for item in &batch {
+            if let Some(response) = handle_single(item) {
+                responses.push(response);
+            }
+        }
+        if responses.is_empty() {
+            return None;
+        }
+        return Some(serde_json::Value::Array(responses).to_string());
+    }
+    handle_single(&value).map(|response| response.to_string())
+}
+
+fn handle_single(request: &serde_json::Value) -> Option<serde_json::Value> {
+    let object = match request.as_object() {
+        Some(object) => object,
+        None => {
+            return Some(error_response(
+                serde_json::Value::Null,
+                -32600,
+                "Invalid Request",
+            ));
+        }
+    };
+    // No `id` => notification => no response.
+    if !object.contains_key("id") {
+        return None;
+    }
+    let id = object.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    let jsonrpc = object.get("jsonrpc").and_then(serde_json::Value::as_str);
+    let method = object.get("method").and_then(serde_json::Value::as_str);
+    if jsonrpc != Some("2.0") || method.is_none() {
+        return Some(error_response(id, -32600, "Invalid Request"));
+    }
+    let method = method.unwrap_or_default().to_owned();
+    // `initialized` and `notifications/*` are acknowledgements.
+    if method == "initialized" || method.starts_with("notifications/") {
+        return Some(success_response(id, serde_json::json!({})));
+    }
+    let params = object
+        .get("params")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    match method.as_str() {
+        "initialize" => Some(success_response(id, initialize_result())),
+        "ping" => Some(success_response(id, serde_json::json!({}))),
+        "tools/list" => Some(success_response(id, tools_list_result())),
+        "tools/call" => match dispatch_tools_call(&params) {
+            Ok(result) => Some(success_response(id, result)),
+            Err((code, message)) => Some(error_response(id, code, &message)),
+        },
+        name if TOOL_NAMES.contains(&name) => match dispatch_tool(name, &params) {
+            Ok(result) => Some(success_response(id, result)),
+            Err((code, message)) => Some(error_response(id, code, &message)),
+        },
+        _ => Some(error_response(id, -32601, "Method not found")),
+    }
+}
+
+fn dispatch_tools_call(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    let object = params
+        .as_object()
+        .ok_or((-32602, "tools/call requires {name, arguments}".to_owned()))?;
+    let name = object
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or((-32602, "tools/call requires a string name".to_owned()))?;
+    if !TOOL_NAMES.contains(&name) {
+        return Err((-32602, format!("unknown tool '{name}'")));
+    }
+    let arguments = object
+        .get("arguments")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    dispatch_tool(name, &arguments)
+}
+
+fn dispatch_tool(
+    name: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, (i64, String)> {
+    let params = if params.is_null() {
+        &serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        params
+    };
+    match name {
+        "analyze" => tool_analyze(params),
+        "analyze_changed" => tool_analyze_changed(params),
+        "analyze_function" => tool_analyze_function(params),
+        "check" => tool_check(params),
+        "explain_metric" => tool_explain_metric(params),
+        _ => Err((-32602, format!("unknown tool '{name}'"))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Envelope
+// ---------------------------------------------------------------------------
+
+fn metric_specs() -> Result<serde_json::Value, (i64, String)> {
+    serde_json::to_value(crate::core::MetricSpecs::default())
+        .map_err(|error| (-32603, format!("internal error: {error}")))
+}
+
+/// Every tool result carries the version envelope so agents can pin behavior.
+fn envelope(
+    mut fields: serde_json::Map<String, serde_json::Value>,
+) -> Result<serde_json::Value, (i64, String)> {
+    fields.insert(
+        "schema_version".to_owned(),
+        serde_json::Value::from(OUTPUT_SCHEMA_VERSION),
+    );
+    fields.insert(
+        "analyzer_version".to_owned(),
+        serde_json::Value::from(env!("CARGO_PKG_VERSION")),
+    );
+    fields.insert("metric_specs".to_owned(), metric_specs()?);
+    Ok(serde_json::Value::Object(fields))
+}
+
+fn envelope_fields() -> serde_json::Map<String, serde_json::Value> {
+    serde_json::Map::new()
+}
+
+// ---------------------------------------------------------------------------
+// Compact rows
+// ---------------------------------------------------------------------------
+
+/// Trimmed agent-facing function row: identity + spans + the metrics an
+/// agent acts on. Intentionally mirrors the agent-json field set.
+fn compact_function(path: &str, function: &FunctionAnalysis) -> serde_json::Value {
+    let mut fields = serde_json::Map::new();
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    fields.insert("name".to_owned(), serde_json::json!(function.name));
+    fields.insert("line".to_owned(), serde_json::json!(function.start_line));
+    fields.insert(
+        "start_line".to_owned(),
+        serde_json::json!(function.start_line),
+    );
+    fields.insert("end_line".to_owned(), serde_json::json!(function.end_line));
+    fields.extend(metric_fields(&function.metrics));
+    serde_json::Value::Object(fields)
+}
+
+fn compact_metrics(value: &FunctionAnalysis) -> serde_json::Value {
+    let mut fields = serde_json::Map::new();
+    fields.insert("line".to_owned(), serde_json::json!(value.start_line));
+    fields.extend(metric_fields(&value.metrics));
+    serde_json::Value::Object(fields)
+}
+
+/// The shared metric field set both compact rows carry.
+fn metric_fields(metrics: &FunctionMetrics) -> serde_json::Map<String, serde_json::Value> {
+    let mut fields = serde_json::Map::new();
+    fields.insert("cognitive".to_owned(), serde_json::json!(metrics.cognitive));
+    fields.insert(
+        "cyclomatic".to_owned(),
+        serde_json::json!(metrics.cyclomatic),
+    );
+    fields.insert("crap".to_owned(), round1_opt(metrics.crap));
+    fields.insert("coverage".to_owned(), round1_opt(metrics.coverage));
+    fields
+}
+
+fn round1_opt(value: Option<f64>) -> serde_json::Value {
+    match value {
+        Some(number) if number.is_finite() => {
+            serde_json::json!((number * 10.0).round() / 10.0)
+        }
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// Cap a result array, reporting truncation explicitly instead of silently
+/// dropping entries. Returns `(kept, truncated, total)`.
+fn cap(entries: &mut Vec<serde_json::Value>) -> (Vec<serde_json::Value>, bool, usize) {
+    let total = entries.len();
+    if total > MAX_ENTRIES {
+        (entries[..MAX_ENTRIES].to_vec(), true, total)
+    } else {
+        (std::mem::take(entries), false, total)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tools
+// ---------------------------------------------------------------------------
+
+fn tool_analyze(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    let path = opt_str(params, "path").unwrap_or(".");
+    let coverage_path = opt_str(params, "coverage");
+    let coverage = coverage_path
+        .map(load_coverage_file)
+        .transpose()
+        .map_err(|message| (-32602, message))?;
+    let report = crate::analyze_path(Path::new(path), coverage.as_ref())
+        .map_err(|error| (-32602, error.to_string()))?;
+    let mut rows = Vec::new();
+    for file in &report.files {
+        for function in &file.functions {
+            rows.push(compact_function(&file.path, function));
+        }
+    }
+    let (functions, truncated, total) = cap(&mut rows);
+    let mut fields = envelope_fields();
+    fields.insert("tool".to_owned(), serde_json::json!("analyze"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    fields.insert("functions".to_owned(), serde_json::Value::Array(functions));
+    fields.insert("truncated".to_owned(), serde_json::Value::from(truncated));
+    fields.insert("total".to_owned(), serde_json::Value::from(total as u64));
+    envelope(fields)
+}
+
+fn tool_analyze_changed(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    let base = opt_str(params, "base").unwrap_or("HEAD~1");
+    let path = opt_str(params, "path").unwrap_or(".");
+    let report = crate::diff::analyze_changed(Path::new(path), base)
+        .map_err(|error| (-32602, error.to_string()))?;
+    let mut rows = Vec::new();
+    for change in &report.functions {
+        let line = change
+            .after
+            .as_ref()
+            .or(change.before.as_ref())
+            .map_or(0, |function| function.start_line);
+        let (start_line, end_line) = change
+            .after
+            .as_ref()
+            .or(change.before.as_ref())
+            .map_or((line, line), |function| {
+                (function.start_line, function.end_line)
+            });
+        rows.push(serde_json::json!({
+            "path": change.path,
+            "name": change.name,
+            "line": line,
+            "start_line": start_line,
+            "end_line": end_line,
+            "before": change.before.as_ref().map(compact_metrics),
+            "after": change.after.as_ref().map(compact_metrics),
+            "delta": change_delta(change.before.as_ref(), change.after.as_ref()),
+        }));
+    }
+    let (changes, truncated, total) = cap(&mut rows);
+    let mut fields = envelope_fields();
+    fields.insert("tool".to_owned(), serde_json::json!("analyze_changed"));
+    fields.insert("base".to_owned(), serde_json::json!(report.base));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    fields.insert("changes".to_owned(), serde_json::Value::Array(changes));
+    fields.insert("truncated".to_owned(), serde_json::Value::from(truncated));
+    fields.insert("total".to_owned(), serde_json::Value::from(total as u64));
+    envelope(fields)
+}
+
+fn change_delta(
+    before: Option<&FunctionAnalysis>,
+    after: Option<&FunctionAnalysis>,
+) -> serde_json::Value {
+    match (before, after) {
+        (Some(left), Some(right)) => {
+            let crap = match (left.metrics.crap, right.metrics.crap) {
+                (Some(a), Some(b)) if a.is_finite() && b.is_finite() => {
+                    serde_json::json!(((b - a) * 10.0).round() / 10.0)
+                }
+                _ => serde_json::Value::Null,
+            };
+            serde_json::json!({
+                "cognitive": right.metrics.cognitive as i64 - left.metrics.cognitive as i64,
+                "cyclomatic": right.metrics.cyclomatic as i64 - left.metrics.cyclomatic as i64,
+                "crap": crap,
+            })
+        }
+        _ => serde_json::Value::Null,
+    }
+}
+
+fn tool_analyze_function(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    let path = req_str(params, "path")?;
+    let function = req_str(params, "function")?;
+    let file = PathBuf::from(path);
+    let root = file
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let mut analyzed =
+        crate::analyze_file(&file, &root, None).map_err(|error| (-32602, error.to_string()))?;
+    analyzed.path = crate::normalize_path(&file);
+    analyzed
+        .functions
+        .retain(|candidate| candidate.name == function);
+    if analyzed.functions.is_empty() {
+        return Err((
+            -32602,
+            format!("function '{function}' was not found in {path}"),
+        ));
+    }
+    let mut rows: Vec<serde_json::Value> = analyzed
+        .functions
+        .iter()
+        .map(|item| compact_function(&analyzed.path, item))
+        .collect();
+    let total = rows.len();
+    let (functions, truncated, _) = cap(&mut rows);
+    let mut fields = envelope_fields();
+    fields.insert("tool".to_owned(), serde_json::json!("analyze_function"));
+    fields.insert("path".to_owned(), serde_json::json!(analyzed.path));
+    fields.insert("function".to_owned(), serde_json::json!(function));
+    fields.insert("functions".to_owned(), serde_json::Value::Array(functions));
+    fields.insert("truncated".to_owned(), serde_json::Value::from(truncated));
+    fields.insert("total".to_owned(), serde_json::Value::from(total as u64));
+    envelope(fields)
+}
+
+fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    let path = opt_str(params, "path").unwrap_or(".");
+    let thresholds = parse_thresholds(params)?;
+    let report =
+        crate::analyze_path(Path::new(path), None).map_err(|error| (-32602, error.to_string()))?;
+    let mut rows = Vec::new();
+    for file in &report.files {
+        for function in &file.functions {
+            if thresholds.violates(&function.metrics) {
+                rows.push(compact_function(&file.path, function));
+            }
+        }
+    }
+    let passed = rows.is_empty();
+    let (violations, truncated, total) = cap(&mut rows);
+    let mut fields = envelope_fields();
+    fields.insert("tool".to_owned(), serde_json::json!("check"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    fields.insert(
+        "thresholds".to_owned(),
+        serde_json::json!({
+            "cognitive": thresholds.cognitive,
+            "cyclomatic": thresholds.cyclomatic,
+            "crap": thresholds.crap,
+            "max_nesting": thresholds.max_nesting,
+        }),
+    );
+    fields.insert("passed".to_owned(), serde_json::Value::from(passed));
+    fields.insert(
+        "violations".to_owned(),
+        serde_json::Value::Array(violations),
+    );
+    fields.insert("truncated".to_owned(), serde_json::Value::from(truncated));
+    fields.insert("total".to_owned(), serde_json::Value::from(total as u64));
+    envelope(fields)
+}
+
+fn parse_thresholds(params: &serde_json::Value) -> Result<Thresholds, (i64, String)> {
+    let object = match params.get("thresholds") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_object()
+                .ok_or((-32602, "thresholds must be an object".to_owned()))?,
+        ),
+    };
+    let mut thresholds = Thresholds {
+        cognitive: None,
+        cyclomatic: None,
+        crap: None,
+        max_nesting: None,
+    };
+    if let Some(object) = object {
+        for key in ["cognitive", "cyclomatic", "crap", "max_nesting"] {
+            if let Some(value) = object.get(key) {
+                if value.is_null() {
+                    continue;
+                }
+                match key {
+                    "crap" => {
+                        let limit = value.as_f64().ok_or((
+                            -32602,
+                            "thresholds.crap must be a non-negative number".to_owned(),
+                        ))?;
+                        if !limit.is_finite() || limit < 0.0 {
+                            return Err((
+                                -32602,
+                                "thresholds.crap must be a non-negative number".to_owned(),
+                            ));
+                        }
+                        thresholds.crap = Some(limit);
+                    }
+                    _ => {
+                        let limit = value.as_u64().ok_or((
+                            -32602,
+                            format!("thresholds.{key} must be a non-negative integer"),
+                        ))?;
+                        let limit = u32::try_from(limit)
+                            .map_err(|_| (-32602, format!("thresholds.{key} must fit in u32")))?;
+                        match key {
+                            "cognitive" => thresholds.cognitive = Some(limit),
+                            "cyclomatic" => thresholds.cyclomatic = Some(limit),
+                            _ => thresholds.max_nesting = Some(limit),
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if thresholds.is_empty() {
+        return Err((-32602, "check requires at least one threshold".to_owned()));
+    }
+    Ok(thresholds)
+}
+
+fn tool_explain_metric(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    let metric = req_str(params, "metric")?;
+    let name = metric.to_ascii_lowercase();
+    let definition = match name.as_str() {
+        "cyclomatic" => {
+            "Cyclomatic complexity (default-v1): every function starts at 1. Add 1 for each `if`, loop, `catch`, non-default switch case, ternary expression, `&&`, `||`, and JavaScript/TypeScript `??`. `else`, `finally`, default cases, functions, and lambdas add nothing. Nested functions are scored independently."
+        }
+        "cognitive" => {
+            "Cognitive complexity (default-v1): add `1 + current nesting` for `if`, loops, `catch`, `switch`, and ternary expressions. An `else if` adds 1 and continues the chain; a final `else` adds 1; a labeled `break`/`continue` adds 1. For logical expressions the first `&&`/`||`/`??` adds 1 and each operator change adds 1. Lambdas, arrows, and nested functions are scored independently and do not raise the enclosing score. Recursion is not scored."
+        }
+        "halstead" => {
+            "Halstead metrics (default-v1): leaf operator tokens and control keywords are operators; identifiers, literals, `this`, `super`, `true`, `false`, and `null` are operands. Distinct values are source byte slices within one function. Vocabulary is n1 + n2, length is N1 + N2, volume is length * log2(vocabulary), difficulty is (n1 / 2) * (N2 / n2), effort is difficulty * volume. Zero denominators produce zero, never NaN."
+        }
+        "maintainability" => {
+            "Maintainability index (default-v1): max(0, (171 - 5.2 ln(volume) - 0.23 cyclomatic - 16.2 ln(LOC)) * 100 / 171). Volume and LOC use a floor of 1, the result is capped at 100, and comment weighting is not used. Higher is better."
+        }
+        "crap" => {
+            "CRAP (default-v1): c^2 * (1 - p)^3 + c, where c is cyclomatic complexity and p is normalized function coverage (0.0..1.0). CRAP is null when no coverage line overlaps the function range, never a fake 0%. Lower is better."
+        }
+        _ => {
+            return Err((
+                -32602,
+                format!(
+                    "unknown metric '{metric}': expected cyclomatic|cognitive|halstead|maintainability|crap"
+                ),
+            ));
+        }
+    };
+    let mut fields = envelope_fields();
+    fields.insert("tool".to_owned(), serde_json::json!("explain_metric"));
+    fields.insert("metric".to_owned(), serde_json::json!(name));
+    fields.insert("spec".to_owned(), serde_json::json!(METRIC_PROFILE));
+    fields.insert("definition".to_owned(), serde_json::Value::from(definition));
+    envelope(fields)
+}
+
+// ---------------------------------------------------------------------------
+// Coverage
+// ---------------------------------------------------------------------------
+
+/// Load one coverage file, auto-detecting the format by extension:
+/// `.xml` is JaCoCo XML, anything else (including `.info`) is LCOV.
+fn load_coverage_file(path: &str) -> Result<crate::coverage::CoverageMap, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("cannot read coverage '{path}': {error}"))?;
+    if Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
+    {
+        crate::coverage::CoverageMap::from_jacoco_xml(&text)
+    } else {
+        crate::coverage::CoverageMap::from_lcov(&text)
+    }
+    .map_err(|error| format!("cannot parse coverage '{path}': {error}"))
+}
+
+// ---------------------------------------------------------------------------
+// Protocol helpers
+// ---------------------------------------------------------------------------
+
+fn initialize_result() -> serde_json::Value {
+    serde_json::json!({
+        "protocolVersion": "2024-11-05",
+        "capabilities": { "tools": {} },
+        "serverInfo": {
+            "name": "leadline",
+            "version": env!("CARGO_PKG_VERSION"),
+        },
+    })
+}
+
+fn tools_list_result() -> serde_json::Value {
+    serde_json::json!({
+        "tools": [
+            {
+                "name": "analyze",
+                "description": "Analyze a path and return compact function metrics.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." },
+                        "coverage": { "type": ["string", "null"], "description": "Coverage file path (.info for LCOV, .xml for JaCoCo)." },
+                    },
+                },
+            },
+            {
+                "name": "analyze_changed",
+                "description": "Analyze functions changed relative to a git base, with before/after deltas.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "base": { "type": "string", "default": "HEAD~1" },
+                        "path": { "type": "string", "default": "." },
+                    },
+                },
+            },
+            {
+                "name": "analyze_function",
+                "description": "Analyze one named function in a file.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "function": { "type": "string" },
+                    },
+                    "required": ["path", "function"],
+                },
+            },
+            {
+                "name": "check",
+                "description": "Apply quality-gate thresholds and return violations.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." },
+                        "thresholds": {
+                            "type": "object",
+                            "properties": {
+                                "cognitive": { "type": "integer" },
+                                "cyclomatic": { "type": "integer" },
+                                "crap": { "type": "number" },
+                                "max_nesting": { "type": "integer" },
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "name": "explain_metric",
+                "description": "Return the documented default-v1 definition of a metric.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "metric": { "type": "string", "enum": ["cyclomatic", "cognitive", "halstead", "maintainability", "crap"] },
+                    },
+                    "required": ["metric"],
+                },
+            },
+        ],
+    })
+}
+
+fn success_response(id: serde_json::Value, result: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result })
+}
+
+fn error_response(id: serde_json::Value, code: i64, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": code, "message": message },
+    })
+}
+
+fn parse_error_response() -> String {
+    error_response(serde_json::Value::Null, -32700, "Parse error").to_string()
+}
+
+fn opt_str<'a>(params: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    params.get(key).and_then(|value| {
+        if value.is_null() {
+            None
+        } else {
+            value.as_str()
+        }
+    })
+}
+
+fn req_str<'a>(params: &'a serde_json::Value, key: &str) -> Result<&'a str, (i64, String)> {
+    opt_str(params, key).ok_or((-32602, format!("missing required string param '{key}'")))
+}

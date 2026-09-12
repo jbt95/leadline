@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly supply-chain recheck against newly published advisories.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+          - macos-15-intel
+          - macos-15
+          - windows-2025
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install Rust
+        run: rustup update stable --no-self-update
+      - name: Install lint tools
+        if: matrix.runner == 'ubuntu-24.04'
+        run: rustup component add clippy rustfmt
+      - name: Check formatting
+        if: matrix.runner == 'ubuntu-24.04'
+        run: cargo fmt --check
+      - name: Lint
+        if: matrix.runner == 'ubuntu-24.04'
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --locked
+      - name: Build release binary
+        run: cargo build --release --locked
+
+  msrv:
+    name: Rust 1.88 compatibility
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: rustup toolchain install 1.88 --profile minimal
+      - run: rustup run 1.88 cargo check --locked
+
+  supply-chain:
+    name: Supply chain (audit + deny)
+    runs-on: ubuntu-24.04
+    # Scheduled runs report newly published advisories without failing
+    # on network flakiness; pull request and push runs are strict.
+    continue-on-error: ${{ github.event_name == 'schedule' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Audit dependencies
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check licenses and sources
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          arguments: --all-features
+
+  ts-check:
+    name: Typecheck TS adapters
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Install pinned typecheck deps
+        working-directory: integrations/agent-adapter-ts
+        run: npm install --no-audit --no-fund
+      - name: Typecheck
+        working-directory: integrations/agent-adapter-ts
+        run: npm run check

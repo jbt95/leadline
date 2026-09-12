@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "leadline": {
+      "command": "leadline",
+      "args": ["mcp"]
+    }
+  }
+}

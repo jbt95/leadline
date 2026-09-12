@@ -1,0 +1,5 @@
+# Merge into ~/.codex/config.toml (current Codex MCP format).
+# Requires `leadline` on PATH.
+[mcp_servers.leadline]
+command = "leadline"
+args = ["mcp"]
