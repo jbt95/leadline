@@ -71,13 +71,22 @@ pub enum Event {
         kind: DecisionKind,
         nesting: u32,
         else_if: bool,
+        line: u32,
     },
-    Else,
+    Else {
+        line: u32,
+        nesting: u32,
+    },
     Logical {
         operator: LogicalOperator,
         sequence: u32,
+        line: u32,
+        nesting: u32,
     },
-    LabeledJump,
+    LabeledJump {
+        line: u32,
+        nesting: u32,
+    },
     NestingDepth(u32),
     Operator(Span),
     Operand(Span),
@@ -124,6 +133,15 @@ pub struct FunctionMetrics {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct MetricContribution {
+    pub rule: String,
+    pub line: u32,
+    pub nesting: u32,
+    pub cognitive: u32,
+    pub cyclomatic: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FunctionAnalysis {
     pub name: String,
     pub id: String,
@@ -133,6 +151,7 @@ pub struct FunctionAnalysis {
     pub start_byte: u64,
     pub end_byte: u64,
     pub metrics: FunctionMetrics,
+    pub contributions: Vec<MetricContribution>,
     #[serde(skip)]
     pub source_fingerprint: u64,
 }
@@ -219,10 +238,25 @@ pub fn function_id(path: &str, kind: FunctionKind, start_byte: u64, end_byte: u6
     format!("{}:{}:{start_byte}:{end_byte}", path, kind.as_str())
 }
 
+fn decision_rule(kind: DecisionKind, else_if: bool) -> &'static str {
+    if else_if {
+        return "else-if";
+    }
+    match kind {
+        DecisionKind::If => "if",
+        DecisionKind::Loop => "for",
+        DecisionKind::Catch => "catch",
+        DecisionKind::Switch => "switch",
+        DecisionKind::Case => "case",
+        DecisionKind::Ternary => "ternary",
+    }
+}
+
 pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis {
     let mut cyclomatic = 1;
     let mut cognitive = 0;
     let mut max_nesting = 0;
+    let mut contributions = Vec::new();
     let mut distinct_operators = HashSet::new();
     let mut distinct_operands = HashSet::new();
     let mut total_operators = 0;
@@ -235,35 +269,78 @@ pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis
                 kind,
                 nesting,
                 else_if,
+                line,
             } => {
                 if !matches!(kind, DecisionKind::Case) {
                     max_nesting = max_nesting.max(if else_if { nesting } else { nesting + 1 });
                 }
-                if matches!(
+                let cyclomatic_increment = u32::from(matches!(
                     kind,
                     DecisionKind::If
                         | DecisionKind::Loop
                         | DecisionKind::Catch
                         | DecisionKind::Case
                         | DecisionKind::Ternary
-                ) {
-                    cyclomatic += 1;
-                }
-                cognitive += if else_if {
+                ));
+                let cognitive_increment = if else_if {
                     1
                 } else if matches!(kind, DecisionKind::Case) {
                     0
                 } else {
                     1 + nesting
                 };
+                cyclomatic += cyclomatic_increment;
+                cognitive += cognitive_increment;
+                contributions.push(MetricContribution {
+                    rule: decision_rule(kind, else_if).to_owned(),
+                    line,
+                    nesting,
+                    cognitive: cognitive_increment,
+                    cyclomatic: cyclomatic_increment,
+                });
             }
-            Event::Else | Event::LabeledJump => cognitive += 1,
-            Event::Logical { operator, sequence } => {
+            Event::Else { line, nesting } => {
+                cognitive += 1;
+                contributions.push(MetricContribution {
+                    rule: "else".to_owned(),
+                    line,
+                    nesting,
+                    cognitive: 1,
+                    cyclomatic: 0,
+                });
+            }
+            Event::LabeledJump { line, nesting } => {
+                cognitive += 1;
+                contributions.push(MetricContribution {
+                    rule: "labeled-jump".to_owned(),
+                    line,
+                    nesting,
+                    cognitive: 1,
+                    cyclomatic: 0,
+                });
+            }
+            Event::Logical {
+                operator,
+                sequence,
+                line,
+                nesting,
+            } => {
                 cyclomatic += 1;
                 let previous = logical_sequences.insert(sequence, operator);
-                if previous != Some(operator) {
-                    cognitive += 1;
-                }
+                let cognitive_increment = u32::from(previous != Some(operator));
+                cognitive += cognitive_increment;
+                contributions.push(MetricContribution {
+                    rule: match operator {
+                        LogicalOperator::And => "&&-sequence",
+                        LogicalOperator::Or => "||-sequence",
+                        LogicalOperator::Nullish => "??-sequence",
+                    }
+                    .to_owned(),
+                    line,
+                    nesting,
+                    cognitive: cognitive_increment,
+                    cyclomatic: 1,
+                });
             }
             Event::NestingDepth(depth) => max_nesting = max_nesting.max(depth),
             Event::Operator(span) => {
@@ -330,6 +407,7 @@ pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis
             coverage: None,
             crap: None,
         },
+        contributions,
         source_fingerprint: input.source_fingerprint,
     }
 }
@@ -340,4 +418,84 @@ pub fn apply_coverage(function: &mut FunctionAnalysis, coverage: Option<f64>) {
         let complexity = f64::from(function.metrics.cyclomatic);
         complexity * complexity * (1.0 - covered).powi(3) + complexity
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(events: Vec<Event>) -> FunctionInput {
+        FunctionInput {
+            name: "f".to_owned(),
+            id: "f".to_owned(),
+            kind: FunctionKind::Function,
+            start_line: 1,
+            end_line: 10,
+            start_byte: 0,
+            end_byte: 100,
+            parameters: 0,
+            logical_loc: 0,
+            events,
+            source_fingerprint: 0,
+        }
+    }
+
+    #[test]
+    fn nested_if_contributions_are_in_source_order() {
+        let analysis = analyze_function(
+            input(vec![
+                Event::Decision {
+                    kind: DecisionKind::If,
+                    nesting: 0,
+                    else_if: false,
+                    line: 2,
+                },
+                Event::NestingDepth(1),
+                Event::Decision {
+                    kind: DecisionKind::If,
+                    nesting: 1,
+                    else_if: false,
+                    line: 3,
+                },
+                Event::NestingDepth(2),
+            ]),
+            b"",
+        );
+        assert_eq!(
+            analysis.contributions,
+            vec![
+                MetricContribution {
+                    rule: "if".to_owned(),
+                    line: 2,
+                    nesting: 0,
+                    cognitive: 1,
+                    cyclomatic: 1,
+                },
+                MetricContribution {
+                    rule: "if".to_owned(),
+                    line: 3,
+                    nesting: 1,
+                    cognitive: 2,
+                    cyclomatic: 1,
+                },
+            ]
+        );
+        assert_eq!(analysis.metrics.cognitive, 3);
+        assert_eq!(analysis.metrics.cyclomatic, 3);
+    }
+
+    #[test]
+    fn straight_line_function_has_no_contributions() {
+        let source = b"return x;";
+        let analysis = analyze_function(
+            input(vec![
+                Event::Operator(Span { start: 0, end: 6 }),
+                Event::Operand(Span { start: 7, end: 8 }),
+            ]),
+            source,
+        );
+        assert!(analysis.contributions.is_empty());
+        assert_eq!(analysis.metrics.cyclomatic, 1);
+        assert_eq!(analysis.metrics.cognitive, 0);
+    }
 }

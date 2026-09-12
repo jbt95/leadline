@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod cache;
 pub mod config;
 pub mod core;
 pub mod coverage;
@@ -7,6 +8,7 @@ pub mod discovery;
 pub mod mcp;
 pub mod parser;
 pub mod report;
+pub mod sarif;
 
 use crate::core::{
     AnalysisReport, FileAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION,

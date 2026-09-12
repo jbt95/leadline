@@ -11,6 +11,7 @@ keywords = ["complexity", "static-analysis", "java", "typescript", "crap"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
+blake3 = "1.8.7"
 ignore = "0.4"
 quick-xml = "0.42"
 rayon = "1.10"

@@ -11,7 +11,11 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 - Local MCP server module (`leadline::mcp`) for agent tool calls.
 - Optional `leadline.toml` project configuration with discovery excludes and check thresholds.
 - `leadline doctor` self-check and `leadline version` subcommand.
-- Stable exit codes `0` (pass) through `5` (internal error).
+- `check --base REV` quality gate scoped to changed functions.
+- `function --explain` per-decision metric contributions.
+- `--format sarif` output on `analyze` and `check`.
+- Output budgets (`--top`, `--sort-by`, `--min-crap`, `--min-delta`) with `truncated` signaling on agent JSON.
+- `--cache-dir` content-hash incremental file cache for `analyze` and `check`.
 
 ## 0.1.0 - 2026-09-12
 

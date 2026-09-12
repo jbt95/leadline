@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::config::Thresholds;
 use crate::core::{
     FunctionAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION, ParseDiagnostic,
 };
@@ -32,6 +33,33 @@ pub struct ChangedReport {
     pub base: String,
     pub functions: Vec<FunctionChange>,
     pub parse_errors: Vec<ChangedParseDiagnostics>,
+}
+
+// ponytail: mirrors core::Thresholds::violates; unify the two Thresholds types if this drifts.
+pub fn changed_violations<'a>(
+    report: &'a ChangedReport,
+    thresholds: &Thresholds,
+) -> Vec<&'a FunctionChange> {
+    report
+        .functions
+        .iter()
+        .filter(|change| {
+            change.after.as_ref().is_some_and(|after| {
+                thresholds
+                    .cognitive
+                    .is_some_and(|limit| after.metrics.cognitive > limit)
+                    || thresholds
+                        .cyclomatic
+                        .is_some_and(|limit| after.metrics.cyclomatic > limit)
+                    || thresholds
+                        .max_nesting
+                        .is_some_and(|limit| after.metrics.max_nesting > limit)
+                    || thresholds
+                        .crap
+                        .is_some_and(|limit| after.metrics.crap.is_none_or(|value| value > limit))
+            })
+        })
+        .collect()
 }
 
 pub fn analyze_changed(path: &Path, base: &str) -> Result<ChangedReport> {
@@ -275,5 +303,124 @@ mod tests {
             strip_verbatim_prefix(Path::new("/tmp/repo/calc.ts")),
             PathBuf::from("/tmp/repo/calc.ts")
         );
+    }
+
+    use crate::core::{FunctionKind, FunctionMetrics};
+
+    fn test_analysis(name: &str, cognitive: u32) -> FunctionAnalysis {
+        FunctionAnalysis {
+            name: name.to_owned(),
+            id: format!("src/a.ts:function:{name}"),
+            kind: FunctionKind::Function,
+            start_line: 1,
+            end_line: 10,
+            start_byte: 0,
+            end_byte: 100,
+            metrics: FunctionMetrics {
+                loc: 10,
+                logical_loc: 10,
+                function_length: 10,
+                parameters: 0,
+                max_nesting: 0,
+                cyclomatic: 1,
+                cognitive,
+                halstead_n1: 1,
+                halstead_n2: 1,
+                halstead_total_operators: 1,
+                halstead_total_operands: 1,
+                halstead_vocabulary: 2,
+                halstead_length: 2,
+                halstead_volume: 2.0,
+                halstead_difficulty: 0.5,
+                halstead_effort: 1.0,
+                maintainability_index: 100.0,
+                coverage: None,
+                crap: None,
+            },
+            contributions: Vec::new(),
+            source_fingerprint: 1,
+        }
+    }
+
+    fn test_change(
+        name: &str,
+        before: Option<FunctionAnalysis>,
+        after: Option<FunctionAnalysis>,
+    ) -> FunctionChange {
+        FunctionChange {
+            path: "src/a.ts".to_owned(),
+            name: name.to_owned(),
+            before,
+            after,
+        }
+    }
+
+    fn test_report(changes: Vec<FunctionChange>) -> ChangedReport {
+        ChangedReport {
+            schema_version: OUTPUT_SCHEMA_VERSION,
+            metric_profile: METRIC_PROFILE,
+            analyzer_version: "test",
+            metric_specs: MetricSpecs::default(),
+            base: "base".to_owned(),
+            functions: changes,
+            parse_errors: Vec::new(),
+        }
+    }
+
+    fn cognitive_gate() -> Thresholds {
+        Thresholds {
+            cognitive: Some(15),
+            ..Thresholds::default()
+        }
+    }
+
+    #[test]
+    fn added_violating_function_is_kept() {
+        let report = test_report(vec![test_change(
+            "new",
+            None,
+            Some(test_analysis("new", 20)),
+        )]);
+        assert_eq!(changed_violations(&report, &cognitive_gate()).len(), 1);
+    }
+
+    #[test]
+    fn fixed_function_is_dropped() {
+        let report = test_report(vec![test_change(
+            "fixed",
+            Some(test_analysis("fixed", 20)),
+            Some(test_analysis("fixed", 5)),
+        )]);
+        assert!(changed_violations(&report, &cognitive_gate()).is_empty());
+    }
+
+    #[test]
+    fn removed_function_is_dropped() {
+        let report = test_report(vec![test_change(
+            "gone",
+            Some(test_analysis("gone", 20)),
+            None,
+        )]);
+        assert!(changed_violations(&report, &cognitive_gate()).is_empty());
+    }
+
+    #[test]
+    fn improved_but_still_over_gate_is_kept() {
+        let report = test_report(vec![test_change(
+            "better",
+            Some(test_analysis("better", 30)),
+            Some(test_analysis("better", 20)),
+        )]);
+        assert_eq!(changed_violations(&report, &cognitive_gate()).len(), 1);
+    }
+
+    #[test]
+    fn empty_thresholds_keep_nothing() {
+        let report = test_report(vec![test_change(
+            "new",
+            None,
+            Some(test_analysis("new", 20)),
+        )]);
+        assert!(changed_violations(&report, &Thresholds::default()).is_empty());
     }
 }

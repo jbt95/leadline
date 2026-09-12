@@ -192,6 +192,7 @@ fn walk_function(
                 kind,
                 nesting,
                 else_if,
+                line: node.start_position().row as u32 + 1,
             });
         }
         if node.kind() == "if_statement" {
@@ -199,20 +200,29 @@ fn walk_function(
                 && alternative.kind() != "if_statement"
                 && alternative.kind() != "else_clause"
             {
-                events.push(Event::Else);
+                events.push(Event::Else {
+                    line: node.start_position().row as u32 + 1,
+                    nesting,
+                });
             }
         } else if node.kind() == "else_clause" && !has_if_child(node) {
-            events.push(Event::Else);
+            events.push(Event::Else {
+                line: node.start_position().row as u32 + 1,
+                nesting,
+            });
         }
         if matches!(node.kind(), "break_statement" | "continue_statement")
             && node.named_child_count() > 0
         {
-            events.push(Event::LabeledJump);
+            events.push(Event::LabeledJump {
+                line: node.start_position().row as u32 + 1,
+                nesting,
+            });
         }
 
         let this_logical = logical_operator(node, source).is_some();
         if this_logical && !inside_logical {
-            collect_logical(node, source, next_sequence, events);
+            collect_logical(node, source, next_sequence, nesting, events);
             next_sequence += 1;
         }
 
@@ -309,7 +319,13 @@ fn logical_operator(node: Node<'_>, source: &[u8]) -> Option<LogicalOperator> {
         })
 }
 
-fn collect_logical(node: Node<'_>, source: &[u8], sequence: u32, events: &mut Vec<Event>) {
+fn collect_logical(
+    node: Node<'_>,
+    source: &[u8],
+    sequence: u32,
+    nesting: u32,
+    events: &mut Vec<Event>,
+) {
     let mut stack = vec![node];
     while let Some(current) = stack.pop() {
         if current.child_count() == 0 {
@@ -320,7 +336,12 @@ fn collect_logical(node: Node<'_>, source: &[u8], sequence: u32, events: &mut Ve
                 _ => None,
             };
             if let Some(operator) = operator {
-                events.push(Event::Logical { operator, sequence });
+                events.push(Event::Logical {
+                    operator,
+                    sequence,
+                    line: current.start_position().row as u32 + 1,
+                    nesting,
+                });
             }
             continue;
         }

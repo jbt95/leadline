@@ -1,8 +1,11 @@
+use leadline::agent::{Budget, SortKey};
 use leadline::config::{self, Config};
 use leadline::core::{
-    AnalysisReport, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION, Thresholds,
+    AnalysisReport, FileAnalysis, FunctionAnalysis, METRIC_PROFILE, MetricSpecs,
+    OUTPUT_SCHEMA_VERSION, Thresholds,
 };
 use leadline::coverage::CoverageMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -126,16 +129,19 @@ fn analyze_command(args: &[String]) -> Result<ExitCode, CliError> {
         .as_ref()
         .map(|selected| selected.analysis_excludes.as_slice())
         .unwrap_or(&[]);
-    let report =
-        leadline::analyze_path_with_excludes(&options.path, options.coverage.as_ref(), excludes)
-            .map_err(|error| CliError::incomplete(error.to_string()))?;
+    let report = analyze_with_cache(
+        &options.path,
+        options.coverage.as_ref(),
+        excludes,
+        options.cache_dir.as_deref(),
+    )?;
     if report.files.is_empty() {
         return Err(CliError::incomplete(format!(
             "no supported files found under {}",
             options.path.display()
         )));
     }
-    options.print_report(&report)?;
+    options.print_report(&report, &config_thresholds(&config))?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -145,7 +151,16 @@ fn function_command(args: &[String]) -> Result<ExitCode, CliError> {
     }
     let file = PathBuf::from(&args[0]);
     let name = &args[1];
-    let options = CommonOptions::parse_with_path(&args[2..], file.clone(), "function")?;
+    let mut rest = Vec::new();
+    let mut explain = false;
+    for arg in &args[2..] {
+        if arg == "--explain" {
+            explain = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    let options = CommonOptions::parse_with_path(&rest, file.clone(), "function")?;
     // Config loads from the containing directory; explicit file paths still analyze.
     let _ = load_config_for(&file)?;
     let mut analyzed = leadline::analyze_file(&file, &config_dir(&file), options.coverage.as_ref())
@@ -165,8 +180,78 @@ fn function_command(args: &[String]) -> Result<ExitCode, CliError> {
         metric_specs: MetricSpecs::default(),
         files: vec![analyzed],
     };
-    options.print_report(&report)?;
+    if explain && options.agent_json {
+        let mut value = leadline::agent::analyze_agent_json_budgeted(&report, &options.budget);
+        inject_contributions(&mut value, &report);
+        println!(
+            "{}",
+            serde_json::to_string(&value).map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else {
+        options.print_report(&report, &Thresholds::default())?;
+    }
+    if explain && !options.agent_json && !options.json {
+        for file in &report.files {
+            for function in &file.functions {
+                for contribution in &function.contributions {
+                    println!(
+                        "  {} line {} nesting {} +{} cog +{} cyc",
+                        contribution.rule,
+                        contribution.line,
+                        contribution.nesting,
+                        contribution.cognitive,
+                        contribution.cyclomatic
+                    );
+                }
+            }
+        }
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Copy per-function `contributions` into an agent-json payload, matched by
+/// file path, function name, and start line.
+fn inject_contributions(value: &mut serde_json::Value, report: &AnalysisReport) {
+    let Some(files) = value
+        .get_mut("files")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for file_value in files.iter_mut() {
+        let path = file_value
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let Some(functions) = file_value
+            .get_mut("functions")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        for function_value in functions.iter_mut() {
+            let name = function_value
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let line = function_value
+                .get("line")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default() as u32;
+            let contributions = report
+                .files
+                .iter()
+                .filter(|file| file.path == path)
+                .flat_map(|file| &file.functions)
+                .find(|function| function.name == name && function.start_line == line)
+                .map(|function| &function.contributions);
+            if let Some(contributions) = contributions {
+                function_value["contributions"] =
+                    serde_json::to_value(contributions).unwrap_or(serde_json::Value::Null);
+            }
+        }
+    }
 }
 
 fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError> {
@@ -174,6 +259,8 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
     let mut json = false;
     let mut agent_json = false;
     let mut path = PathBuf::from(".");
+    let mut budget = Budget::default();
+    let mut has_budget = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -205,6 +292,26 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
                         .ok_or_else(|| CliError::usage("--path requires a path"))?,
                 );
             }
+            "--top" => {
+                index += 1;
+                budget.top = Some(parse_top(args.get(index))?);
+                has_budget = true;
+            }
+            "--sort-by" => {
+                index += 1;
+                budget.sort_by = Some(parse_sort_key(args.get(index))?);
+                has_budget = true;
+            }
+            "--min-crap" => {
+                index += 1;
+                budget.min_crap = Some(parse_floor(args.get(index), "--min-crap")?);
+                has_budget = true;
+            }
+            "--min-delta" => {
+                index += 1;
+                budget.min_delta = Some(parse_floor(args.get(index), "--min-delta")?);
+                has_budget = true;
+            }
             value if !value.starts_with('-') && command == "diff" && base.is_none() => {
                 base = Some(value.to_owned());
             }
@@ -219,13 +326,20 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
             "--json and --format agent-json are exclusive",
         ));
     }
+    if has_budget && !agent_json {
+        return Err(CliError::usage(
+            "budget flags (--top, --sort-by, --min-crap, --min-delta) require --format agent-json",
+        ));
+    }
     let report = leadline::diff::analyze_changed(&path, base.as_deref().unwrap_or("HEAD~1"))
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     if agent_json {
         println!(
             "{}",
-            serde_json::to_string(&leadline::agent::changed_agent_json(&report))
-                .map_err(|error| CliError::internal(error.to_string()))?
+            serde_json::to_string(&leadline::agent::changed_agent_json_budgeted(
+                &report, &budget
+            ))
+            .map_err(|error| CliError::internal(error.to_string()))?
         );
     } else if json {
         println!(
@@ -242,6 +356,56 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Parse `--top N`; zero keeps nothing, so it is a usage error.
+fn parse_top(raw: Option<&String>) -> Result<usize, CliError> {
+    let raw = raw.ok_or_else(|| CliError::usage("--top requires a count"))?;
+    let top: usize = raw
+        .parse()
+        .map_err(|_| CliError::usage("--top requires a positive integer"))?;
+    if top == 0 {
+        return Err(CliError::usage("--top must be at least 1"));
+    }
+    Ok(top)
+}
+
+/// Parse `--sort-by crap|cognitive|cyclomatic`.
+fn parse_sort_key(raw: Option<&String>) -> Result<SortKey, CliError> {
+    let raw = raw.ok_or_else(|| CliError::usage("--sort-by requires a key"))?;
+    SortKey::parse(raw).ok_or_else(|| {
+        CliError::usage(format!(
+            "unknown --sort-by '{raw}': expected one of 'crap', 'cognitive', 'cyclomatic'"
+        ))
+    })
+}
+
+/// Parse `--min-crap X` / `--min-delta D` filter floors.
+fn parse_floor(raw: Option<&String>, flag: &str) -> Result<f64, CliError> {
+    let raw = raw.ok_or_else(|| CliError::usage(format!("{flag} requires a limit")))?;
+    let value: f64 = raw
+        .parse()
+        .map_err(|_| CliError::usage(format!("{flag} requires a numeric limit")))?;
+    if !value.is_finite() {
+        return Err(CliError::usage(format!(
+            "{flag} requires a finite numeric limit"
+        )));
+    }
+    Ok(value)
+}
+
+/// Config thresholds as engine thresholds for SARIF; absent config means empty.
+fn config_thresholds(config: &Option<Config>) -> Thresholds {
+    let Some(selected) = config else {
+        return Thresholds::default();
+    };
+    // ponytail: field copy; From impl if a third Thresholds-shaped type appears.
+    Thresholds {
+        cognitive: selected.thresholds.cognitive,
+        cyclomatic: selected.thresholds.cyclomatic,
+        crap: selected.thresholds.crap,
+        max_nesting: selected.thresholds.max_nesting,
+    }
 }
 
 /// Fill gaps from `leadline.toml`; explicit CLI flags win.
@@ -262,9 +426,20 @@ fn apply_config(thresholds: &mut Thresholds, config: &Config) {
 
 fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut thresholds = Thresholds::default();
+    let mut base: Option<String> = None;
     let mut common = Vec::new();
     let mut index = 0;
     while index < args.len() {
+        if args[index] == "--base" {
+            index += 1;
+            base = Some(
+                args.get(index)
+                    .ok_or_else(|| CliError::usage("--base requires a revision"))?
+                    .clone(),
+            );
+            index += 1;
+            continue;
+        }
         let target = match args[index].as_str() {
             "--cognitive" => Some(&mut thresholds.cognitive),
             "--cyclomatic" => Some(&mut thresholds.cyclomatic),
@@ -313,13 +488,19 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
     if let Some(config) = &config {
         apply_config(&mut thresholds, config);
     }
+    if let Some(base) = base {
+        return check_changed(&options, &base, &thresholds);
+    }
     let excludes: &[String] = config
         .as_ref()
         .map(|selected| selected.analysis_excludes.as_slice())
         .unwrap_or(&[]);
-    let mut report =
-        leadline::analyze_path_with_excludes(&options.path, options.coverage.as_ref(), excludes)
-            .map_err(|error| CliError::incomplete(error.to_string()))?;
+    let mut report = analyze_with_cache(
+        &options.path,
+        options.coverage.as_ref(),
+        excludes,
+        options.cache_dir.as_deref(),
+    )?;
     if report.files.is_empty() {
         return Err(CliError::incomplete(format!(
             "no supported files found under {}",
@@ -332,7 +513,55 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
         !file.functions.is_empty() || !file.parse_errors.is_empty()
     });
     let has_findings = !report.files.is_empty();
-    options.print_report_or(&report, has_findings, "No violations.")?;
+    options.print_report_or(&report, has_findings, "No violations.", &thresholds)?;
+    if has_findings {
+        return Ok(ExitCode::from(1));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `check --base REV`: gate only on after-side violations of changed functions.
+fn check_changed(
+    options: &CommonOptions,
+    base: &str,
+    thresholds: &Thresholds,
+) -> Result<ExitCode, CliError> {
+    let changed = leadline::diff::analyze_changed(&options.path, base)
+        .map_err(|error| CliError::incomplete(error.to_string()))?;
+    // diff keeps its own config-shaped Thresholds; convert at the call site.
+    let gate = leadline::config::Thresholds {
+        cognitive: thresholds.cognitive,
+        cyclomatic: thresholds.cyclomatic,
+        crap: thresholds.crap,
+        max_nesting: thresholds.max_nesting,
+    };
+    let mut grouped: BTreeMap<String, Vec<FunctionAnalysis>> = BTreeMap::new();
+    for change in leadline::diff::changed_violations(&changed, &gate) {
+        if let Some(after) = change.after.clone() {
+            grouped.entry(change.path.clone()).or_default().push(after);
+        }
+    }
+    let files: Vec<FileAnalysis> = grouped
+        .into_iter()
+        .filter_map(|(path, functions)| {
+            let language = leadline::parser::detect_language(&path)?;
+            Some(FileAnalysis {
+                path,
+                language,
+                functions,
+                parse_errors: Vec::new(),
+            })
+        })
+        .collect();
+    let report = AnalysisReport {
+        schema_version: OUTPUT_SCHEMA_VERSION,
+        metric_profile: METRIC_PROFILE,
+        analyzer_version: env!("CARGO_PKG_VERSION"),
+        metric_specs: MetricSpecs::default(),
+        files,
+    };
+    let has_findings = !report.files.is_empty();
+    options.print_report_or(&report, has_findings, "No violations.", thresholds)?;
     if has_findings {
         return Ok(ExitCode::from(1));
     }
@@ -483,12 +712,100 @@ fn load_config_for(path: &Path) -> Result<Option<Config>, CliError> {
     Ok(config::load_from(&dir)?)
 }
 
+/// Analyze with an optional [`leadline::cache::FileCache`].
+///
+/// Coverage merges into metrics after analysis, so cached (pre-coverage)
+/// functions would carry stale CRAP: any coverage input bypasses the cache.
+/// Cache I/O failures warn on stderr and fall back to a fresh analysis.
+fn analyze_with_cache(
+    path: &Path,
+    coverage: Option<&CoverageMap>,
+    excludes: &[String],
+    cache_dir: Option<&Path>,
+) -> Result<AnalysisReport, CliError> {
+    let Some(dir) = cache_dir.filter(|_| coverage.is_none()) else {
+        return leadline::analyze_path_with_excludes(path, coverage, excludes)
+            .map_err(|error| CliError::incomplete(error.to_string()));
+    };
+    let mut cache = leadline::cache::FileCache::open(dir);
+    let mut files = Vec::new();
+    if path.is_file() {
+        let bytes = std::fs::read(path).map_err(|error| CliError::incomplete(error.to_string()))?;
+        let key = leadline::normalize_path(path);
+        match cache
+            .get(&key, &bytes)
+            .and_then(|hit| cached_file(&key, hit))
+        {
+            Some(hit) => files.push(hit),
+            None => {
+                let analyzed = leadline::analyze_source(&key, &bytes)
+                    .map_err(|error| CliError::incomplete(error.to_string()))?;
+                if analyzed.parse_errors.is_empty() {
+                    cache.put(&key, &bytes, analyzed.functions.clone());
+                }
+                files.push(analyzed);
+            }
+        }
+    } else {
+        let discovered = leadline::discovery::discover_with_excludes(path, excludes)
+            .map_err(|error| CliError::incomplete(error.to_string()))?;
+        for file in &discovered {
+            let bytes =
+                std::fs::read(file).map_err(|error| CliError::incomplete(error.to_string()))?;
+            let key = leadline::normalized_relative_path(file, path);
+            match cache
+                .get(&key, &bytes)
+                .and_then(|hit| cached_file(&key, hit))
+            {
+                Some(hit) => files.push(hit),
+                None => {
+                    let analyzed = leadline::analyze_file(file, path, None)
+                        .map_err(|error| CliError::incomplete(error.to_string()))?;
+                    if analyzed.parse_errors.is_empty() {
+                        cache.put(&key, &bytes, analyzed.functions.clone());
+                    }
+                    files.push(analyzed);
+                }
+            }
+        }
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+    }
+    if let Err(error) = cache.save(dir) {
+        eprintln!(
+            "leadline: cache warning: cannot save cache in {}: {error}",
+            dir.display()
+        );
+    }
+    Ok(AnalysisReport {
+        schema_version: OUTPUT_SCHEMA_VERSION,
+        metric_profile: METRIC_PROFILE,
+        analyzer_version: env!("CARGO_PKG_VERSION"),
+        metric_specs: MetricSpecs::default(),
+        files,
+    })
+}
+
+/// Rebuild a [`FileAnalysis`] from cached functions; `None` when the cached
+/// path names no supported language (falls back to a fresh analysis).
+fn cached_file(key: &str, functions: Vec<FunctionAnalysis>) -> Option<FileAnalysis> {
+    let language = leadline::parser::detect_language(key)?;
+    Some(FileAnalysis {
+        path: key.to_owned(),
+        language,
+        functions,
+        parse_errors: Vec::new(),
+    })
+}
+
 struct CommonOptions {
     path: PathBuf,
     json: bool,
     agent_json: bool,
+    sarif: bool,
     pretty: bool,
     coverage: Option<CoverageMap>,
+    budget: Budget,
+    cache_dir: Option<PathBuf>,
 }
 
 impl CommonOptions {
@@ -503,9 +820,13 @@ impl CommonOptions {
     ) -> Result<Self, CliError> {
         let mut json = false;
         let mut agent_json = false;
+        let mut sarif = false;
         let mut coverage = CoverageMap::default();
         let mut has_coverage = false;
         let mut has_path = path != Path::new(".");
+        let mut budget = Budget::default();
+        let mut has_budget = false;
+        let mut cache_dir: Option<PathBuf> = None;
         let mut index = 0;
         while index < args.len() {
             match args[index].as_str() {
@@ -515,12 +836,37 @@ impl CommonOptions {
                     let value = args
                         .get(index)
                         .ok_or_else(|| CliError::usage("--format requires a value"))?;
-                    if value != "agent-json" {
-                        return Err(CliError::usage(format!(
-                            "unknown --format '{value}': expected 'agent-json'"
-                        )));
+                    match value.as_str() {
+                        "agent-json" => agent_json = true,
+                        "sarif" => sarif = true,
+                        _ => {
+                            return Err(CliError::usage(format!(
+                                "unknown --format '{value}': expected 'agent-json' or 'sarif'"
+                            )));
+                        }
                     }
-                    agent_json = true;
+                }
+                "--top" => {
+                    index += 1;
+                    budget.top = Some(parse_top(args.get(index))?);
+                    has_budget = true;
+                }
+                "--sort-by" => {
+                    index += 1;
+                    budget.sort_by = Some(parse_sort_key(args.get(index))?);
+                    has_budget = true;
+                }
+                "--min-crap" => {
+                    index += 1;
+                    budget.min_crap = Some(parse_floor(args.get(index), "--min-crap")?);
+                    has_budget = true;
+                }
+                "--cache-dir" => {
+                    index += 1;
+                    cache_dir =
+                        Some(PathBuf::from(args.get(index).ok_or_else(|| {
+                            CliError::usage("--cache-dir requires a directory")
+                        })?));
                 }
                 "--lcov" => {
                     index += 1;
@@ -563,19 +909,49 @@ impl CommonOptions {
                 "--json and --format agent-json are exclusive",
             ));
         }
+        if json && sarif {
+            return Err(CliError::usage("--json and --format sarif are exclusive"));
+        }
+        if agent_json && sarif {
+            return Err(CliError::usage(
+                "--format agent-json and --format sarif are exclusive",
+            ));
+        }
+        if sarif && command != "analyze" && command != "check" {
+            return Err(CliError::usage(format!(
+                "--format sarif is only supported on analyze and check, not {command}"
+            )));
+        }
+        if has_budget && !agent_json {
+            return Err(CliError::usage(
+                "budget flags (--top, --sort-by, --min-crap) require --format agent-json",
+            ));
+        }
+        if cache_dir.is_some() && command != "analyze" && command != "check" {
+            return Err(CliError::usage(format!(
+                "--cache-dir is only supported on analyze and check, not {command}"
+            )));
+        }
         Ok(Self {
             path,
             json,
             agent_json,
+            sarif,
             // `analyze --json` stays pretty-printed; other commands stay compact.
             pretty: command == "analyze",
             coverage: has_coverage.then_some(coverage),
+            budget,
+            cache_dir,
         })
     }
 
-    /// JSON output keeps its per-command encoding; agent-json is compact.
-    fn print_report(&self, report: &AnalysisReport) -> Result<(), CliError> {
-        self.print_report_or(report, true, "")
+    /// JSON output keeps its per-command encoding; agent-json and SARIF stay compact.
+    fn print_report(
+        &self,
+        report: &AnalysisReport,
+        thresholds: &Thresholds,
+    ) -> Result<(), CliError> {
+        self.print_report_or(report, true, "", thresholds)
     }
 
     fn print_report_or(
@@ -583,11 +959,21 @@ impl CommonOptions {
         report: &AnalysisReport,
         has_findings: bool,
         empty_text: &str,
+        thresholds: &Thresholds,
     ) -> Result<(), CliError> {
         if self.agent_json {
             println!(
                 "{}",
-                serde_json::to_string(&leadline::agent::analyze_agent_json(report))
+                serde_json::to_string(&leadline::agent::analyze_agent_json_budgeted(
+                    report,
+                    &self.budget
+                ))
+                .map_err(|error| CliError::internal(error.to_string()))?
+            );
+        } else if self.sarif {
+            println!(
+                "{}",
+                serde_json::to_string(&leadline::sarif::analysis_to_sarif(report, thresholds))
                     .map_err(|error| CliError::internal(error.to_string()))?
             );
         } else if self.json {
@@ -651,5 +1037,5 @@ fn load_coverage(path: &str, format: CoverageFormat) -> Result<CoverageMap, CliE
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline function FILE NAME [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline changed [--base REV] [--path PATH] [--json] [--format agent-json]\n  leadline diff [REV] [--path PATH] [--json] [--format agent-json]\n  leadline doctor [PATH]\n  leadline mcp\n  leadline skill\n  leadline version\n  leadline --version"
+    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline changed [--base REV] [--path PATH] [--json] [--format agent-json] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--path PATH] [--json] [--format agent-json] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline doctor [PATH]\n  leadline mcp\n  leadline skill\n  leadline version\n  leadline --version"
 }

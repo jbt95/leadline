@@ -53,6 +53,7 @@ fn function_full(name: &str, start_line: u32, metrics: FunctionMetrics) -> Funct
         start_byte: u64::from(start_line),
         end_byte: u64::from(start_line + 5),
         metrics,
+        contributions: Vec::new(),
         source_fingerprint: 0,
     }
 }
@@ -102,6 +103,7 @@ fn analyze_agent_json_has_compact_sorted_shape() {
             "schema_version": 1,
             "metric_profile": "default-v1",
             "summary": {"files": 2, "functions": 3},
+            "truncated": false,
             "files": [
                 {"path": "a.ts", "functions": [
                     {"name": "solo", "line": 1, "cognitive": 0, "cyclomatic": 1, "crap": 1.0, "coverage": 0.5},
@@ -159,6 +161,7 @@ fn changed_agent_json_classifies_and_handles_added_removed() {
             "schema_version": 1,
             "base": "HEAD",
             "summary": {"changed_functions": 5, "regressions": 1, "improvements": 1},
+            "truncated": false,
             "regressions": [
                 {"path": "app.ts", "line": 1, "function": "worse",
                  "before": {"cognitive": 1, "cyclomatic": 2, "crap": 2.0},

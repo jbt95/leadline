@@ -360,6 +360,172 @@ fn agent_json_shape_on_changed() {
 }
 
 #[test]
+fn check_base_gates_only_changed_violations() {
+    let root = temporary_directory();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: boolean) { return x; }\n",
+    )
+    .unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "init", "-q"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { if (x > 2) { if (x > 5) { if (x > 9) { return 3; } return 2; } return 1; } return 0; }\n",
+    )
+    .unwrap();
+    let failing = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["check", "--base", "HEAD", "--cognitive", "0"])
+        .output()
+        .unwrap();
+    assert_eq!(failing.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&failing.stdout).contains("calc"),
+        "expected calc finding, got:\n{}",
+        String::from_utf8_lossy(&failing.stdout)
+    );
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: boolean) { return x; }\n",
+    )
+    .unwrap();
+    let passing = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["check", "--base", "HEAD", "--cognitive", "0"])
+        .output()
+        .unwrap();
+    assert!(passing.status.success());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn function_explain_reports_contributions() {
+    let root = temporary_directory();
+    let file = root.join("branch.ts");
+    std::fs::write(
+        &file,
+        "function pick(x: boolean) { if (x) { return 1; } return 0; }\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("function")
+        .arg(&file)
+        .arg("pick")
+        .arg("--explain")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("pick"),
+        "missing function block in:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("if line 1"),
+        "missing contribution line in:\n{stdout}"
+    );
+    let budgeted = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("function")
+        .arg(&file)
+        .arg("pick")
+        .args(["--format", "agent-json", "--explain"])
+        .output()
+        .unwrap();
+    assert!(budgeted.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&budgeted.stdout).unwrap();
+    assert!(value["files"][0]["functions"][0]["contributions"].is_array());
+    let plain = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("function")
+        .arg(&file)
+        .arg("pick")
+        .args(["--format", "agent-json"])
+        .output()
+        .unwrap();
+    assert!(plain.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&plain.stdout).unwrap();
+    assert!(
+        value["files"][0]["functions"][0]
+            .get("contributions")
+            .is_none()
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sarif_output_has_version_runs_results() {
+    let root = temporary_directory();
+    std::fs::write(root.join("sample.ts"), "function alpha() { return 1; }\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("analyze")
+        .arg(&root)
+        .args(["--format", "sarif"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["version"], "2.1.0");
+    assert!(value["runs"].is_array());
+    assert!(value["runs"][0]["results"].is_array());
+    let conflict = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("analyze")
+        .arg(&root)
+        .args(["--json", "--format", "sarif"])
+        .output()
+        .unwrap();
+    assert_eq!(conflict.status.code(), Some(2));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn agent_json_top_marks_truncated() {
+    let root = temporary_directory();
+    std::fs::write(
+        root.join("two.ts"),
+        "function alpha() { return 1; }\nfunction beta() { return 2; }\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("analyze")
+        .arg(&root)
+        .args(["--format", "agent-json", "--top", "1"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["truncated"], true);
+    assert_eq!(value["files"][0]["functions"].as_array().unwrap().len(), 1);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cache_dir_reuses_results_across_runs() {
+    let root = temporary_directory();
+    std::fs::write(root.join("sample.ts"), "function alpha() { return 1; }\n").unwrap();
+    let cache = root.join("cache");
+    let run = |cache: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_leadline"))
+            .arg("analyze")
+            .arg(&root)
+            .arg("--cache-dir")
+            .arg(cache)
+            .arg("--json")
+            .output()
+            .unwrap()
+    };
+    let first = run(&cache);
+    assert!(first.status.success());
+    assert!(cache.join("file-cache.json").is_file());
+    let second = run(&cache);
+    assert!(second.status.success());
+    assert_eq!(first.stdout, second.stdout);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn config_exclude_filters_directory_but_not_explicit_file() {
     let root = temporary_directory();
     std::fs::write(root.join("keep.ts"), "function keep() { return 1; }\n").unwrap();
