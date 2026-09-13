@@ -26,12 +26,12 @@
 //!   an unavailable report instead of an error, so source snapshots keep
 //!   working.
 
-use crate::Result;
+use crate::{Result, git};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 pub const HISTORY_SCHEMA_VERSION: u32 = 1;
 
@@ -174,7 +174,7 @@ fn workdir_for(scope: &Path) -> &Path {
 ///
 /// The tuple is `(commit, timestamp)`; both are `None` for an unborn HEAD.
 pub(crate) fn repository_head(workdir: &Path) -> Result<Option<(Option<String>, Option<i64>)>> {
-    let Some(head) = git_optional(
+    let Some(head) = git::run_optional(
         workdir,
         &[
             "log",
@@ -235,9 +235,9 @@ pub(crate) fn walk_commits(
     workdir: &Path,
     mut sink: impl FnMut(&CommitMeta, &[CommitFile]),
 ) -> Result<()> {
-    let mut child = Command::new("git")
-        .current_dir(workdir)
-        .args([
+    let mut child = git::command(
+        workdir,
+        &[
             "log",
             "--relative",
             "--date-order",
@@ -248,10 +248,11 @@ pub(crate) fn walk_commits(
             "-z",
             "-M30%",
             "--format=%x01%H%x00%aN%x00%aE%x00%ct%x00",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        ],
+    )
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()?;
     let stdout = child.stdout.take().ok_or("git log stdout unavailable")?;
     // Drain stderr on its own thread: a full stderr pipe would block git and
     // stall stdout parsing.
@@ -561,16 +562,6 @@ fn numstat_value(field: &[u8]) -> u64 {
         .ok()
         .and_then(|text| text.trim().parse().ok())
         .unwrap_or(0)
-}
-
-fn git_optional(cwd: &Path, args: &[&str]) -> Result<Option<Vec<u8>>> {
-    match Command::new("git").current_dir(cwd).args(args).output() {
-        Ok(output) if output.status.success() => Ok(Some(output.stdout)),
-        Ok(_) => Ok(None),
-        // A snapshot without git keeps working.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
-    }
 }
 
 #[cfg(test)]

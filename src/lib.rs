@@ -7,6 +7,7 @@ pub mod coupling;
 pub mod coverage;
 pub mod diff;
 pub mod discovery;
+pub mod git;
 pub mod graph;
 pub mod history;
 pub mod hotspots;

@@ -3,12 +3,12 @@ use crate::config::{RegressionLimits, Thresholds};
 use crate::core::{
     FunctionAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION, ParseDiagnostic,
 };
+use crate::git;
 use crate::parser::detect_language;
 use crate::strip_verbatim_prefix;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FunctionChange {
@@ -150,13 +150,13 @@ pub fn analyze_changed(path: &Path, base: &str) -> Result<ChangedReport> {
 }
 
 pub fn analyze_changes(path: &Path, options: &ChangeOptions) -> Result<ChangedReport> {
-    validate_revision(&options.base)?;
+    git::validate_revision(&options.base)?;
     if let ComparisonTarget::Revision(target) = &options.target {
-        validate_revision(target)?;
+        git::validate_revision(target)?;
     }
     let (requested, start) =
         resolve_requested(path, !matches!(options.target, ComparisonTarget::Worktree))?;
-    let root_output = git(&start, ["rev-parse", "--show-toplevel"])?;
+    let root_output = git::run(&start, &["rev-parse", "--show-toplevel"])?;
     let toplevel = String::from_utf8(root_output.stdout)?;
     let root = strip_verbatim_prefix(&std::fs::canonicalize(toplevel.trim())?);
     let scope = crate::normalized_relative_path(&requested, &root);
@@ -178,9 +178,10 @@ pub fn analyze_changes(path: &Path, options: &ChangeOptions) -> Result<ChangedRe
         let before_path = renames
             .get(&relative)
             .map_or(relative.as_str(), String::as_str);
-        let before = git_optional(&root, ["show", &format!("{}:{before_path}", options.base)])?
-            .map(|source| crate::analyze_source(before_path, &source))
-            .transpose()?;
+        let before =
+            git::run_optional(&root, &["show", &format!("{}:{before_path}", options.base)])?
+                .map(|source| crate::analyze_source(before_path, &source))
+                .transpose()?;
         let after = read_after(&root, &relative, &options.target)?
             .map(|source| crate::analyze_source(&relative, &source))
             .transpose()?;
@@ -277,9 +278,9 @@ fn read_after(root: &Path, relative: &str, target: &ComparisonTarget) -> Result<
                 .transpose()
                 .map_err(Into::into)
         }
-        ComparisonTarget::Index => git_optional(root, ["show", &format!(":{relative}")]),
+        ComparisonTarget::Index => git::run_optional(root, &["show", &format!(":{relative}")]),
         ComparisonTarget::Revision(revision) => {
-            git_optional(root, ["show", &format!("{revision}:{relative}")])
+            git::run_optional(root, &["show", &format!("{revision}:{relative}")])
         }
     }
 }
@@ -305,7 +306,7 @@ fn diff_paths(
     }
     args.push("--".to_owned());
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let output = git(root, refs)?;
+    let output = git::run(root, &refs)?;
     parse_name_status(&output.stdout)
 }
 
@@ -339,7 +340,7 @@ fn parse_name_status(bytes: &[u8]) -> Result<(BTreeSet<String>, BTreeMap<String,
 }
 
 fn untracked_paths(root: &Path) -> Result<BTreeSet<String>> {
-    let output = git(root, ["ls-files", "--others", "--exclude-standard", "-z"])?;
+    let output = git::run(root, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     nul_paths(&output.stdout)
 }
 
@@ -349,17 +350,6 @@ fn nul_paths(bytes: &[u8]) -> Result<BTreeSet<String>> {
         .filter(|value| !value.is_empty())
         .map(|value| Ok(std::str::from_utf8(value)?.to_owned()))
         .collect()
-}
-
-fn validate_revision(base: &str) -> Result<()> {
-    if base.is_empty()
-        || base.starts_with('-')
-        || base.contains(':')
-        || base.chars().any(char::is_control)
-    {
-        return Err("base revision contains unsupported characters".into());
-    }
-    Ok(())
 }
 
 fn pair_functions(
@@ -408,31 +398,6 @@ fn group_by_name(functions: Vec<FunctionAnalysis>) -> BTreeMap<String, Vec<Funct
     }
     grouped
 }
-/// `std::fs::canonicalize` returns verbatim (`\\?\`) paths on Windows, which
-/// never match the plain paths git prints. Both the requested path and the
-/// git-reported root pass through canonicalization plus
-/// [`crate::strip_verbatim_prefix`], so scope comparison always compares like
-/// with like.
-fn git<'a>(cwd: &Path, args: impl IntoIterator<Item = &'a str>) -> Result<Output> {
-    let output = Command::new("git").current_dir(cwd).args(args).output()?;
-    if output.status.success() {
-        Ok(output)
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr)
-            .trim()
-            .to_owned()
-            .into())
-    }
-}
-
-fn git_optional<'a>(
-    cwd: &Path,
-    args: impl IntoIterator<Item = &'a str>,
-) -> Result<Option<Vec<u8>>> {
-    let output = Command::new("git").current_dir(cwd).args(args).output()?;
-    Ok(output.status.success().then_some(output.stdout))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
