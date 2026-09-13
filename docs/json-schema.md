@@ -85,3 +85,59 @@ Reports are UTF-8 JSON. Paths use `/` separators. Floats use stable decimal form
 ```
 
 Each `functions` entry pairs one before/after version. `before: null` means added, `after: null` means removed. Unchanged pairs are omitted. See `changed-code.md`.
+
+## Hotspots envelope
+
+```json
+{
+  "schema_version": 1,
+  "analyzer_version": "0.2.0",
+  "metric_profile": "default-v1",
+  "model": "complexity-x-churn-v1",
+  "window": "90d",
+  "git_available": true,
+  "head_commit": "0c2d7309cd3c84d33e4ea8fec01a581cf5246b37",
+  "files_analyzed": 128,
+  "hotspots": [
+    {
+      "path": "src/payment.ts",
+      "language": "typescript",
+      "loc": 420,
+      "functions": 12,
+      "max_cognitive": 31,
+      "max_cyclomatic": 18,
+      "max_crap": 62.0,
+      "coverage": 0.47,
+      "functions_with_coverage": 12,
+      "commits": 96,
+      "changes": 28,
+      "changes_30d": 9,
+      "changes_90d": 28,
+      "changes_365d": 71,
+      "lines_added": 1204,
+      "lines_deleted": 486,
+      "days_since_last_change": 3,
+      "contributors": 7,
+      "recent_contributors": 4,
+      "score": 868
+    }
+  ],
+  "truncated": false
+}
+```
+
+- `model`: the documented ordering rule (`complexity-x-churn-v1`); the
+  dimensions next to it are the actual evidence. See `hotspots.md`.
+- `window`: `30d`, `90d`, or `365d`; `changes` and `score` use it.
+- `git_available: false` (directory outside a repository, unborn HEAD, or no
+  `git`) sets every churn field and `score` to `null`; complexity still ranks.
+  A churn field is also `null` when Git is available but the file has no
+  history record (new or untracked). `git_available` distinguishes the two.
+- `score` is `max_cognitive x changes`, or `null` without Git history.
+- `coverage` is the LOC-weighted mean over `functions_with_coverage`.
+- All churn windows are relative to `head_commit`'s commit time, so the same
+  snapshot yields identical JSON on any day.
+- `--format agent-json` emits a compact shape: `schema_version`, `model`,
+  `window`, `git_available`, `summary.{files_analyzed,hotspots}`, one row per
+  hotspot (`path`, `score`, `cognitive`, `cyclomatic`, `crap`, `coverage`,
+  `changes`, `contributors`), and `truncated`.

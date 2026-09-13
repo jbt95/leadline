@@ -17,6 +17,22 @@
 
 Only the fields an agent gates on are included. Full detail remains in `--json`. `coverage`/`crap` are `null` when unknown.
 
+`leadline hotspots --format agent-json` returns the ranked-file shape instead, so an agent can pick what to inspect before editing:
+
+```json
+{
+  "schema_version": 1,
+  "model": "complexity-x-churn-v1",
+  "window": "90d",
+  "git_available": true,
+  "summary": { "files_analyzed": 128, "hotspots": 10 },
+  "hotspots": [
+    { "path": "src/payment.ts", "score": 868, "cognitive": 31, "cyclomatic": 18, "crap": 62.0, "coverage": 0.47, "changes": 28, "contributors": 7 }
+  ],
+  "truncated": false
+}
+```
+
 ## MCP tools (read-only)
 
 The MCP server exposes five read-only tools. It never writes files, runs hooks, or executes project code.

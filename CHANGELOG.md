@@ -2,6 +2,15 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## Unreleased
+
+### Added
+
+- Git history analytics (`leadline::history`): per-file commit counts, 30/90/365-day change windows, lines added/deleted, code age, days since last change, and contributor counts. One streamed `git log --relative` walk with rename resolution; recency windows are relative to the HEAD commit time for deterministic reports; snapshots without Git degrade to `git_available: false` instead of failing.
+- `leadline hotspots` with `--limit N`, `--since 30d|90d|365d`, `--json`, `--format agent-json`, and LCOV/JaCoCo coverage flags. Ranks files by `max cognitive complexity x changes in window` (`complexity-x-churn-v1`) and exposes every dimension: complexity, CRAP, coverage, churn, contributors, and age.
+- `docs/analytics-roadmap.md`: architecture proposal, normalized Project analytics schema, static report data contract, Git ingestion trade-offs, and milestones B-I. `docs/hotspots.md`: formulas, calculation rules, limitations, and the no-developer-ranking guardrail.
+- Git history benchmark target (`cargo bench --bench history`) measuring the raw log walk, end-to-end history analysis, and hotspot scoring separately; CI compiles it alongside the analyzer bench.
+
 ## 0.2.0 - 2026-09-13
 
 ### Fixed

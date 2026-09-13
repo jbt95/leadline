@@ -13,7 +13,20 @@ The suite measures four distinct costs:
 - Recovery from a deterministic malformed TypeScript corpus.
 - Repository discovery and analysis at a fixed 10K total lines split across 1, 100, and 1,000 files, plus JSON serialization.
 
-Criterion reports wall-clock distributions and line, byte, or file throughput. Inputs and outputs are black-boxed, fixture creation is outside the timed loop, and temporary repository fixtures are removed even if a benchmark panics.
+Run the Git-history benchmark:
+
+```console
+cargo bench --bench history
+```
+
+Three groups measure different costs on synthetic repositories staged outside
+every timed loop:
+
+- `raw_git_log`: the `git log --relative --no-merges --numstat -z -M30%` walk alone (subprocess, history walk, output generation), so leadline's parsing cost can be bounded by comparing it with the next group.
+- `history_analysis`: end-to-end `analyze_history` at 20 and 200 commits, including the HEAD lookup, streaming parse, rename resolution, and aggregation.
+- `hotspot_scoring`: the source x history join and ranking over 2,000 pre-analyzed files with no Git access.
+
+Criterion reports wall-clock distributions and line, byte, file, or commit throughput. Inputs and outputs are black-boxed, fixture creation is outside the timed loop, and temporary repository fixtures are removed even if a benchmark panics.
 
 Run an end-to-end repository measurement with platform tools:
 
@@ -61,3 +74,20 @@ Run the same command on the same machine before comparing a later result:
 ```console
 cargo bench --bench analyzer -- --warm-up-time 0.1 --measurement-time 0.2 --sample-size 10
 ```
+
+## Git history baseline
+
+The 2026-09-13 history baseline used leadline 0.2.0 with the same machine, toolchain, and Criterion version as the source baseline above. Each repository was staged before the timed loop; the raw `git log` case runs the exact production flags so that `raw_git_log` and `history_analysis` bound parsing overhead from both sides.
+
+```console
+cargo bench --bench history -- --warm-up-time 0.1 --measurement-time 0.2 --sample-size 10
+```
+
+| Case | Median time | Throughput |
+| --- | ---: | ---: |
+| Raw `git log`, 200 commits / 1,000 records | 292.07 ms | 684.78 commits/s |
+| History analysis, 20 commits / 100 records | 79.101 ms | 252.84 commits/s |
+| History analysis, 200 commits / 1,000 records | 320.44 ms | 624.14 commits/s |
+| Hotspot scoring, 2,000 analyzed files | 296.03 µs | 6.756 Mfiles/s |
+
+These numbers are dominated by `git` process startup: history analysis of 200 commits (320 ms) is close to the raw log walk (292 ms), and the remaining difference includes the HEAD lookup subprocess. Parsing and aggregation are a small fraction of run time. Compare same-machine before/after; do not treat the absolute numbers as portable.

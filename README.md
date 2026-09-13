@@ -87,7 +87,7 @@ leadline check . --cognitive 15 --cyclomatic 10 --max-nesting 4
 
 ```mermaid
 flowchart TD
-    CLI["CLI: analyze, function, changed, diff, check, baseline, test-targets, doctor, version, skill"]
+    CLI["CLI: analyze, function, changed, diff, check, baseline, hotspots, test-targets, doctor, version, skill"]
     CLI --> Human["Humans and CI: terminal, JSON, SARIF, exit codes 0-5"]
     CLI --> MCP["MCP server, read-only stdio: analyze, analyze_changed, analyze_function, check, explain_metric, test_targets"]
     MCP --> Harnesses["Claude Code, Pi, OMP, OpenCode, Codex, Gemini, Cursor, Cline, Windsurf, Copilot"]
@@ -162,8 +162,33 @@ leadline diff HEAD~1
 Functions are paired by name and same-name source order. By default a rename surfaces as one removal plus one addition; pass `--renames` to pair Git-detected file renames instead.
 
 `--format agent-json` emits the compact agent-oriented shape on `analyze`, `function`,
-`check`, `changed`, `diff`, and `test-targets`. `leadline doctor` self-checks the parsers, coverage
+`check`, `changed`, `diff`, `hotspots`, and `test-targets`. `leadline doctor` self-checks the parsers, coverage
 readers, `git`, and `leadline.toml`. `leadline version` prints the release version.
+
+## Git history and hotspots
+
+```console
+leadline hotspots
+leadline hotspots --limit 20 --since 30d
+leadline hotspots src/payment --json
+leadline hotspots . --lcov coverage/lcov.info --format agent-json
+```
+
+Hotspots rank files by `max cognitive complexity x changes in the selected window`
+(model `complexity-x-churn-v1`) and keep every dimension next to the score: cognitive
+and cyclomatic complexity, CRAP, coverage, churn windows, lines added/deleted, days
+since the last change, and contributor counts. Git history is read with one streamed
+`git log --relative` walk; recency windows are relative to the HEAD commit time, so
+the same snapshot produces the same report on any day. Renames resolve newest to
+oldest, so moved files keep their history.
+
+A directory outside a Git repository, a machine without `git`, or an unborn HEAD
+still ranks by complexity and reports `git_available: false` with `null` churn
+fields. Merge commits are excluded. See [hotspots](docs/hotspots.md) for formulas,
+limitations, and the ethical guardrail: commit and ownership signals must never rank
+developers. The [analytics roadmap](docs/analytics-roadmap.md) describes the
+dependency, coupling, ownership, risk, and static-report milestones built on this
+foundation.
 
 ## Coverage limits
 
@@ -191,6 +216,7 @@ cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 cargo bench --bench analyzer
+cargo bench --bench history
 ```
 
 See [architecture](docs/architecture.md), [`default-v1` metric rules](docs/metrics.md), and [benchmark instructions](docs/benchmark.md).

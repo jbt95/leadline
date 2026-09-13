@@ -23,6 +23,7 @@ leadline changed --base <rev> --format agent-json
 Shortest post-edit commands (all deterministic, JSON with `--format agent-json`):
 
 - Explain a regression: `leadline changed --base <rev> --format agent-json --explain` (adds `causes` to regression rows only).
+- Inspect a target before editing it: `leadline hotspots <path> --format agent-json` (files ranked by complexity x churn; the JSON carries the dimensions, not just a score).
 - Gate deltas: `leadline check . --base <rev> --regressions` (zero-tolerance unless `leadline.toml` sets `[regressions]` allowances).
 - Target tests: `leadline test-targets . --coverage <file>` (line coverage only; unknown lines are reported, never called uncovered).
 - Snapshot without Git history: `leadline baseline . --output <file>`, then `leadline check . --baseline <file> --regressions`.
