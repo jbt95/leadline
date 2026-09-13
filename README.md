@@ -162,7 +162,7 @@ leadline diff HEAD~1
 Functions are paired by name and same-name source order. By default a rename surfaces as one removal plus one addition; pass `--renames` to pair Git-detected file renames instead.
 
 `--format agent-json` emits the compact agent-oriented shape on `analyze`, `function`,
-`check`, `changed`, `diff`, `hotspots`, `coupling`, `dependencies`, `impact`,
+`check`, `changed`, `diff`, `hotspots`, `risk`, `coupling`, `dependencies`, `impact`,
 and `test-targets`. `leadline doctor` self-checks the parsers, coverage
 readers, `git`, and `leadline.toml`. `leadline version` prints the release version.
 
@@ -189,7 +189,7 @@ fields. Merge commits are excluded. See [hotspots](docs/hotspots.md) for formula
 limitations, and the ethical guardrail: commit and ownership signals must never rank
 developers. The [analytics roadmap](docs/analytics-roadmap.md) describes the ownership,
 risk, and static-report milestones still to build on this foundation
-(coupling, dependencies, and impact are implemented; see above and below).
+(coupling, dependencies, impact, and risk are implemented; see above and below).
 
 Find files that repeatedly change together even when no import connects them:
 
@@ -216,6 +216,18 @@ lists the transitive dependents of one file with distances, direct-dependent
 counts, and blast radius. Resolution is conservative — relative JS/TS
 imports and exact Java type imports only — so the graph is static evidence
 to inspect, not proof of runtime behavior; see [dependencies](docs/dependencies.md).
+
+Rank change risk before editing:
+
+```console
+leadline risk --format agent-json
+```
+
+`risk` scores each file with the explainable `change-risk-v1` model
+(complexity, CRAP, churn, impact, ownership — weights and formulas in
+[docs/risk.md](docs/risk.md)). Unknown components stay `null` and the score
+renormalizes over what is known. It is informational only (exit `0`); never
+use it to rank developers.
 
 ## Coverage limits
 

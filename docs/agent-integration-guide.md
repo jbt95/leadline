@@ -78,15 +78,42 @@ package graph, reflection, or runtime-built specifiers — inspect the listed
 dependents, but do not treat an empty list as proof that nothing else loads
 the file.
 
+`leadline risk --format agent-json` returns the ranked change-risk list so
+an agent can pick the riskiest files to inspect before editing:
+
+```json
+{
+  "schema_version": 1,
+  "model": "change-risk-v1",
+  "window": "90d",
+  "git_available": true,
+  "summary": { "files_analyzed": 128, "risks": 10 },
+  "risks": [
+    { "path": "src/payment.ts", "score": 82.5,
+      "components": { "complexity": 100.0, "crap": 100.0, "churn": 100.0, "impact": 50.0, "ownership": 50.0, "policy": null } }
+  ],
+  "truncated": false
+}
+```
+
+`score` is the weight-renormalized mean of the known components on a 0-100
+scale; `null` components mean unknown, never zero. Rows sort by `score`
+descending; `truncated` means `--limit` hid rows. See `docs/risk.md` for the
+formulas, weights, and caps.
+
 ## Pre-edit workflow
 
-Before editing a file, check what depends on it and what usually changes
-with it:
+Before editing a file, check its change risk, what depends on it, and what
+usually changes with it:
 
 ```console
+leadline risk <path> --format agent-json
 leadline impact <file> --format agent-json
 leadline coupling <file> --format agent-json
 ```
+
+`risk` answers "which files are riskiest to touch?" (explainable
+`change-risk-v1` components, informational only);
 
 `impact` answers "what imports this file?" (static evidence, incomplete
 where language or runtime configuration decides the real target);

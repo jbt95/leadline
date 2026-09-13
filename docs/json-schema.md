@@ -258,3 +258,64 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
   `files_analyzed`, `fan_in`, `fan_out`, `direct_dependents`, `blast_radius`,
   `blast_radius_percent`, `dependents` (`path`, `distance`), `cycles`, and
   `truncated`; it drops `metric_profile` and `analyzer_version`.
+
+## Risk envelope
+
+```json
+{
+  "schema_version": 1,
+  "analyzer_version": "0.2.0",
+  "metric_profile": "default-v1",
+  "model": "change-risk-v1",
+  "window": "90d",
+  "git_available": true,
+  "files_analyzed": 2,
+  "risks": [
+    {
+      "path": "src/risky.ts",
+      "score": 82.5,
+      "components": {
+        "complexity": 100.0,
+        "crap": 100.0,
+        "churn": 100.0,
+        "impact": 50.0,
+        "ownership": 50.0,
+        "policy": null
+      },
+      "raw": {
+        "max_cognitive": 30,
+        "max_cyclomatic": 10,
+        "max_crap": 30.0,
+        "changes": 20,
+        "contributors": 2,
+        "blast_radius": 1,
+        "blast_radius_percent": 50.0,
+        "fan_in": 1,
+        "fan_out": 0
+      }
+    }
+  ],
+  "truncated": false
+}
+```
+
+- `model` is the versioned scoring rule (`change-risk-v1`); `score` is the
+  weight-renormalized component mean on a 0-100 scale. See `risk.md` for the
+  per-component formulas, weights (complexity 25, CRAP 20, churn 20, impact
+  20, ownership 15, policy 0), and caps.
+- `window`: `30d`, `90d`, or `365d`; `changes` and the `churn` component use
+  it. Windows are relative to the HEAD commit time, mirroring `hotspots`.
+- `null` means unknown, never zero: `crap` is `null` without coverage,
+  `churn`/`ownership` (and `raw.changes`/`raw.contributors`) are `null` when
+  the file has no history row, and `policy` is always `null` in v1. The score
+  renormalizes over the known components. `complexity` and `impact` are
+  always present (`impact` is `0.0` for files with no graph node).
+- `git_available: false` (directory outside a repository, unborn HEAD, or no
+  `git`) still ranks by the static dimensions with `null` churn/ownership.
+- Rows sort by `score` descending, ties by `path` ascending. `--limit N`
+  (default 10, `N >= 1`) caps the shown rows; `truncated` signals the cap.
+  The command is informational and exits `0`.
+- `--format agent-json` emits `schema_version`, `model`, `window`,
+  `git_available`, `summary.{files_analyzed,risks}`, one row per file
+  (`path`, `score`, `components` with the same six keys), and `truncated`;
+  it drops `metric_profile`, `analyzer_version`, and `raw`.
