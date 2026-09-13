@@ -94,14 +94,19 @@ impl SourceFilter {
     }
 
     /// Returns whether an analysis-root-relative path is a supported source.
+    ///
+    /// Non-UTF-8 names are accepted when their extension is a supported
+    /// source extension; snapshot callers reject such paths explicitly, while
+    /// `analyze` keeps its historical lossy display-path behavior.
     pub fn accepts_file(&self, relative: &Path) -> bool {
-        let Some(text) = relative.to_str() else {
-            return false;
-        };
-        if text.is_empty() || has_ignored_component(relative) {
+        if has_ignored_component(relative) {
             return false;
         }
-        detect_language(text).is_some() && !self.is_excluded(relative, false)
+        let supported = match relative.to_str() {
+            Some(text) => !text.is_empty() && detect_language(text).is_some(),
+            None => supported_extension(relative),
+        };
+        supported && !self.is_excluded(relative, false)
     }
 
     fn accepts_entry(&self, entry: &DirEntry) -> bool {
@@ -125,6 +130,15 @@ impl SourceFilter {
             .matched(self.root.join(relative), is_dir)
             .is_ignore()
     }
+}
+
+/// Extension check for paths whose name is not valid UTF-8. All supported
+/// source extensions are ASCII, so a valid UTF-8 extension is sufficient.
+fn supported_extension(relative: &Path) -> bool {
+    relative
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| detect_language(&format!("file.{extension}")).is_some())
 }
 
 fn has_ignored_component(relative: &Path) -> bool {

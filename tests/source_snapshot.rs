@@ -480,6 +480,28 @@ fn in_memory_graph_matches_filesystem_graph() {
     );
 }
 
+#[test]
+fn explicit_file_missing_from_index_or_revision_is_an_error() {
+    let fixture = snapshot_fixture("explicit-missing");
+    let untracked = fixture.root.join("src/untracked.ts");
+    assert!(load(&untracked, SnapshotTarget::Worktree).is_ok());
+    assert!(load(&untracked, SnapshotTarget::Index).is_err());
+    assert!(load(&untracked, SnapshotTarget::Revision("HEAD".into())).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_extension_paths_are_supported_candidates() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let filter = leadline::discovery::SourceFilter::new(Path::new("."), &[]).unwrap();
+    let source = PathBuf::from(OsString::from_vec(b"src/bad-\xff.ts".to_vec()));
+    assert!(filter.accepts_file(&source));
+    let other = PathBuf::from(OsString::from_vec(b"src/bad-\xff.bin".to_vec()));
+    assert!(!filter.accepts_file(&other));
+}
+
 #[cfg(unix)]
 #[test]
 fn non_utf8_git_paths_are_input_errors() {

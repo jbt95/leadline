@@ -356,7 +356,10 @@ fn filesystem_entries(analysis_root: &Path, config: &Config) -> Result<Vec<Sourc
         let relative = file
             .strip_prefix(analysis_root)
             .map_err(|_| "discovered path escaped the analysis root")?;
-        let relative = normalize_path(relative);
+        let Some(relative) = relative.to_str() else {
+            return Err("discovered path is not valid UTF-8".into());
+        };
+        let relative = normalize_path(Path::new(relative));
         validate_text(&relative)?;
         entries.push(SourceEntry {
             path: relative,
@@ -418,13 +421,17 @@ fn index_plan(
         args.push(&mailmap_path);
     }
     let output = git::run(root, &args)?;
-    assemble_records(
+    let plan = assemble_records(
         parse_index_records(&output.stdout)?,
         scope_prefix,
         &requested,
         &config_path,
         &mailmap_path,
-    )
+    )?;
+    if explicit.is_some() && plan.sources.is_empty() {
+        return Err("explicit file is not present in the index".into());
+    }
+    Ok(plan)
 }
 
 fn revision_plan(
@@ -451,13 +458,17 @@ fn revision_plan(
         None => {}
     }
     let output = git::run(root, &args)?;
-    assemble_records(
+    let plan = assemble_records(
         parse_tree_records(&output.stdout)?,
         scope_prefix,
         &requested,
         &config_path,
         &mailmap_path,
-    )
+    )?;
+    if explicit.is_some() && plan.sources.is_empty() {
+        return Err("explicit file is not present in the revision".into());
+    }
+    Ok(plan)
 }
 
 fn assemble_records(
