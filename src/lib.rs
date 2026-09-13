@@ -14,6 +14,7 @@ pub mod impact;
 pub mod mcp;
 pub mod parser;
 pub mod report;
+pub mod risk;
 pub mod sarif;
 pub mod test_targets;
 
