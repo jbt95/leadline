@@ -10,6 +10,7 @@ use tree_sitter::{Language as TsLanguage, Node, Parser, Tree};
 pub(crate) enum RawDependencyKind {
     JavaScriptImport,
     JavaScriptCall,
+    JavaScriptUndecodable,
     Java,
     JavaStatic,
     JavaWildcard,
@@ -99,14 +100,24 @@ fn extract_javascript_dependencies(root: Node<'_>, source: &[u8]) -> ParsedDepen
                 .map(|literal| (RawDependencyKind::JavaScriptCall, literal)),
             _ => None,
         };
-        if let Some((kind, literal)) = found
-            && let Some(specifier) = decode_javascript_string(literal, source)
-        {
-            references.push(RawDependency {
-                kind,
-                specifier,
-                line: node.start_position().row as u32 + 1,
-            });
+        if let Some((kind, literal)) = found {
+            let line = node.start_position().row as u32 + 1;
+            match decode_javascript_string(literal, source) {
+                Some(specifier) => references.push(RawDependency {
+                    kind,
+                    specifier,
+                    line,
+                }),
+                // A literal in dependency position that cannot be decoded
+                // (bad hex, lone surrogate, unclosed escape) still names a
+                // reference; keep the raw text so graph reports it instead
+                // of silently dropping it.
+                None => references.push(RawDependency {
+                    kind: RawDependencyKind::JavaScriptUndecodable,
+                    specifier: raw_string_inner_text(literal, source),
+                    line,
+                }),
+            }
         }
         for index in (0..node.child_count()).rev() {
             stack.push(node.child(index).expect("child index is in bounds"));
@@ -131,6 +142,19 @@ fn single_string_argument(arguments: Node<'_>) -> Option<Node<'_>> {
     let mut named = arguments.named_children(&mut cursor);
     let argument = named.next()?;
     (argument.kind() == "string" && named.next().is_none()).then_some(argument)
+}
+
+fn raw_string_inner_text(node: Node<'_>, source: &[u8]) -> String {
+    let text = node_text(node, source);
+    let bytes = text.as_bytes();
+    if bytes.len() >= 2
+        && (bytes[0] == b'\'' || bytes[0] == b'"')
+        && bytes[bytes.len() - 1] == bytes[0]
+    {
+        text[1..text.len() - 1].to_owned()
+    } else {
+        text.to_owned()
+    }
 }
 
 fn decode_javascript_string(node: Node<'_>, source: &[u8]) -> Option<String> {

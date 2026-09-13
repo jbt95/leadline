@@ -172,6 +172,7 @@ fn resolve(
         RawDependencyKind::JavaScriptImport | RawDependencyKind::JavaScriptCall => {
             resolve_javascript(&reference.specifier, source, paths)
         }
+        RawDependencyKind::JavaScriptUndecodable => Resolution::Unresolved("unsupported"),
         RawDependencyKind::Java => resolve_java(&reference.specifier, false, java_types),
         RawDependencyKind::JavaStatic => resolve_java(&reference.specifier, true, java_types),
         RawDependencyKind::JavaWildcard => Resolution::Unresolved("unsupported"),
@@ -195,15 +196,17 @@ fn resolve_javascript(specifier: &str, source: &str, paths: &BTreeSet<String>) -
     let Some(base) = relative_target(source, specifier) else {
         return Resolution::Unresolved("outside_scope");
     };
+    // Exact matches win before the extension gate: discovered files are
+    // supported by definition, and discovery is case-insensitive.
+    if paths.contains(&base) {
+        return Resolution::Resolved(base);
+    }
     if let Some(extension) = Path::new(&base)
         .extension()
         .and_then(|value| value.to_str())
         && !SOURCE_EXTENSIONS.contains(&extension)
     {
         return Resolution::Unresolved("unsupported");
-    }
-    if paths.contains(&base) {
-        return Resolution::Resolved(base);
     }
 
     if Path::new(&base).extension().is_none() {

@@ -335,3 +335,74 @@ fn excludes_are_out_of_scope_and_reports_are_deterministic() {
 
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn undecodable_specifiers_are_unsupported_not_silent() {
+    let root = temporary_directory();
+    write(&root, "src/main.ts", "import './\\uZZZZ';\n");
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+
+    assert!(report.edges.is_empty());
+    assert_eq!(report.unresolved.len(), 1);
+    assert_eq!(report.unresolved[0].specifier, "./\\uZZZZ");
+    assert_eq!(report.unresolved[0].reason, "unsupported");
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn self_import_counts_but_forms_no_cycle() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "src/self.ts",
+        "import './self';\nexport const value = 1;\n",
+    );
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+
+    assert_eq!(edge_pairs(&report), [("src/self.ts", "src/self.ts")]);
+    let file = &report.files[0];
+    assert_eq!((file.fan_in, file.fan_out), (1, 1));
+    assert!(report.cycles.is_empty());
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn three_file_cycle_is_sorted_and_import_wins_over_call() {
+    let root = temporary_directory();
+    write(&root, "src/c.ts", "import './a';\nexport const c = 1;\n");
+    write(&root, "src/a.ts", "import './b';\nexport const a = 1;\n");
+    write(
+        &root,
+        "src/b.ts",
+        "import './c';\nconst c = require('./c');\nexport const b = 1;\n",
+    );
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+
+    assert_eq!(
+        edge_pairs(&report),
+        [
+            ("src/a.ts", "src/b.ts"),
+            ("src/b.ts", "src/c.ts"),
+            ("src/c.ts", "src/a.ts"),
+        ]
+    );
+    let edge = report
+        .edges
+        .iter()
+        .find(|edge| edge.source == "src/b.ts")
+        .unwrap();
+    assert_eq!(edge.kind, "import");
+    assert_eq!(
+        report.cycles.len(),
+        1,
+        "one strongly connected component, not three pairs"
+    );
+    assert_eq!(report.cycles[0].files, ["src/a.ts", "src/b.ts", "src/c.ts"]);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
