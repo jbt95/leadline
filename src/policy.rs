@@ -232,7 +232,7 @@ fn compile(pattern: &str) -> Matcher {
     let mut builder = ignore::gitignore::GitignoreBuilder::new("");
     let _ = builder.add_line(None, pattern);
     let matcher = builder.build().unwrap_or_else(|_| {
-        let mut empty = ignore::gitignore::GitignoreBuilder::new("");
+        let empty = ignore::gitignore::GitignoreBuilder::new("");
         empty.build().expect("empty matcher")
     });
     Matcher { matcher }
