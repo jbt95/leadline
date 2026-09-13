@@ -10,6 +10,7 @@ pub mod discovery;
 pub mod graph;
 pub mod history;
 pub mod hotspots;
+pub mod impact;
 pub mod mcp;
 pub mod parser;
 pub mod report;
