@@ -2,7 +2,11 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
-## Unreleased
+## 0.5.0 - 2026-09-13
+
+### Fixed
+
+- Bare `leadline check` error now names the escape hatches (example threshold flags, or `--regressions` with `--base`/`--baseline`); the agent skill documents the full-project report recipe (`analyze` → `risk` → `impact`).
 
 ### Changed (breaking)
 
