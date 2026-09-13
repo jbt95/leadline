@@ -2,3 +2,4 @@
 node_modules/
 .pi
 docs/superpowers
+.worktrees/
