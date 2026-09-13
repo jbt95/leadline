@@ -33,8 +33,10 @@ pub fn run_optional(cwd: &Path, args: &[&str]) -> Result<Option<Vec<u8>>> {
 
 /// Finds and canonicalizes the repository containing `start`.
 pub fn repo_root(start: &Path) -> Result<Option<PathBuf>> {
+    let has_marker = has_git_marker(start)?;
     let Some(bytes) = run_optional_when(start, &["rev-parse", "--show-toplevel"], |output| {
-        output.status.code() == Some(128)
+        !has_marker
+            && output.status.code() == Some(128)
             && String::from_utf8_lossy(&output.stderr).contains("not a git repository")
     })?
     else {
@@ -116,8 +118,11 @@ pub(crate) fn read_index_blob_optional(root: &Path, path: &str) -> Result<Option
 }
 
 pub(crate) fn repository_head_optional(cwd: &Path) -> Result<Option<Vec<u8>>> {
+    let Some(root) = repo_root(cwd)? else {
+        return Ok(None);
+    };
     run_optional_when(
-        cwd,
+        &root,
         &[
             "log",
             "-1",
@@ -130,11 +135,26 @@ pub(crate) fn repository_head_optional(cwd: &Path) -> Result<Option<Vec<u8>>> {
                 return false;
             }
             let stderr = String::from_utf8_lossy(&output.stderr);
-            stderr.contains("not a git repository")
-                || stderr.contains("does not have any commits yet")
+            stderr.contains("does not have any commits yet")
                 || stderr.contains("bad default revision 'HEAD'")
         },
     )
+}
+
+fn has_git_marker(start: &Path) -> Result<bool> {
+    let start = if start.is_dir() {
+        start
+    } else {
+        start.parent().unwrap_or(Path::new("."))
+    };
+    for ancestor in start.ancestors() {
+        match std::fs::symlink_metadata(ancestor.join(".git")) {
+            Ok(_) => return Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(false)
 }
 
 fn run_optional_when(
@@ -195,6 +215,8 @@ pub(crate) fn command(cwd: &Path, args: &[&str]) -> Command {
         .args(args)
         .env("GIT_NO_LAZY_FETCH", "1")
         .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
         .stdin(Stdio::null());
     command
 }

@@ -65,6 +65,16 @@ fn adapter_and_existing_consumers_disable_fetch_locks_and_stdin() {
         "{invocations}"
     );
     assert_eq!(
+        invocations.matches("LC_ALL=C").count(),
+        command_count,
+        "{invocations}"
+    );
+    assert_eq!(
+        invocations.matches("LANG=C").count(),
+        command_count,
+        "{invocations}"
+    );
+    assert_eq!(
         invocations.matches("stdin=eof").count(),
         command_count,
         "{invocations}"
@@ -155,6 +165,32 @@ fn repo_root_finds_the_canonical_repository_root() {
 }
 
 #[test]
+fn corrupt_git_marker_is_an_error_for_discovery_and_history() {
+    let _lock = env_lock();
+    let root = temporary_directory("corrupt-repo");
+    std::fs::write(root.join(".git"), "gitdir: missing\n").unwrap();
+
+    assert!(leadline::git::repo_root(&root).is_err());
+    assert!(leadline::history::analyze_history(&root).is_err());
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn unborn_head_is_an_expected_absence() {
+    let _lock = env_lock();
+    let root = temporary_directory("unborn-head");
+    git(&root, &["init", "-q"]);
+
+    let report = leadline::history::analyze_history(&root).unwrap();
+    assert!(!report.available);
+    assert_eq!(report.head_commit, None);
+    assert_eq!(report.head_timestamp, None);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn resolve_commit_peels_annotated_tags_and_rejects_non_commits_and_ranges() {
     let _lock = env_lock();
     let root = temporary_directory("resolve");
@@ -182,6 +218,65 @@ fn resolve_commit_peels_annotated_tags_and_rejects_non_commits_and_ranges() {
     git(&root, &["add", "a.txt"]);
     git_dated(&root, &["commit", "-qm", "two"], "2025-01-03T03:04:05Z");
     assert!(leadline::git::resolve_commit(&root, "HEAD~1..HEAD").is_err());
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_commit_rejects_a_short_resolved_hash() {
+    assert_fake_resolve_error("resolve-hash-short");
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_commit_rejects_a_nonhex_resolved_hash() {
+    assert_fake_resolve_error("resolve-hash-nonhex");
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_commit_rejects_multiple_resolved_hashes() {
+    assert_fake_resolve_error("resolve-hash-multiple");
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_commit_rejects_a_reported_hash_mismatch() {
+    assert_fake_resolve_error("resolve-reported-mismatch");
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_commit_rejects_an_extra_metadata_field() {
+    assert_fake_resolve_error("resolve-extra-field");
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_commit_rejects_an_invalid_timestamp() {
+    assert_fake_resolve_error("resolve-invalid-timestamp");
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_commit_rejects_multiple_metadata_records() {
+    assert_fake_resolve_error("resolve-metadata-multiple");
+}
+
+#[cfg(unix)]
+fn assert_fake_resolve_error(label: &str) {
+    let _lock = env_lock();
+    let root = temporary_directory(label);
+    let bin = root.join("bin");
+    let log = root.join("git.log");
+    std::fs::create_dir(&bin).unwrap();
+    write_fake_git(&bin.join("git"));
+
+    {
+        let _env = FakeGitEnv::install(&bin, &log, &root);
+        assert!(leadline::git::resolve_commit(&root, "HEAD").is_err());
+    }
 
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -254,6 +349,8 @@ fn write_fake_git(path: &Path) {
   printf 'command=%s\n' "$*"
   printf 'GIT_NO_LAZY_FETCH=%s\n' "$GIT_NO_LAZY_FETCH"
   printf 'GIT_OPTIONAL_LOCKS=%s\n' "$GIT_OPTIONAL_LOCKS"
+  printf 'LC_ALL=%s\n' "$LC_ALL"
+  printf 'LANG=%s\n' "$LANG"
   if IFS= read -r value; then
     printf 'stdin=%s\n' "$value"
   else
@@ -270,6 +367,12 @@ case "$1" in
       printf '%s\n' "$FAKE_GIT_ROOT"
       exit 0
     fi
+    case "$PWD" in
+      *resolve-hash-short*) printf 'abc\n'; exit 0 ;;
+      *resolve-hash-nonhex*) printf 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\n'; exit 0 ;;
+      *resolve-hash-multiple*) printf '{FAKE_COMMIT}\n'; printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'; exit 0 ;;
+      *resolve-*) printf '{FAKE_COMMIT}\n'; exit 0 ;;
+    esac
     ;;
   diff)
     case "$PWD" in
@@ -286,6 +389,10 @@ case "$1" in
   show)
     case "$PWD" in
       *diff-missing-object*) printf 'fatal: missing promisor object\n' >&2; exit 128 ;;
+      *resolve-reported-mismatch*) printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\000123\n'; exit 0 ;;
+      *resolve-extra-field*) printf '{FAKE_COMMIT}\000123\000extra\n'; exit 0 ;;
+      *resolve-invalid-timestamp*) printf '{FAKE_COMMIT}\000nope\n'; exit 0 ;;
+      *resolve-metadata-multiple*) printf '{FAKE_COMMIT}\000123\n{FAKE_COMMIT}\000123\n'; exit 0 ;;
     esac
     ;;
   log)
@@ -316,6 +423,8 @@ struct FakeGitEnv {
     path: Option<OsString>,
     log: Option<OsString>,
     root: Option<OsString>,
+    lc_all: Option<OsString>,
+    lang: Option<OsString>,
 }
 
 #[cfg(unix)]
@@ -325,12 +434,16 @@ impl FakeGitEnv {
             path: std::env::var_os("PATH"),
             log: std::env::var_os("FAKE_GIT_LOG"),
             root: std::env::var_os("FAKE_GIT_ROOT"),
+            lc_all: std::env::var_os("LC_ALL"),
+            lang: std::env::var_os("LANG"),
         };
         // SAFETY: every test in this binary that starts git holds ENV_LOCK.
         unsafe {
             std::env::set_var("PATH", bin);
             std::env::set_var("FAKE_GIT_LOG", log);
             std::env::set_var("FAKE_GIT_ROOT", root);
+            std::env::set_var("LC_ALL", "zz_ZZ.UTF-8");
+            std::env::set_var("LANG", "zz_ZZ.UTF-8");
         }
         previous
     }
@@ -344,6 +457,8 @@ impl Drop for FakeGitEnv {
             restore_var("PATH", self.path.take());
             restore_var("FAKE_GIT_LOG", self.log.take());
             restore_var("FAKE_GIT_ROOT", self.root.take());
+            restore_var("LC_ALL", self.lc_all.take());
+            restore_var("LANG", self.lang.take());
         }
     }
 }
