@@ -1,13 +1,13 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
-pub const METRIC_PROFILE: &str = "default-v1";
+pub const METRIC_PROFILE: &str = "default";
 pub const OUTPUT_SCHEMA_VERSION: u32 = 1;
-pub const CYCLOMATIC_SPEC: &str = "default-v1";
-pub const COGNITIVE_SPEC: &str = "default-v1";
-pub const HALSTEAD_SPEC: &str = "default-v1";
-pub const MAINTAINABILITY_SPEC: &str = "default-v1";
-pub const CRAP_SPEC: &str = "default-v1";
+pub const CYCLOMATIC_SPEC: &str = "default";
+pub const COGNITIVE_SPEC: &str = "default";
+pub const HALSTEAD_SPEC: &str = "default";
+pub const MAINTAINABILITY_SPEC: &str = "default";
+pub const CRAP_SPEC: &str = "default";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]

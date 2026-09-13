@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub const IMPACT_SCHEMA_VERSION: u32 = 1;
-pub const IMPACT_MODEL: &str = "impact-v1";
+pub const IMPACT_MODEL: &str = "impact";
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ImpactedFile {

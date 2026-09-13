@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 pub const MUTATION_SCHEMA_VERSION: u32 = 1;
-pub const MUTATION_MODEL: &str = "mutation-v1";
+pub const MUTATION_MODEL: &str = "mutation";
 
 /// One external mutation report.
 #[derive(Clone, Debug, PartialEq, Eq)]

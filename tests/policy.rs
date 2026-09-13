@@ -18,7 +18,7 @@ fn graph(edges: &[(&str, &str, &'static str)]) -> DependencyReport {
     }
     DependencyReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "0.2.0",
         files: files
             .into_iter()

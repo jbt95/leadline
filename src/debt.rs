@@ -12,7 +12,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const DEBT_SCHEMA_VERSION: u32 = 1;
-pub const RISK_CHANGE_MODEL: &str = "change-risk-diff-v1";
+pub const RISK_CHANGE_MODEL: &str = "change-risk-diff";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

@@ -32,7 +32,7 @@ fn cli_chain_fixture() -> PathBuf {
 fn fixture_chain() -> DependencyReport {
     DependencyReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "0.2.0",
         files: vec![
             DependencyFile {
@@ -118,7 +118,7 @@ fn transitive_dependents_report_shortest_distances_in_order() {
 fn cycle_members_do_not_re_add_target() {
     let graph = DependencyReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "0.2.0",
         files: vec![
             DependencyFile {
@@ -186,7 +186,7 @@ fn cycle_members_do_not_re_add_target() {
 fn cycles_exclude_components_without_target() {
     let graph = DependencyReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "0.2.0",
         files: vec![
             DependencyFile {
@@ -485,7 +485,7 @@ fn fixture_cyclic() -> DependencyReport {
     };
     DependencyReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "0.2.0",
         files: vec![
             file("a.ts", 2, 1),

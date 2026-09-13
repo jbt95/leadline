@@ -5,7 +5,7 @@ test backing, frequent editing, wide blast radius, concentrated knowledge,
 and architecture violations? It joins static source metrics, Git history
 facts, ownership concentration, the static dependency graph, and
 architecture policy into one per-file score with explicit components
-(model `change-risk-v2`).
+(model `change-risk`).
 
 ```console
 leadline risk
@@ -40,7 +40,7 @@ null-renormalization below).
 - `max_crap` is the worst (highest) function CRAP in the file.
 - `changes_in_window` is the file's `changes_30d`, `changes_90d`, or
   `changes_365d` matching `--since`.
-- `blast_radius_percent` is the `impact-v1` value over the graph scope:
+- `blast_radius_percent` is the `impact` value over the graph scope:
   `blast_radius / (scope_files - 1) * 100` (`0.0` when
   `scope_files <= 1`). `scope_files` equals `files_analyzed` except when
   analysis covers a sub-scope such as a single file. Caps: complexity ratios saturate at cognitive 30 /

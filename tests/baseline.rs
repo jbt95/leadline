@@ -83,7 +83,7 @@ fn unknown_schema_is_rejected() {
     let path = dir.join("baseline.json");
     std::fs::write(
         &path,
-        r#"{"schema_version":99,"metric_profile":"default-v1","functions":[]}"#,
+        r#"{"schema_version":99,"metric_profile":"default","functions":[]}"#,
     )
     .unwrap();
     let error = leadline::baseline::Baseline::read(&path).unwrap_err();

@@ -19,7 +19,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 pub const HOTSPOT_SCHEMA_VERSION: u32 = 1;
-pub const HOTSPOT_MODEL: &str = "complexity-x-churn-v1";
+pub const HOTSPOT_MODEL: &str = "complexity-x-churn";
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Hotspot {

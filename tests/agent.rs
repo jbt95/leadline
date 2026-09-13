@@ -102,7 +102,7 @@ fn change(
 fn analyze_agent_json_has_compact_sorted_shape() {
     let report = AnalysisReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "0.1.0",
         metric_specs: MetricSpecs::default(),
         files: vec![
@@ -118,7 +118,7 @@ fn analyze_agent_json_has_compact_sorted_shape() {
         analyze_agent_json(&report),
         json!({
             "schema_version": 1,
-            "metric_profile": "default-v1",
+            "metric_profile": "default",
             "summary": {"files": 2, "functions": 3},
             "truncated": false,
             "files": [
@@ -138,7 +138,7 @@ fn analyze_agent_json_has_compact_sorted_shape() {
 fn changed_agent_json_classifies_and_handles_added_removed() {
     let report = ChangedReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "0.1.0",
         metric_specs: MetricSpecs::default(),
         base: "HEAD".to_owned(),
@@ -197,7 +197,7 @@ fn changed_agent_json_classifies_and_handles_added_removed() {
     // Added/removed functions carry nulls on the missing side and classify as neither.
     let added_only = ChangedReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "0.1.0",
         metric_specs: MetricSpecs::default(),
         base: "HEAD".to_owned(),
@@ -235,7 +235,7 @@ fn changed_agent_json_explains_only_multiset_added_regression_causes() {
     improved.contributions = vec![contribution("if", 40, 0, 1, 1)];
     let report = ChangedReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "0.1.0",
         metric_specs: MetricSpecs::default(),
         base: "HEAD".to_owned(),
@@ -271,7 +271,7 @@ fn changed_agent_json_explains_only_multiset_added_regression_causes() {
 fn changed_agent_json_orders_regressions_by_crap_delta_then_path() {
     let report = ChangedReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "0.1.0",
         metric_specs: MetricSpecs::default(),
         base: "HEAD".to_owned(),
@@ -322,7 +322,7 @@ fn changed_agent_json_orders_regressions_by_crap_delta_then_path() {
 fn changed_agent_json_treats_null_crap_as_no_change() {
     let report = ChangedReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "0.1.0",
         metric_specs: MetricSpecs::default(),
         base: "HEAD".to_owned(),
@@ -346,7 +346,7 @@ fn changed_agent_json_treats_null_crap_as_no_change() {
 fn agent_json_is_deterministic_across_repeated_serialization() {
     let analysis = AnalysisReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "0.1.0",
         metric_specs: MetricSpecs::default(),
         files: vec![file(
@@ -360,7 +360,7 @@ fn agent_json_is_deterministic_across_repeated_serialization() {
 
     let changed = ChangedReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "0.1.0",
         metric_specs: MetricSpecs::default(),
         base: "HEAD".to_owned(),

@@ -174,9 +174,9 @@ fn reports_carry_analyzer_version_and_metric_specs() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let report = leadline::analyze_path(&root, None).unwrap();
     assert_eq!(report.analyzer_version, env!("CARGO_PKG_VERSION"));
-    assert_eq!(report.metric_specs.cyclomatic, "default-v1");
-    assert_eq!(report.metric_specs.cognitive, "default-v1");
-    assert_eq!(report.metric_specs.halstead, "default-v1");
-    assert_eq!(report.metric_specs.maintainability, "default-v1");
-    assert_eq!(report.metric_specs.crap, "default-v1");
+    assert_eq!(report.metric_specs.cyclomatic, "default");
+    assert_eq!(report.metric_specs.cognitive, "default");
+    assert_eq!(report.metric_specs.halstead, "default");
+    assert_eq!(report.metric_specs.maintainability, "default");
+    assert_eq!(report.metric_specs.crap, "default");
 }

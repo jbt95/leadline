@@ -7,8 +7,8 @@ Optional file: `leadline.toml` in the analysis root. CLI flags override file val
 exclude = ["docs/**", "fixtures/**"]
 
 [metrics]
-cyclomatic_profile = "default-v1"
-cognitive_profile = "default-v1"
+cyclomatic_profile = "default"
+cognitive_profile = "default"
 
 [thresholds.function]
 cognitive = 15
@@ -44,7 +44,7 @@ Built-in skips (fixed directory names) always apply: `.git`, `node_modules`, `ta
 
 ## `[metrics]`
 
-Metric profiles. Both profile keys must be `"default-v1"`.
+Metric profiles. Both profile keys must be `"default"`.
 
 ## `[thresholds.function]`
 

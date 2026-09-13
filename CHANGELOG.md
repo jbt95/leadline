@@ -2,6 +2,12 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## Unreleased
+
+### Changed (breaking)
+
+- Dropped every model/profile version suffix: `change-risk`, `change-risk-diff`, `impact`, `complexity-x-churn`, `mutation`, `tokens`, `duplication-drift`, and the `default` metric profile. No public release exists, so no compatibility is kept. Added `AGENTS.md` stating the no-backwards-compat rule.
+
 ## 0.4.0 - 2026-09-13
 
 ### Added

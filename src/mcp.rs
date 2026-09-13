@@ -861,19 +861,19 @@ fn tool_explain_metric(params: &serde_json::Value) -> Result<serde_json::Value, 
     let name = metric.to_ascii_lowercase();
     let definition = match name.as_str() {
         "cyclomatic" => {
-            "Cyclomatic complexity (default-v1): every function starts at 1. Add 1 for each `if`, loop, `catch`, non-default switch case, ternary expression, `&&`, `||`, and JavaScript/TypeScript `??`. `else`, `finally`, default cases, functions, and lambdas add nothing. Nested functions are scored independently."
+            "Cyclomatic complexity (default): every function starts at 1. Add 1 for each `if`, loop, `catch`, non-default switch case, ternary expression, `&&`, `||`, and JavaScript/TypeScript `??`. `else`, `finally`, default cases, functions, and lambdas add nothing. Nested functions are scored independently."
         }
         "cognitive" => {
-            "Cognitive complexity (default-v1): add `1 + current nesting` for `if`, loops, `catch`, `switch`, and ternary expressions. An `else if` adds 1 and continues the chain; a final `else` adds 1; a labeled `break`/`continue` adds 1. For logical expressions the first `&&`/`||`/`??` adds 1 and each operator change adds 1. Lambdas, arrows, and nested functions are scored independently and do not raise the enclosing score. Recursion is not scored."
+            "Cognitive complexity (default): add `1 + current nesting` for `if`, loops, `catch`, `switch`, and ternary expressions. An `else if` adds 1 and continues the chain; a final `else` adds 1; a labeled `break`/`continue` adds 1. For logical expressions the first `&&`/`||`/`??` adds 1 and each operator change adds 1. Lambdas, arrows, and nested functions are scored independently and do not raise the enclosing score. Recursion is not scored."
         }
         "halstead" => {
-            "Halstead metrics (default-v1): leaf operator tokens and control keywords are operators; identifiers, literals, `this`, `super`, `true`, `false`, and `null` are operands. Distinct values are source byte slices within one function. Vocabulary is n1 + n2, length is N1 + N2, volume is length * log2(vocabulary), difficulty is (n1 / 2) * (N2 / n2), effort is difficulty * volume. Zero denominators produce zero, never NaN."
+            "Halstead metrics (default): leaf operator tokens and control keywords are operators; identifiers, literals, `this`, `super`, `true`, `false`, and `null` are operands. Distinct values are source byte slices within one function. Vocabulary is n1 + n2, length is N1 + N2, volume is length * log2(vocabulary), difficulty is (n1 / 2) * (N2 / n2), effort is difficulty * volume. Zero denominators produce zero, never NaN."
         }
         "maintainability" => {
-            "Maintainability index (default-v1): max(0, (171 - 5.2 ln(volume) - 0.23 cyclomatic - 16.2 ln(LOC)) * 100 / 171). Volume and LOC use a floor of 1, the result is capped at 100, and comment weighting is not used. Higher is better."
+            "Maintainability index (default): max(0, (171 - 5.2 ln(volume) - 0.23 cyclomatic - 16.2 ln(LOC)) * 100 / 171). Volume and LOC use a floor of 1, the result is capped at 100, and comment weighting is not used. Higher is better."
         }
         "crap" => {
-            "CRAP (default-v1): c^2 * (1 - p)^3 + c, where c is cyclomatic complexity and p is normalized function coverage (0.0..1.0). CRAP is null when no coverage line overlaps the function range, never a fake 0%. Lower is better."
+            "CRAP (default): c^2 * (1 - p)^3 + c, where c is cyclomatic complexity and p is normalized function coverage (0.0..1.0). CRAP is null when no coverage line overlaps the function range, never a fake 0%. Lower is better."
         }
         _ => {
             return Err((
@@ -1132,7 +1132,7 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "explain_metric",
-                "description": "Look up how a metric is defined (default-v1) before interpreting its numbers.",
+                "description": "Look up how a metric is defined (default) before interpreting its numbers.",
                 "annotations": { "title": "Explain metric", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",

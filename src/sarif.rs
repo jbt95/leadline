@@ -193,7 +193,7 @@ mod tests {
     fn report(files: Vec<(&str, Vec<FunctionAnalysis>)>) -> AnalysisReport {
         AnalysisReport {
             schema_version: 1,
-            metric_profile: "default-v1",
+            metric_profile: "default",
             analyzer_version: "0.1.0",
             metric_specs: MetricSpecs::default(),
             files: files

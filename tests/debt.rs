@@ -244,7 +244,7 @@ fn removes_and_summarizes() {
 fn projection_matches_score_and_components() {
     let graph = leadline::graph::DependencyReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "test",
         files: vec![],
         edges: vec![],
@@ -259,7 +259,7 @@ fn projection_matches_score_and_components() {
     let report = leadline::risk::build(
         &leadline::core::AnalysisReport {
             schema_version: 1,
-            metric_profile: "default-v1",
+            metric_profile: "default",
             analyzer_version: "test",
             metric_specs: Default::default(),
             files: vec![file("src/a.ts", vec![function("f", 30, 10, Some(30.0))])],

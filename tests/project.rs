@@ -70,7 +70,7 @@ fn analysis() -> AnalysisReport {
 fn graph() -> DependencyReport {
     DependencyReport {
         schema_version: 1,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "test",
         files: vec![
             DependencyFile {
@@ -198,9 +198,9 @@ fn project_joins_every_section_and_recomputes_aggregates() {
     assert!(project.temporal_coupling.is_some());
     assert!(project.ownership.is_none());
     assert!(project.coverage.is_none());
-    assert_eq!(project.risk.model, "change-risk-v2");
+    assert_eq!(project.risk.model, "change-risk");
     assert_eq!(project.risk.rows.len(), 2);
-    assert_eq!(project.summary.risk_model, Some("change-risk-v2"));
+    assert_eq!(project.summary.risk_model, Some("change-risk"));
 
     let root = project
         .modules

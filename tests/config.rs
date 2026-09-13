@@ -11,8 +11,8 @@ const FULL: &str = r#"
 [analysis]
 exclude = ["generated/**", "vendor/**"]
 [metrics]
-cyclomatic_profile = "default-v1"
-cognitive_profile = "default-v1"
+cyclomatic_profile = "default"
+cognitive_profile = "default"
 [thresholds.function]
 cognitive = 15
 cyclomatic = 10
@@ -27,8 +27,8 @@ fn parses_full_config() {
         config,
         Config {
             analysis_excludes: vec!["generated/**".to_string(), "vendor/**".to_string(),],
-            cyclomatic_profile: "default-v1".to_string(),
-            cognitive_profile: "default-v1".to_string(),
+            cyclomatic_profile: "default".to_string(),
+            cognitive_profile: "default".to_string(),
             thresholds: config::Thresholds {
                 cognitive: Some(15),
                 cyclomatic: Some(10),
@@ -158,8 +158,8 @@ fn rejects_config_size_and_depth_limits() {
 fn parses_minimal_and_empty_configs() {
     let empty = parse_str("").unwrap();
     assert!(empty.analysis_excludes.is_empty());
-    assert_eq!(empty.cyclomatic_profile, "default-v1");
-    assert_eq!(empty.cognitive_profile, "default-v1");
+    assert_eq!(empty.cyclomatic_profile, "default");
+    assert_eq!(empty.cognitive_profile, "default");
     assert_eq!(empty.thresholds, config::Thresholds::default());
 
     let partial = parse_str("[thresholds.function]\ncognitive = 15\n").unwrap();

@@ -50,7 +50,7 @@ fn envelope_ok(result: &Value) {
         "maintainability",
         "crap",
     ] {
-        assert_eq!(result["metric_specs"][metric], "default-v1");
+        assert_eq!(result["metric_specs"][metric], "default");
     }
 }
 
@@ -283,13 +283,8 @@ fn explain_metric_covers_all_five_and_rejects_unknown() {
         let result = result_of(&response);
         envelope_ok(result);
         assert_eq!(result["metric"], metric);
-        assert_eq!(result["spec"], "default-v1");
-        assert!(
-            result["definition"]
-                .as_str()
-                .unwrap()
-                .contains("default-v1")
-        );
+        assert_eq!(result["spec"], "default");
+        assert!(result["definition"].as_str().unwrap().contains("default"));
     }
     let unknown = call_tool("explain_metric", serde_json::json!({ "metric": "vibes" }));
     assert_eq!(error_of(&unknown)["code"], -32602);

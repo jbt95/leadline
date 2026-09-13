@@ -176,7 +176,7 @@ leadline hotspots . --lcov coverage/lcov.info --format agent-json
 ```
 
 Hotspots rank files by `max cognitive complexity x changes in the selected window`
-(model `complexity-x-churn-v1`) and keep every dimension next to the score: cognitive
+(model `complexity-x-churn`) and keep every dimension next to the score: cognitive
 and cyclomatic complexity, CRAP, coverage, churn windows, lines added/deleted, days
 since the last change, and contributor counts. Git history is read with one streamed
 `git log --relative` walk; recency windows are relative to the HEAD commit time, so
@@ -237,7 +237,7 @@ Rank change risk before editing:
 leadline risk --format agent-json
 ```
 
-`risk` scores each file with the explainable `change-risk-v1` model
+`risk` scores each file with the explainable `change-risk` model
 (complexity, CRAP, churn, impact, ownership — weights and formulas in
 [docs/risk.md](docs/risk.md)). Unknown components stay `null` and the score
 renormalizes over what is known. It is informational only (exit `0`); never
@@ -272,4 +272,4 @@ cargo bench --bench analyzer
 cargo bench --bench history
 ```
 
-See [architecture](docs/architecture.md), [`default-v1` metric rules](docs/metrics.md), and [benchmark instructions](docs/benchmark.md).
+See [architecture](docs/architecture.md), [`default` metric rules](docs/metrics.md), and [benchmark instructions](docs/benchmark.md).

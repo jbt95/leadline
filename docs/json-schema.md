@@ -8,13 +8,13 @@ Reports are UTF-8 JSON. Paths use `/` separators. Floats use stable decimal form
 {
   "schema_version": 1,
   "analyzer_version": "0.1.0",
-  "metric_profile": "default-v1",
+  "metric_profile": "default",
   "metric_specs": {
-    "cyclomatic": "default-v1",
-    "cognitive": "default-v1",
-    "halstead": "default-v1",
-    "maintainability": "default-v1",
-    "crap": "default-v1"
+    "cyclomatic": "default",
+    "cognitive": "default",
+    "halstead": "default",
+    "maintainability": "default",
+    "crap": "default"
   },
   "files": [
     {
@@ -60,8 +60,8 @@ Reports are UTF-8 JSON. Paths use `/` separators. Floats use stable decimal form
 
 - `schema_version`: output compatibility marker (`1`).
 - `analyzer_version`: the `leadline` crate version that produced the report.
-- `metric_profile`: always `default-v1`; see `metrics.md` for rules.
-- `metric_specs`: per-family rule versions, each `default-v1` in 1.0.
+- `metric_profile`: always `default`; see `metrics.md` for rules.
+- `metric_specs`: per-family rule versions, each `default` in 1.0.
 - Function `id` is `<path>:<kind>:<start_byte>:<end_byte>`. `kind` is `function` (or `method` / `arrow` where the grammar distinguishes). Byte offsets are source bytes.
 - `coverage` and `crap` are numbers or `null`. `null` means unknown (no overlapping coverage lines); it never means zero.
 - `parse_errors` entries carry `kind`, `start_line`, `start_column`, `end_line`, `end_column`. They are inline per file, never fatal by themselves.
@@ -72,8 +72,8 @@ Reports are UTF-8 JSON. Paths use `/` separators. Floats use stable decimal form
 {
   "schema_version": 1,
   "analyzer_version": "0.1.0",
-  "metric_profile": "default-v1",
-  "metric_specs": { "cyclomatic": "default-v1", "cognitive": "default-v1", "halstead": "default-v1", "maintainability": "default-v1", "crap": "default-v1" },
+  "metric_profile": "default",
+  "metric_specs": { "cyclomatic": "default", "cognitive": "default", "halstead": "default", "maintainability": "default", "crap": "default" },
   "base": "HEAD~1",
   "functions": [
     { "path": "src/payment.ts", "name": "processPayment", "before": {}, "after": {} }
@@ -92,8 +92,8 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
 {
   "schema_version": 1,
   "analyzer_version": "0.2.0",
-  "metric_profile": "default-v1",
-  "model": "complexity-x-churn-v1",
+  "metric_profile": "default",
+  "model": "complexity-x-churn",
   "window": "90d",
   "git_available": true,
   "head_commit": "0c2d7309cd3c84d33e4ea8fec01a581cf5246b37",
@@ -126,7 +126,7 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
 }
 ```
 
-- `model`: the documented ordering rule (`complexity-x-churn-v1`); the
+- `model`: the documented ordering rule (`complexity-x-churn`); the
   dimensions next to it are the actual evidence. See `hotspots.md`.
 - `window`: `30d`, `90d`, or `365d`; `changes` and `score` use it.
 - `git_available: false` (directory outside a repository, unborn HEAD, or no
@@ -185,7 +185,7 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
 {
   "schema_version": 1,
   "analyzer_version": "0.2.0",
-  "metric_profile": "default-v1",
+  "metric_profile": "default",
   "files": [
     { "path": "src/a.ts", "fan_in": 1, "fan_out": 2 }
   ],
@@ -226,8 +226,8 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
 {
   "schema_version": 1,
   "analyzer_version": "0.2.0",
-  "metric_profile": "default-v1",
-  "model": "impact-v1",
+  "metric_profile": "default",
+  "model": "impact",
   "target": "src/b.ts",
   "files_analyzed": 4,
   "fan_in": 1,
@@ -265,8 +265,8 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
 {
   "schema_version": 1,
   "analyzer_version": "0.2.0",
-  "metric_profile": "default-v1",
-  "model": "change-risk-v2",
+  "metric_profile": "default",
+  "model": "change-risk",
   "window": "90d",
   "git_available": true,
   "head_commit": "0c2d7309cd3c84d33e4ea8fec01a581cf5246b37",
@@ -302,7 +302,7 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
 }
 ```
 
-- `model` is the versioned scoring rule (`change-risk-v2`); `score` is the
+- `model` is the versioned scoring rule (`change-risk`); `score` is the
   weight-renormalized component mean on a 0-100 scale. See `risk.md` for the
   per-component formulas, weights (complexity 20, CRAP 15, churn 20, impact
   20, ownership 10, policy 15), and caps.

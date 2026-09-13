@@ -54,7 +54,7 @@ every dimension, the selected window, the model name, and the Git reference.
 ## The hotspot score
 
 `score = max_cognitive x changes in the selected window`
-(model name `complexity-x-churn-v1`).
+(model name `complexity-x-churn`).
 
 This is the classic complexity-times-change-frequency heuristic. It is
 deliberately transparent: every factor is in the same row, and the score adds

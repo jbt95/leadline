@@ -75,7 +75,7 @@ fn parse_tree(path: &str, source: &[u8]) -> Result<(Language, Tree)> {
     Ok((language, tree))
 }
 
-/// One normalized leaf token for duplication analysis (`tokens-v1`).
+/// One normalized leaf token for duplication analysis (`tokens`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NormalizedToken {
     /// `<id>`, `<str>`, `<num>`, or the exact keyword/punctuation text.
@@ -92,7 +92,7 @@ pub(crate) struct TokenizedSource {
     pub(crate) line_count: u32,
 }
 
-/// Extracts `tokens-v1` normalized leaf tokens from `source`.
+/// Extracts `tokens` normalized leaf tokens from `source`.
 pub(crate) fn normalized_tokens(path: &str, source: &[u8]) -> Result<TokenizedSource> {
     let (language, tree) = parse_tree(path, source)?;
     let root = tree.root_node();

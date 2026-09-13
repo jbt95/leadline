@@ -1,4 +1,4 @@
-//! Token-level clone detection (`tokens-v1`) and drift.
+//! Token-level clone detection (`tokens`) and drift.
 //!
 //! Identifier, string, and number leaves normalize to categories; keywords and
 //! punctuation stay exact. Languages are separate partitions. The detector is
@@ -13,8 +13,8 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const DUPLICATION_SCHEMA_VERSION: u32 = 1;
-pub const DUPLICATION_PROFILE: &str = "tokens-v1";
-pub const DUPLICATION_DRIFT_MODEL: &str = "duplication-drift-v1";
+pub const DUPLICATION_PROFILE: &str = "tokens";
+pub const DUPLICATION_DRIFT_MODEL: &str = "duplication-drift";
 pub const TOKEN_CEILING: usize = 10_000_000;
 pub const COMPARISON_CEILING: usize = 10_000_000;
 

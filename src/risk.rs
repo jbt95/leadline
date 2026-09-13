@@ -1,4 +1,4 @@
-//! Policy- and concentration-aware change risk (`change-risk-v2`).
+//! Policy- and concentration-aware change risk (`change-risk`).
 //!
 //! The single risk model: static source metrics, Git history facts,
 //! ownership concentration, dependency impact, and architecture policy
@@ -17,7 +17,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 pub const RISK_SCHEMA_VERSION: u32 = 1;
-pub const RISK_MODEL: &str = "change-risk-v2";
+pub const RISK_MODEL: &str = "change-risk";
 
 pub const COMPONENT_WEIGHTS: [(&str, f64); 6] = [
     ("complexity", 20.0),
@@ -79,7 +79,7 @@ pub struct RiskReport {
     pub risks: Vec<RiskRow>,
 }
 
-/// Builds a complete v2 ranking (no truncation; consumers project budgets).
+/// Builds the complete ranking (no truncation; consumers project budgets).
 pub fn build(
     analysis: &AnalysisReport,
     history: &HistoryReport,

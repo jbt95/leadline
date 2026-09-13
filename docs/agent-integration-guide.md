@@ -8,7 +8,7 @@
 {
   "schema_version": 1,
   "analyzer_version": "0.1.0",
-  "metric_profile": "default-v1",
+  "metric_profile": "default",
   "functions": [
     { "id": "src/a.ts:function:0:48", "path": "src/a.ts", "name": "pay", "start_line": 1, "cyclomatic": 2, "cognitive": 1, "crap": 2.5, "coverage": 0.5 }
   ]
@@ -22,7 +22,7 @@ Only the fields an agent gates on are included. Full detail remains in `--json`.
 ```json
 {
   "schema_version": 1,
-  "model": "complexity-x-churn-v1",
+  "model": "complexity-x-churn",
   "window": "90d",
   "git_available": true,
   "summary": { "files_analyzed": 128, "hotspots": 10 },
@@ -54,7 +54,7 @@ of one file so an agent can gauge blast radius before editing:
 ```json
 {
   "schema_version": 1,
-  "model": "impact-v1",
+  "model": "impact",
   "target": "src/payment.ts",
   "files_analyzed": 128,
   "fan_in": 3,
@@ -84,7 +84,7 @@ an agent can pick the riskiest files to inspect before editing:
 ```json
 {
   "schema_version": 1,
-  "model": "change-risk-v2",
+  "model": "change-risk",
   "window": "90d",
   "git_available": true,
   "summary": { "files_analyzed": 128, "scope_files": 128, "risks": 10 },
@@ -112,7 +112,7 @@ leadline coupling <file> --format agent-json
 ```
 
 `risk` answers "which files are riskiest to touch?" (explainable
-`change-risk-v1` components, informational only);
+`change-risk` components, informational only);
 
 `impact` answers "what imports this file?" (static evidence, incomplete
 where language or runtime configuration decides the real target);
@@ -122,15 +122,17 @@ diff that covers them.
 
 ## MCP tools (read-only)
 
-The MCP server exposes five read-only tools. It never writes files, runs hooks, or executes project code.
+The MCP server exposes seven read-only tools. It never writes files, runs hooks, or executes project code.
 
 | Tool | Mirrors | Input | Output |
 | --- | --- | --- | --- |
-| `analyze` | `leadline analyze` | `path`, `lcov?`, `jacoco?` | Full JSON report. |
-| `function` | `leadline function` | `file`, `name` | One-function JSON report. |
-| `changed` | `leadline changed` | `base?`, `path?` | Changed JSON report. |
-| `check` | `leadline check` | `path`, thresholds | Violations-only JSON report. |
-| `version` | `leadline --version` | — | Version and schema identifiers. |
+| `analyze` | `leadline analyze` | `path?`, `coverage?`, `top?`, `sort_by?`, `min_crap?` | Ranked function rows. |
+| `analyze_changed` | `leadline changed` | `base?`, `path?`, `target?`, `renames?`, `explain?`, budget flags | Before/after changed rows. |
+| `analyze_function` | `leadline function` | `path`, `function`, `explain?` | One-function report, contributions with `explain`. |
+| `check` | `leadline check` | `path?`, `base?`/`baseline?`, `coverage?`, `thresholds?`, `regressions?` | Violations-only report. |
+| `explain_metric` | `docs/metrics.md` | `metric` | Definition of one metric. |
+| `repo_summary` | — | `path?`, `top?` | Totals plus top functions per metric. |
+| `test_targets` | `leadline test-targets` | `path?`, `coverage` (required), `top?` | Uncovered decision lines by CRAP. |
 
 ## Skill principles
 

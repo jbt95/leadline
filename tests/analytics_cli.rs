@@ -110,7 +110,7 @@ fn debt_json_reports_new_debt_and_gates_with_flag() {
         String::from_utf8_lossy(&output.stderr)
     );
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["model"], "change-risk-diff-v1");
+    assert_eq!(value["model"], "change-risk-diff");
     assert!(value["summary"]["new"].as_u64().unwrap() >= 1);
 
     let gate = leadline(&root, &["debt", "--base", "HEAD~1", "--fail-on-regression"]);

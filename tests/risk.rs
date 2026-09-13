@@ -131,7 +131,7 @@ fn empty_policy(graph: &DependencyReport) -> PolicyReport {
 fn graph_for_a() -> DependencyReport {
     DependencyReport {
         schema_version: DEPENDENCY_SCHEMA_VERSION,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "test",
         files: vec![
             DependencyFile {
@@ -241,7 +241,7 @@ fn caps_saturate_at_100() {
     let history = history(vec![history_file("src/a.ts", 200, 200, 200, 1)]);
     let graph = DependencyReport {
         schema_version: DEPENDENCY_SCHEMA_VERSION,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "test",
         files: vec![
             DependencyFile {
@@ -354,7 +354,7 @@ fn ranking_orders_by_score_then_path() {
     ]);
     let graph = DependencyReport {
         schema_version: DEPENDENCY_SCHEMA_VERSION,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "test",
         files: vec![
             DependencyFile {
@@ -425,7 +425,7 @@ fn build_returns_the_full_ranking_without_truncation() {
     let history = history(vec![]);
     let graph = DependencyReport {
         schema_version: DEPENDENCY_SCHEMA_VERSION,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "test",
         files: vec![
             DependencyFile {
@@ -467,7 +467,7 @@ fn window_selects_matching_changes_field() {
     let history = history(vec![history_file("src/a.ts", 2, 10, 40, 4)]);
     let graph = DependencyReport {
         schema_version: DEPENDENCY_SCHEMA_VERSION,
-        metric_profile: "default-v1",
+        metric_profile: "default",
         analyzer_version: "test",
         files: vec![DependencyFile {
             path: "src/a.ts".to_owned(),
@@ -654,7 +654,7 @@ fn cli_risk_json_shape_and_score_identity() {
         String::from_utf8_lossy(&output.stderr)
     );
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["model"], "change-risk-v2");
+    assert_eq!(value["model"], "change-risk");
     assert_eq!(value["window"], "90d");
     assert_eq!(value["git_available"], true);
     assert!(value.get("truncated").is_none());
@@ -694,7 +694,7 @@ fn cli_risk_agent_json_is_compact() {
         String::from_utf8_lossy(&output.stderr)
     );
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["model"], "change-risk-v2");
+    assert_eq!(value["model"], "change-risk");
     assert_eq!(value["window"], "90d");
     assert_eq!(value["summary"]["files_analyzed"], 2);
     assert_eq!(value["summary"]["risks"], 2);
@@ -911,5 +911,5 @@ fn weight_table_lists_exactly_the_six_components() {
         .map(|(_, weight)| *weight)
         .collect();
     assert_eq!(weights, [20.0, 15.0, 20.0, 20.0, 10.0, 15.0]);
-    assert_eq!(RISK_MODEL, "change-risk-v2");
+    assert_eq!(RISK_MODEL, "change-risk");
 }

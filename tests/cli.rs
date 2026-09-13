@@ -370,7 +370,7 @@ fn agent_json_shape_on_analyze() {
     assert!(output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["schema_version"], 1);
-    assert_eq!(value["metric_profile"], "default-v1");
+    assert_eq!(value["metric_profile"], "default");
     assert_eq!(value["summary"]["functions"], 1);
     assert_eq!(value["files"][0]["functions"][0]["name"], "alpha");
     std::fs::remove_dir_all(root).unwrap();
@@ -1076,7 +1076,7 @@ fn baseline_write_and_check_regression_gate() {
     let stored: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&snapshot).unwrap()).unwrap();
     assert_eq!(stored["schema_version"], 1);
-    assert_eq!(stored["metric_profile"], "default-v1");
+    assert_eq!(stored["metric_profile"], "default");
     assert_eq!(stored["functions"][0]["name"], "calc");
 
     std::fs::write(

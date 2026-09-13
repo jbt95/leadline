@@ -6,8 +6,8 @@
 //! [analysis]
 //! exclude = ["generated/**", "vendor/**"]
 //! [metrics]
-//! cyclomatic_profile = "default-v1"
-//! cognitive_profile = "default-v1"
+//! cyclomatic_profile = "default"
+//! cognitive_profile = "default"
 //! [thresholds.function]
 //! cognitive = 15
 //! cyclomatic = 10
@@ -28,7 +28,7 @@ use std::path::Path;
 use toml::Value;
 
 /// The only metric profile accepted for now.
-pub const DEFAULT_PROFILE: &str = "default-v1";
+pub const DEFAULT_PROFILE: &str = "default";
 
 const CONFIG_FILE: &str = "leadline.toml";
 /// `leadline.toml` size limit, enforced before parsing.

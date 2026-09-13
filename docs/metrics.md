@@ -1,4 +1,4 @@
-# Metric specification: `default-v1`
+# Metric specification: `default`
 
 This specification is project-defined. It does not claim exact Sonar or another analyzer compatibility.
 
@@ -14,7 +14,7 @@ Every function starts at 1. Add 1 for each `if`, loop, `catch`, non-default swit
 
 Add `1 + current nesting` for `if`, loops, `catch`, `switch`, and ternary expressions. An `else if` adds 1 and continues the original chain. A final `else` adds 1. A labeled `break` or `continue` adds 1. Structural constructs increase nesting for structural descendants.
 
-For each logical expression, the first `&&`, `||`, or `??` adds 1. A change to another operator adds 1. Repeated adjacent operators add nothing. Parentheses do not start a new sequence. Recursion is not scored in `default-v1` because syntax alone cannot resolve calls safely.
+For each logical expression, the first `&&`, `||`, or `??` adds 1. A change to another operator adds 1. Repeated adjacent operators add nothing. Parentheses do not start a new sequence. Recursion is not scored in `default` because syntax alone cannot resolve calls safely.
 
 Lambdas, arrows, and nested functions receive independent scores. Their bodies do not increase the enclosing function score.
 
