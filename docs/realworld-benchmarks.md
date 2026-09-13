@@ -23,7 +23,7 @@ fixture dir skips gracefully with a pointer to the fetch script.
 - Criterion throughput (`realworld/<name>`) plus a post-group floor check
   printing `measured vs floor` in files/sec.
 
-## Baseline (M4 Mac, 2026-09-13, floating main)
+## Baseline (Apple M2 Pro, 32 GiB, macOS 26.6.2, Rust 1.90.0, 2026-09-13, floating main)
 
 | Fixture | Files | Functions | Mean analyze | Throughput | Floor |
 | --- | --- | --- | --- | --- | --- |

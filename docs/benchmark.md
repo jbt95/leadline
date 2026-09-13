@@ -76,6 +76,35 @@ Run the same command on the same machine before comparing a later result:
 cargo bench --bench analyzer -- --warm-up-time 0.1 --measurement-time 0.2 --sample-size 10
 ```
 
+## Real-world baseline
+
+The 2026-09-13 real-world baseline used leadline 0.3.2, Criterion 0.8.2,
+and Rust 1.90.0 on the same Apple M2 Pro machine as the source baseline
+above. Fixtures are floating-main shallow clones fetched with
+`scripts/realworld.sh`; SHAs at measurement time: TanStack Query
+`b8fdc28`, Nest `a3a31b9`, React `ccea5fd`, Spring Boot `58b8ce6c`.
+Criterion defaults (not the 10-sample synthetic config); times are group
+means for `analyze_path` over the fixture subpath.
+
+```console
+bash scripts/realworld.sh
+cargo bench --bench realworld
+```
+
+| Fixture (subpath) | Files | Functions | Mean time | Throughput |
+| --- | ---: | ---: | ---: | ---: |
+| TanStack Query (`packages`) | 692 | 20,748 | 140.81 ms | 4,914 files/s |
+| Nest (`packages`) | 902 | 9,706 | 83.18 ms | 10,843 files/s |
+| React (`packages`) | 1,838 | 39,299 | 480.33 ms | 3,827 files/s |
+| Spring Boot (root) | 8,392 | 65,832 | 907.33 ms | 9,248 files/s |
+
+The enforced floors in `benches/realworld.toml` sit ~50% below these
+(2,400 / 5,400 / 1,900 / 4,600 files/s) so they catch real regressions,
+not noise or upstream growth. Floating `main` means later runs measure
+different code: compare same-machine before/after, re-baseline the
+manifest when upstream moves (per `docs/realworld-benchmarks.md`), and
+never treat these absolutes as portable.
+
 ## Git history baseline
 
 The 2026-09-13 history baseline used leadline 0.2.0 with the same machine, toolchain, and Criterion version as the source baseline above. Each repository was staged before the timed loop; the raw `git log` case runs the exact production flags so that `raw_git_log` and `history_analysis` bound parsing overhead from both sides.
