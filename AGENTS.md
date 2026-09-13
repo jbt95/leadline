@@ -1,20 +1,14 @@
 # AGENTS.md — working rules for leadline
 
-## Product status
+## Backwards compatibility
 
-leadline has **no public release and no active users**. There is nothing
-to stay compatible with: no backwards-compatibility shims, no versioned
-model-name suffixes (`-v1`/`-v2`), no deprecated-flag aliases, no
-migration paths. Model names are plain words (`change-risk`, `impact`,
-`complexity-x-churn`, `mutation`, `tokens`, `duplication-drift`,
-`change-risk-diff`) and the metric profile is `default`.
-
-When behavior must change, change it outright: update the code, the
-tests, the docs, and the CHANGELOG in the same commit. Never add a
-`v2` module next to a `v1` module, never keep an old JSON field
-"for compatibility", never branch on a version string to preserve
-past output. If a compat layer ever becomes necessary (first public
-release), that decision gets its own proposal — it is not the default.
+Do not add backwards-compatibility machinery unless the user explicitly
+asks for it: no versioned name suffixes (`-v1`/`-v2`), no parallel old/new
+modules, no deprecated-flag aliases, no migration paths, no "keep the old
+field for compatibility". When behavior must change, change it outright
+and update the code, the tests, the docs, and the CHANGELOG in the same
+commit. If compatibility ever becomes necessary, that decision gets its
+own explicit request — it is never the default.
 
 ## Definitions that stay versioned
 
