@@ -35,6 +35,10 @@ name = "history"
 harness = false
 
 [[bench]]
+name = "duplication"
+harness = false
+
+[[bench]]
 name = "source_snapshot"
 harness = false
 
