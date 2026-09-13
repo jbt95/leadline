@@ -2,6 +2,7 @@
 
 use crate::core::METRIC_PROFILE;
 use crate::parser::{ParsedDependencies, RawDependency, RawDependencyKind, extract_dependencies};
+use crate::source_snapshot::SourceEntry;
 use crate::{Result, normalized_relative_path};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -76,6 +77,23 @@ pub fn analyze_dependencies(path: &Path, excludes: &[String]) -> Result<Dependen
             parsed,
         });
     }
+    Ok(dependency_report(parsed_files))
+}
+
+/// Extracts and resolves dependencies among in-memory source entries.
+pub fn analyze_dependencies_from_sources(entries: &[SourceEntry]) -> Result<DependencyReport> {
+    let mut parsed_files = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let parsed = extract_dependencies(&entry.path, &entry.bytes)?;
+        parsed_files.push(ParsedFile {
+            path: entry.path.clone(),
+            parsed,
+        });
+    }
+    Ok(dependency_report(parsed_files))
+}
+
+fn dependency_report(mut parsed_files: Vec<ParsedFile>) -> DependencyReport {
     parsed_files.sort_by(|left, right| left.path.cmp(&right.path));
 
     let paths: BTreeSet<String> = parsed_files.iter().map(|file| file.path.clone()).collect();
@@ -128,7 +146,7 @@ pub fn analyze_dependencies(path: &Path, excludes: &[String]) -> Result<Dependen
     let files = dependency_files(&parsed_files, &edge_pairs);
     let cycles = dependency_cycles(&parsed_files, &edge_pairs);
 
-    Ok(DependencyReport {
+    DependencyReport {
         schema_version: DEPENDENCY_SCHEMA_VERSION,
         metric_profile: METRIC_PROFILE,
         analyzer_version: env!("CARGO_PKG_VERSION"),
@@ -136,7 +154,7 @@ pub fn analyze_dependencies(path: &Path, excludes: &[String]) -> Result<Dependen
         edges,
         unresolved,
         cycles,
-    })
+    }
 }
 
 fn analysis_root(path: &Path) -> &Path {

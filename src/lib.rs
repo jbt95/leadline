@@ -17,6 +17,7 @@ pub mod parser;
 pub mod report;
 pub mod risk;
 pub mod sarif;
+pub mod source_snapshot;
 pub mod test_targets;
 
 use crate::core::{
@@ -24,6 +25,7 @@ use crate::core::{
 };
 use crate::coverage::CoverageMap;
 use crate::parser::{ParserBackend, TreeSitterBackend};
+use crate::source_snapshot::SourceEntry;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -52,6 +54,30 @@ pub fn analyze_path_with_excludes(
     let mut files = paths
         .par_iter()
         .map(|file| analyze_file(file, path, coverage))
+        .collect::<Result<Vec<_>>>()?;
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(report(files))
+}
+
+/// Analyzes in-memory source entries as if they were discovered under one root.
+///
+/// Entries use analysis-root-relative `/` paths. Parallel analysis preserves
+/// no input order: the returned report sorts files by path so equivalent
+/// filesystem and in-memory file sets produce identical reports.
+pub fn analyze_sources(
+    entries: &[SourceEntry],
+    coverage: Option<&CoverageMap>,
+) -> Result<AnalysisReport> {
+    let backend = TreeSitterBackend;
+    let mut files = entries
+        .par_iter()
+        .map(|entry| {
+            let mut result = backend.analyze(&entry.path, &entry.bytes)?;
+            if let Some(coverage) = coverage {
+                coverage.apply(&mut result);
+            }
+            Ok(result)
+        })
         .collect::<Result<Vec<_>>>()?;
     files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(report(files))
