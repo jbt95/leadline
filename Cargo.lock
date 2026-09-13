@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "leadline"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "blake3",
  "criterion",

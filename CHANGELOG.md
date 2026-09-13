@@ -2,6 +2,20 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## 0.3.2 - 2026-09-13
+
+### Fixed
+
+- Agent integrations: the shared TypeScript adapter now decodes the analyzer's real `agent-json` shapes — `files[].functions[]` for analyze/function/check and `summary`/`regressions`/`improvements` for changed — instead of a schema the binary never emitted, and it keeps `leadline check` stdout on exit 1 (threshold violations) instead of discarding it.
+- Pi and OMP extensions now register on the real extension API (`export default`, `pi.registerTool` with TypeBox parameter schemas) and attach warn-mode post-edit feedback to tool results; the previous fictional `ExtensionHost`/`activate()` shim was never called by any harness.
+- OpenCode V2: the plugin now uses the shared adapter core, and the install docs say to link `plugin-v2/` under `~/.config/opencode/plugins/` only. A second `plugins` entry for the same directory fails the whole reload with `Duplicate plugin ID: leadline`.
+- Claude Code: added the repository-root `.claude-plugin/marketplace.json`, hooks resolve through `${CLAUDE_PLUGIN_ROOT}` instead of `$CLAUDE_PROJECT_DIR`, and the Stop hook no longer discards violation output before printing it.
+- `leadline check` from an integration now falls back to the documented default thresholds only when neither CLI flags nor `leadline.toml` define one.
+
+### Added
+
+- Root `package.json` with a `pi` manifest, so `pi install git:github.com/jbt95/leadline` and `omp plugin install` load the extension and skill directly from the repository.
+
 ## 0.3.1 - 2026-09-13
 
 ### Fixed
