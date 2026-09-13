@@ -2,6 +2,17 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## 0.5.1 - 2026-09-13
+
+### Fixed
+
+- Synchronized the Rust crate, Pi, OMP, and shared TypeScript adapter package versions for the release tag.
+- Added the public repository URL to crate metadata and excluded dev-only agent/workflow files from the published crate package.
+
+### Changed
+
+- Strip release binaries to reduce published archive size.
+
 ## 0.5.0 - 2026-09-13
 
 ### Fixed
