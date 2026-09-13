@@ -8,6 +8,7 @@ pub mod coverage;
 pub mod debt;
 pub mod diff;
 pub mod discovery;
+pub mod duplication;
 pub mod external;
 pub mod git;
 pub mod graph;

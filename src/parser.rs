@@ -75,6 +75,89 @@ fn parse_tree(path: &str, source: &[u8]) -> Result<(Language, Tree)> {
     Ok((language, tree))
 }
 
+/// One normalized leaf token for duplication analysis (`tokens-v1`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NormalizedToken {
+    /// `<id>`, `<str>`, `<num>`, or the exact keyword/punctuation text.
+    pub(crate) text: String,
+    pub(crate) line: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TokenizedSource {
+    pub(crate) language: Language,
+    pub(crate) tokens: Vec<NormalizedToken>,
+    /// `ERROR`/`MISSING` leaf count; non-zero excludes the file from clones.
+    pub(crate) parse_errors: usize,
+    pub(crate) line_count: u32,
+}
+
+/// Extracts `tokens-v1` normalized leaf tokens from `source`.
+pub(crate) fn normalized_tokens(path: &str, source: &[u8]) -> Result<TokenizedSource> {
+    let (language, tree) = parse_tree(path, source)?;
+    let root = tree.root_node();
+    let mut tokens = Vec::new();
+    let mut parse_errors = 0usize;
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.is_error() || node.is_missing() {
+            parse_errors += 1;
+        }
+        if node.child_count() == 0 {
+            if let Some(text) = normalize_leaf(node, source) {
+                tokens.push(NormalizedToken {
+                    text,
+                    line: node.start_position().row as u32 + 1,
+                });
+            }
+        } else {
+            let mut cursor = node.walk();
+            stack.extend(node.children(&mut cursor));
+        }
+    }
+    tokens.sort_by_key(|token| token.line);
+    Ok(TokenizedSource {
+        language,
+        tokens,
+        parse_errors,
+        line_count: source.iter().filter(|byte| **byte == b'\n').count() as u32 + 1,
+    })
+}
+
+fn normalize_leaf(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let kind = node.kind();
+    if kind.contains("comment") {
+        return None;
+    }
+    if matches!(
+        kind,
+        "identifier"
+            | "property_identifier"
+            | "type_identifier"
+            | "field_identifier"
+            | "shorthand_property_identifier"
+            | "shorthand_property_identifier_pattern"
+            | "statement_identifier"
+    ) {
+        return Some("<id>".to_owned());
+    }
+    if kind.contains("string") || kind == "template_chars" || kind == "string_fragment" {
+        return Some("<str>".to_owned());
+    }
+    if kind.contains("number")
+        || kind == "integer"
+        || kind == "float"
+        || kind == "decimal_integer_literal"
+    {
+        return Some("<num>".to_owned());
+    }
+    let text = node.utf8_text(source).ok()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(text.to_owned())
+}
+
 pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDependencies> {
     let (language, tree) = parse_tree(path, source)?;
     let root = tree.root_node();
