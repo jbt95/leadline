@@ -16,12 +16,12 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 - Architecture policy (`leadline::policy`) and `change-risk-v2` (`leadline::risk_v2`): ordered deny rules over high-confidence edges, `new`/`existing`/`resolved` drift, and policy/concentration-aware scoring. `change-risk-v1` stays byte-for-byte unchanged.
 - Canonical Project model (`leadline::project`) with meta, summary, modules, files, functions, dependencies, cycles, Git activity, coupling, ownership, coverage, mutation, test relationships, duplication, policy violations, risk, and optional trend points.
 - Trend snapshots (`leadline::snapshots`): HEAD-tree capture, config/model-aware keys, idempotent append, `--replace` for changed inputs, and lock-protected atomic writes; `leadline snapshot --output FILE`.
-- Orchestration (`leadline::analytics`) and new CLI commands: `leadline project`, `leadline debt`, and `leadline snapshot` with JSON and agent-JSON projections.
+- Orchestration (`leadline::analytics`) and new CLI commands: `leadline project`, `leadline debt`, `leadline snapshot`, `leadline mutation`, `leadline duplication`, and `leadline policy` with JSON/agent-JSON projections and gates.
 - Configuration: `[duplication]` settings and `[[architecture.rules]]` with strict validation; bounded external inputs (config 1 MiB/16 levels, XML/JSON per-file and aggregate limits, JSON/XML depth caps, DTD/entity/encoding rejection) and strict report-path parsing.
 
 ### Notes
 
-- Remaining E-I work on this branch: static web report generation, focused `mutation`/`duplication`/`policy` CLI commands, MCP tool parity, and Project coverage/mutation CLI inputs.
+- Remaining E-I work: static web report generation (Milestone F UI) and MCP tool parity for the new analytics surfaces.
 
 ## Unreleased
 
