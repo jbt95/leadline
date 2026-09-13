@@ -364,3 +364,303 @@ fn serialization_is_deterministic() {
         serde_json::to_vec(&second).unwrap()
     );
 }
+
+// --- Task 2 CLI tests (append-only; Task 1 unit tests above untouched) ---
+
+static CLI_RISK_NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn cli_risk_git(root: &std::path::Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn cli_risk_temp_dir(prefix: &str) -> std::path::PathBuf {
+    let id = CLI_RISK_NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("{prefix}-{}-{id}", std::process::id()));
+    std::fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn cli_risk_risky_source() -> String {
+    let mut source = String::from("export function risky(x: number): number {\n  let y = 0;\n");
+    for index in 0..30 {
+        source.push_str(&format!("  if (x > {index}) {{ y += 1; }}\n"));
+    }
+    source.push_str("  return y;\n}\n");
+    source
+}
+
+const CLI_RISK_CALM_SOURCE: &str = "export function calm(x: number): number {\n  return x;\n}\n";
+
+fn risk_fixture() -> std::path::PathBuf {
+    let root = cli_risk_temp_dir("leadline-risk");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("risky.ts"), cli_risk_risky_source()).unwrap();
+    std::fs::write(src.join("calm.ts"), CLI_RISK_CALM_SOURCE).unwrap();
+    cli_risk_git(&root, &["init", "-q"]);
+    cli_risk_git(&root, &["config", "user.email", "a@example.invalid"]);
+    cli_risk_git(&root, &["config", "user.name", "Author A"]);
+    cli_risk_git(&root, &["add", "-A"]);
+    cli_risk_git(&root, &["commit", "-q", "-m", "one"]);
+    for index in 2..=5 {
+        let path = src.join("risky.ts");
+        let mut contents = std::fs::read_to_string(&path).unwrap();
+        contents.push_str(&format!("// churn {index}\n"));
+        std::fs::write(&path, contents).unwrap();
+        cli_risk_git(&root, &["add", "-A"]);
+        cli_risk_git(&root, &["commit", "-q", "-m", &format!("churn {index}")]);
+    }
+    root
+}
+
+fn cli_risk_expected_score(components: &serde_json::Value) -> f64 {
+    let weights = [
+        ("complexity", 25.0),
+        ("crap", 20.0),
+        ("churn", 20.0),
+        ("impact", 20.0),
+        ("ownership", 15.0),
+    ];
+    let mut weighted = 0.0_f64;
+    let mut total = 0.0_f64;
+    for (name, weight) in weights {
+        if let Some(value) = components[name].as_f64() {
+            weighted += weight * value;
+            total += weight;
+        }
+    }
+    weighted / total
+}
+
+#[test]
+fn cli_risk_terminal_ranks_riskiest_first() {
+    let root = risk_fixture(); // risky.ts committed 5x with a cognitive-30 function; calm.ts once
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["risk"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Top change risks"));
+    let risky = stdout.find("src/risky.ts").unwrap();
+    let calm = stdout.find("src/calm.ts").unwrap();
+    assert!(risky < calm);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_risk_json_shape_and_score_identity() {
+    let root = risk_fixture();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["risk", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["model"], "change-risk-v1");
+    assert_eq!(value["window"], "90d");
+    assert_eq!(value["git_available"], true);
+    let risks = value["risks"].as_array().unwrap();
+    assert_eq!(risks.len(), 2);
+    assert_eq!(risks[0]["path"], "src/risky.ts");
+    for row in risks {
+        let components = &row["components"];
+        assert!(components.get("complexity").is_some());
+        assert!(components.get("crap").is_some());
+        assert!(components.get("churn").is_some());
+        assert!(components.get("impact").is_some());
+        assert!(components.get("ownership").is_some());
+        assert!(components["policy"].is_null());
+        let expected = cli_risk_expected_score(components);
+        let score = row["score"].as_f64().unwrap();
+        assert!(
+            (score - expected).abs() < 1e-9,
+            "score {score} != recomputed {expected}"
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_risk_agent_json_is_compact() {
+    let root = risk_fixture();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["risk", "--format", "agent-json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["model"], "change-risk-v1");
+    assert_eq!(value["window"], "90d");
+    assert_eq!(value["summary"]["files_analyzed"], 2);
+    assert_eq!(value["summary"]["risks"], 2);
+    let risks = value["risks"].as_array().unwrap();
+    assert_eq!(risks.len(), 2);
+    assert_eq!(risks[0]["path"], "src/risky.ts");
+    assert!(risks[0].get("score").is_some());
+    assert!(risks[0].get("components").is_some());
+    assert!(risks[0].get("raw").is_none());
+    assert!(value.get("analyzer_version").is_none());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_risk_since_window_accepted() {
+    let root = risk_fixture();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["risk", "--since", "30d", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["window"], "30d");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_risk_rejects_unknown_window() {
+    let root = risk_fixture();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["risk", "--since", "9d"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("30d"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_risk_json_and_agent_json_are_exclusive() {
+    let root = risk_fixture();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["risk", "--json", "--format", "agent-json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_risk_json_is_deterministic() {
+    let root = risk_fixture();
+    let args = ["risk", "--json"];
+    let first = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(args)
+        .output()
+        .unwrap();
+    let second = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+    assert!(second.status.success());
+    assert_eq!(first.stdout, second.stdout);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_risk_without_git_still_ranks_with_null_churn() {
+    let root = cli_risk_temp_dir("leadline-risk-nogit");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("risky.ts"), cli_risk_risky_source()).unwrap();
+    std::fs::write(src.join("calm.ts"), CLI_RISK_CALM_SOURCE).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["risk", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["git_available"], false);
+    let risks = value["risks"].as_array().unwrap();
+    assert_eq!(risks.len(), 2);
+    assert_eq!(risks[0]["path"], "src/risky.ts");
+    assert!(risks[0]["components"]["churn"].is_null());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_risk_empty_directory_is_incomplete() {
+    let root = cli_risk_temp_dir("leadline-risk-empty");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["risk"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_risk_limit_truncates() {
+    let root = risk_fixture();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["risk", "--limit", "1", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["truncated"], true);
+    assert_eq!(value["risks"].as_array().unwrap().len(), 1);
+    assert_eq!(value["risks"][0]["path"], "src/risky.ts");
+    let terminal = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["risk", "--limit", "1"])
+        .output()
+        .unwrap();
+    assert!(terminal.status.success());
+    let stdout = String::from_utf8(terminal.stdout).unwrap();
+    assert!(stdout.contains("raise --limit"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_risk_rejects_unknown_flags() {
+    let root = risk_fixture();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["risk", "--bogus"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    std::fs::remove_dir_all(root).unwrap();
+}

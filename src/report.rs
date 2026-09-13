@@ -4,6 +4,7 @@ use crate::diff::ChangedReport;
 use crate::graph::DependencyReport;
 use crate::hotspots::HotspotReport;
 use crate::impact::ImpactReport;
+use crate::risk::RiskReport;
 use std::fmt::Write;
 
 pub fn terminal(report: &AnalysisReport) -> String {
@@ -320,6 +321,113 @@ pub fn terminal_hotspots(report: &HotspotReport) -> String {
         );
     }
     output
+}
+
+pub fn terminal_risk(report: &RiskReport) -> String {
+    let mut output = String::new();
+    if !report.git_available {
+        output.push_str(
+            "Git history unavailable (no repository or no commits); churn and ownership unknown.\n\n",
+        );
+    }
+    if report.risks.is_empty() {
+        return output;
+    }
+    let _ = writeln!(
+        output,
+        "Top change risks (window: {}, model: {})\n",
+        report.window, report.model
+    );
+    for (index, risk) in report.risks.iter().enumerate() {
+        let _ = writeln!(output, "{}. {}", index + 1, risk.path);
+        output.push('\n');
+        let _ = writeln!(output, "   Risk score       {:>8.1}", risk.score);
+        let _ = writeln!(
+            output,
+            "   Complexity       {:>8}",
+            risk_component(risk.components.complexity)
+        );
+        let _ = writeln!(
+            output,
+            "   CRAP             {:>8}",
+            risk_component(risk.components.crap)
+        );
+        let _ = writeln!(
+            output,
+            "   Churn            {:>8}",
+            risk_component(risk.components.churn)
+        );
+        let _ = writeln!(
+            output,
+            "   Impact           {:>8}",
+            risk_component(risk.components.impact)
+        );
+        let _ = writeln!(
+            output,
+            "   Ownership        {:>8}",
+            risk_component(risk.components.ownership)
+        );
+        let _ = writeln!(
+            output,
+            "   Policy           {:>8}",
+            risk_component(risk.components.policy)
+        );
+        let _ = writeln!(output, "   Cognitive (max)  {:>8}", risk.raw.max_cognitive);
+        let _ = writeln!(output, "   Cyclomatic (max) {:>8}", risk.raw.max_cyclomatic);
+        let _ = writeln!(
+            output,
+            "   CRAP (max)       {:>8}",
+            risk.raw
+                .max_crap
+                .map(|value| format!("{value:.1}"))
+                .unwrap_or_else(|| "n/a".to_owned())
+        );
+        let _ = writeln!(
+            output,
+            "   Changes / {}  {:>8}",
+            report.window,
+            risk.raw
+                .changes
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "n/a".to_owned())
+        );
+        let _ = writeln!(
+            output,
+            "   Contributors     {:>8}",
+            risk.raw
+                .contributors
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "n/a".to_owned())
+        );
+        let _ = writeln!(
+            output,
+            "   Blast radius     {:>8} of {} files ({:.1}%)",
+            risk.raw.blast_radius,
+            report.files_analyzed.max(1),
+            risk.raw.blast_radius_percent
+        );
+        let _ = writeln!(
+            output,
+            "   Fan-in / out     {:>8} / {}",
+            risk.raw.fan_in, risk.raw.fan_out
+        );
+        output.push('\n');
+    }
+    if report.truncated {
+        let _ = writeln!(
+            output,
+            "Showing the top {} of {} files (raise --limit for more).\n",
+            report.risks.len(),
+            report.files_analyzed
+        );
+    }
+    output
+}
+
+fn risk_component(value: Option<f64>) -> String {
+    value
+        .map(|score| format!("{score:.1}"))
+        .unwrap_or_else(|| "n/a".to_owned())
 }
 
 fn function_block(output: &mut String, function: &FunctionAnalysis) {

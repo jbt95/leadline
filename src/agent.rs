@@ -4,6 +4,7 @@ use crate::diff::ChangedReport;
 use crate::graph::DependencyReport;
 use crate::hotspots::HotspotReport;
 use crate::impact::ImpactReport;
+use crate::risk::RiskReport;
 use serde_json::{Value, json};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -321,6 +322,44 @@ pub fn dependencies_agent_json(report: &DependencyReport) -> Value {
         "cycles": cycles,
         "unresolved": unresolved,
         "truncated": false,
+    })
+}
+
+/// Compact agent-oriented view of a change-risk report.
+///
+/// Keeps one row per file with the score and its explainable components;
+/// null components stay null so agents can tell unknown from zero. The full
+/// report keeps the raw dimensions.
+pub fn risk_agent_json(report: &RiskReport) -> Value {
+    let risks: Vec<Value> = report
+        .risks
+        .iter()
+        .map(|risk| {
+            json!({
+                "path": risk.path,
+                "score": risk.score,
+                "components": {
+                    "complexity": risk.components.complexity,
+                    "crap": risk.components.crap,
+                    "churn": risk.components.churn,
+                    "impact": risk.components.impact,
+                    "ownership": risk.components.ownership,
+                    "policy": risk.components.policy,
+                },
+            })
+        })
+        .collect();
+    json!({
+        "schema_version": report.schema_version,
+        "model": report.model,
+        "window": report.window,
+        "git_available": report.git_available,
+        "summary": {
+            "files_analyzed": report.files_analyzed,
+            "risks": report.risks.len(),
+        },
+        "risks": risks,
+        "truncated": report.truncated,
     })
 }
 
