@@ -32,10 +32,8 @@ fn adapter_and_existing_consumers_disable_fetch_locks_and_stdin() {
 
         let output = leadline::git::run(&root, &["status"]).unwrap();
         assert!(output.status.success());
-        assert_eq!(
-            leadline::git::run_optional(&root, &["optional-missing"]).unwrap(),
-            None
-        );
+        assert!(leadline::git::run_optional(&root, &["missing-object"]).is_err());
+        assert!(leadline::git::run_optional(&root, &["arbitrary-failure"]).is_err());
         assert_eq!(
             leadline::git::repo_root(&root).unwrap(),
             Some(std::fs::canonicalize(&root).unwrap())
@@ -78,6 +76,63 @@ fn adapter_and_existing_consumers_disable_fetch_locks_and_stdin() {
 }
 
 #[test]
+fn diff_treats_a_path_missing_from_the_base_as_absent() {
+    let _lock = env_lock();
+    let root = temporary_directory("missing-base-path");
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "test@example.invalid"]);
+    git(&root, &["config", "user.name", "Test"]);
+    git(&root, &["commit", "--allow-empty", "-qm", "base"]);
+    std::fs::write(root.join("added.ts"), "function added() { return 1; }\n").unwrap();
+
+    let report = leadline::diff::analyze_changed(&root, "HEAD").unwrap();
+    assert_eq!(report.functions.len(), 1);
+    assert!(report.functions[0].before.is_none());
+    assert!(report.functions[0].after.is_some());
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn diff_propagates_a_missing_object_failure() {
+    let _lock = env_lock();
+    let root = temporary_directory("diff-missing-object");
+    let bin = root.join("bin");
+    let log = root.join("git.log");
+    std::fs::create_dir(&bin).unwrap();
+    std::fs::write(root.join("app.ts"), "function app() { return 1; }\n").unwrap();
+    write_fake_git(&bin.join("git"));
+
+    let error = {
+        let _env = FakeGitEnv::install(&bin, &log, &root);
+        leadline::diff::analyze_changed(&root, "HEAD").unwrap_err()
+    };
+    assert!(error.to_string().contains("missing promisor object"));
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn history_propagates_an_arbitrary_repository_failure() {
+    let _lock = env_lock();
+    let root = temporary_directory("history-failure");
+    let bin = root.join("bin");
+    let log = root.join("git.log");
+    std::fs::create_dir(&bin).unwrap();
+    write_fake_git(&bin.join("git"));
+
+    let error = {
+        let _env = FakeGitEnv::install(&bin, &log, &root);
+        leadline::history::analyze_history(&root).unwrap_err()
+    };
+    assert!(error.to_string().contains("unsafe repository"));
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn repo_root_returns_none_outside_a_repository() {
     let _lock = env_lock();
     let root = temporary_directory("not-a-repo");
@@ -100,7 +155,7 @@ fn repo_root_finds_the_canonical_repository_root() {
 }
 
 #[test]
-fn resolve_commit_returns_metadata_and_errors_for_a_missing_object() {
+fn resolve_commit_peels_annotated_tags_and_rejects_non_commits_and_ranges() {
     let _lock = env_lock();
     let root = temporary_directory("resolve");
     git(&root, &["init", "-q"]);
@@ -114,11 +169,19 @@ fn resolve_commit_returns_metadata_and_errors_for_a_missing_object() {
     let expected_timestamp = git_stdout(&root, &["show", "-s", "--format=%ct", "HEAD"])
         .parse::<i64>()
         .unwrap();
+    git(&root, &["tag", "-am", "release", "v1"]);
     assert_eq!(
-        leadline::git::resolve_commit(&root, "HEAD").unwrap(),
+        leadline::git::resolve_commit(&root, "v1").unwrap(),
         (expected_commit, expected_timestamp)
     );
-    assert!(leadline::git::resolve_commit(&root, "definitely-missing").is_err());
+
+    let blob = git_stdout(&root, &["hash-object", "-w", "a.txt"]);
+    assert!(leadline::git::resolve_commit(&root, &blob).is_err());
+
+    std::fs::write(root.join("a.txt"), "two\n").unwrap();
+    git(&root, &["add", "a.txt"]);
+    git_dated(&root, &["commit", "-qm", "two"], "2025-01-03T03:04:05Z");
+    assert!(leadline::git::resolve_commit(&root, "HEAD~1..HEAD").is_err());
 
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -200,16 +263,35 @@ fn write_fake_git(path: &Path) {
 
 case "$1" in
   status) exit 0 ;;
-  optional-missing) printf 'missing object\n' >&2; exit 1 ;;
+  missing-object) printf 'fatal: missing promisor object\n' >&2; exit 128 ;;
+  arbitrary-failure) printf 'fatal: arbitrary failure\n' >&2; exit 2 ;;
   rev-parse)
     if [ "$2" = "--show-toplevel" ]; then
       printf '%s\n' "$FAKE_GIT_ROOT"
       exit 0
     fi
     ;;
-  diff) exit 0 ;;
+  diff)
+    case "$PWD" in
+      *diff-missing-object*) printf 'M\000app.ts\000' ;;
+    esac
+    exit 0
+    ;;
+  --literal-pathspecs)
+    case "$PWD:$2" in
+      *diff-missing-object*:ls-tree) printf '100644 blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tapp.ts\000'; exit 0 ;;
+    esac
+    ;;
   ls-files) exit 0 ;;
+  show)
+    case "$PWD" in
+      *diff-missing-object*) printf 'fatal: missing promisor object\n' >&2; exit 128 ;;
+    esac
+    ;;
   log)
+    case "$PWD" in
+      *history-failure*) printf 'fatal: unsafe repository\n' >&2; exit 128 ;;
+    esac
     if [ "$2" = "-1" ]; then
       printf '{FAKE_COMMIT}'
       printf '\000'

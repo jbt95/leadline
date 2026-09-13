@@ -174,17 +174,7 @@ fn workdir_for(scope: &Path) -> &Path {
 ///
 /// The tuple is `(commit, timestamp)`; both are `None` for an unborn HEAD.
 pub(crate) fn repository_head(workdir: &Path) -> Result<Option<(Option<String>, Option<i64>)>> {
-    let Some(head) = git::run_optional(
-        workdir,
-        &[
-            "log",
-            "-1",
-            "--no-show-signature",
-            "--no-notes",
-            "--format=%H%x00%ct",
-        ],
-    )?
-    else {
+    let Some(head) = git::repository_head_optional(workdir)? else {
         return Ok(None);
     };
     Ok(Some(parse_head(&head)))

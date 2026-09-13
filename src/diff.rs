@@ -178,10 +178,9 @@ pub fn analyze_changes(path: &Path, options: &ChangeOptions) -> Result<ChangedRe
         let before_path = renames
             .get(&relative)
             .map_or(relative.as_str(), String::as_str);
-        let before =
-            git::run_optional(&root, &["show", &format!("{}:{before_path}", options.base)])?
-                .map(|source| crate::analyze_source(before_path, &source))
-                .transpose()?;
+        let before = git::read_revision_blob_optional(&root, &options.base, before_path)?
+            .map(|source| crate::analyze_source(before_path, &source))
+            .transpose()?;
         let after = read_after(&root, &relative, &options.target)?
             .map(|source| crate::analyze_source(&relative, &source))
             .transpose()?;
@@ -278,9 +277,9 @@ fn read_after(root: &Path, relative: &str, target: &ComparisonTarget) -> Result<
                 .transpose()
                 .map_err(Into::into)
         }
-        ComparisonTarget::Index => git::run_optional(root, &["show", &format!(":{relative}")]),
+        ComparisonTarget::Index => git::read_index_blob_optional(root, relative),
         ComparisonTarget::Revision(revision) => {
-            git::run_optional(root, &["show", &format!("{revision}:{relative}")])
+            git::read_revision_blob_optional(root, revision, relative)
         }
     }
 }
