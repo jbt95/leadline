@@ -162,7 +162,8 @@ leadline diff HEAD~1
 Functions are paired by name and same-name source order. By default a rename surfaces as one removal plus one addition; pass `--renames` to pair Git-detected file renames instead.
 
 `--format agent-json` emits the compact agent-oriented shape on `analyze`, `function`,
-`check`, `changed`, `diff`, `hotspots`, and `test-targets`. `leadline doctor` self-checks the parsers, coverage
+`check`, `changed`, `diff`, `hotspots`, `coupling`, `dependencies`, `impact`,
+and `test-targets`. `leadline doctor` self-checks the parsers, coverage
 readers, `git`, and `leadline.toml`. `leadline version` prints the release version.
 
 ## Git history and hotspots
@@ -186,9 +187,9 @@ A directory outside a Git repository, a machine without `git`, or an unborn HEAD
 still ranks by complexity and reports `git_available: false` with `null` churn
 fields. Merge commits are excluded. See [hotspots](docs/hotspots.md) for formulas,
 limitations, and the ethical guardrail: commit and ownership signals must never rank
-developers. The [analytics roadmap](docs/analytics-roadmap.md) describes the
-dependency, coupling, ownership, risk, and static-report milestones built on this
-foundation.
+developers. The [analytics roadmap](docs/analytics-roadmap.md) describes the ownership,
+risk, and static-report milestones still to build on this foundation
+(coupling, dependencies, and impact are implemented; see above and below).
 
 Find files that repeatedly change together even when no import connects them:
 
@@ -201,6 +202,20 @@ Coupling reports co-change counts, directional coupling, and Jaccard similarity
 from the same history walk. Commits wider than 50 files never create pairs, and
 co-change is process evidence to inspect, not a dependency to trust — see
 [coupling](docs/coupling.md).
+
+Map static dependencies and blast radius before editing:
+
+```console
+leadline dependencies
+leadline impact src/payment/PaymentService.ts --format agent-json
+```
+
+`dependencies` reports file-level edges (source imports target), fan-in
+(direct importers), fan-out (resolved imports), and import cycles. `impact`
+lists the transitive dependents of one file with distances, direct-dependent
+counts, and blast radius. Resolution is conservative — relative JS/TS
+imports and exact Java type imports only — so the graph is static evidence
+to inspect, not proof of runtime behavior; see [dependencies](docs/dependencies.md).
 
 ## Coverage limits
 

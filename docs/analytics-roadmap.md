@@ -3,8 +3,9 @@
 This document is the architecture proposal for evolving `leadline` from a
 function-level metric analyzer into a local engineering-intelligence engine.
 It records the module boundaries, the normalized analytics model, the static
-report data contract, and the planned milestones. Milestone A (Git history and
-hotspots) is implemented; later sections describe designed-but-unbuilt work.
+report data contract, and the planned milestones. Milestones A (Git history and
+hotspots), B (temporal coupling), and C (dependencies and impact) are
+implemented; later sections describe designed-but-unbuilt work.
 
 The product question is not "how many metrics do we have" but "where is
 engineering risk concentrated, why does it matter, and what does changed code
@@ -63,7 +64,7 @@ Current modules:
 | `history` | Git history to normalized per-file facts | Milestone A |
 | `hotspots` | source metrics x Git facts, ranked with exposed dimensions | Milestone A |
 | `coupling` | temporal co-change indexing and related-file queries | Milestone B |
-| `graph`, `impact` | static dependencies, blast radius, cycles (planned) | Milestone C |
+| `graph`, `impact` | static dependencies, blast radius, cycles | Milestone C |
 | `risk` | explainable change-risk model (planned) | Milestone D |
 | `duplication`, `tests`, `policy` | clone detection, test relationships, architecture rules (planned) | Milestones H/I |
 | `report` (extended) | canonical report model plus static site generator (planned) | Milestone F |
@@ -186,7 +187,7 @@ invalidate parsed source metrics.
 | --- | --- | --- |
 | A | Git history model, churn, recency, age, contributors, hotspots, CLI + JSON, fixtures, benchmarks | **implemented** |
 | B | temporal coupling: co-change counts, directional coupling, Jaccard, `coupling` command | **implemented** |
-| C | dependency extraction, fan-in/out, transitive dependents, blast radius, cycles | planned |
+| C | dependency extraction, fan-in/out, transitive dependents, blast radius, cycles | **implemented** |
 | D | explainable `change-risk-v1` model (complexity, CRAP, churn, impact, ownership, policy) | planned |
 | E | diff intelligence: new vs existing vs resolved debt, risk regressions | planned |
 | F | static web report MVP: overview, distributions, hotspots, explorers, dependencies | planned |

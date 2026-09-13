@@ -178,3 +178,82 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
 - `--format agent-json` emits `schema_version`, `target`, `git_available`,
   `target_commits`, one row per related file (`path`, `commits`, `co_changes`,
   `directional`, `jaccard`), and `truncated`.
+
+## Dependencies envelope
+
+```json
+{
+  "schema_version": 1,
+  "analyzer_version": "0.2.0",
+  "metric_profile": "default-v1",
+  "files": [
+    { "path": "src/a.ts", "fan_in": 1, "fan_out": 2 }
+  ],
+  "edges": [
+    { "source": "src/a.ts", "target": "src/b.ts", "kind": "import", "confidence": "high" }
+  ],
+  "unresolved": [
+    { "source": "src/a.ts", "specifier": "./missing", "line": 4, "reason": "not_found" }
+  ],
+  "cycles": [
+    { "files": ["src/a.ts", "src/b.ts"] }
+  ]
+}
+```
+
+- `source` imports `target`. `kind` is `import` (static import or re-export)
+  or `call` (`require()` / dynamic `import()` form); when both name the same
+  pair, `import` wins. `confidence` is always `"high"` by construction.
+- `fan_in` counts direct importers; `fan_out` counts resolved imported files.
+- `unresolved` reasons: `not_found`, `ambiguous`, `outside_scope`,
+  `unsupported`. Bare package imports are ignored, never listed.
+- `cycles` are strongly connected components of at least two files; each
+  `files` array is sorted, and the cycle list is sorted. A self-import is an
+  edge, not a cycle.
+- Ordering is deterministic: `files` by path, `edges` by
+  `(source, target)`, `unresolved` by `(source, specifier, line, reason)`.
+  The same repository, configuration, and analyzer version produce
+  byte-identical JSON across runs.
+- `--format agent-json` emits `schema_version`,
+  `summary.{files,edges,cycles}`, one row per file (`path`, `fan_in`,
+  `fan_out`), one row per edge (`source`, `target`, `kind`; `confidence`
+  dropped), one row per cycle (`files`), and `truncated: false`.
+
+## Impact envelope
+
+```json
+{
+  "schema_version": 1,
+  "analyzer_version": "0.2.0",
+  "metric_profile": "default-v1",
+  "model": "impact-v1",
+  "target": "src/b.ts",
+  "files_analyzed": 4,
+  "fan_in": 1,
+  "fan_out": 0,
+  "direct_dependents": 1,
+  "blast_radius": 3,
+  "blast_radius_percent": 100.0,
+  "dependents": [
+    { "path": "src/a.ts", "distance": 1 },
+    { "path": "src/c.ts", "distance": 2 },
+    { "path": "src/d.ts", "distance": 3 }
+  ],
+  "cycles": [["src/a.ts", "src/b.ts"]],
+  "truncated": false
+}
+```
+
+- `dependents` are the unique direct and transitive importers of `target` by
+  reverse-BFS, with shortest distances, sorted by `(distance, path)`. The
+  target never re-appears, even through a cycle.
+- `blast_radius` counts every dependent even when `--top` truncates the shown
+  list; `truncated` signals the cap. `direct_dependents` counts distance-1
+  rows. `fan_in` / `fan_out` repeat the target's graph row.
+- `blast_radius_percent` is `blast_radius / (files_analyzed - 1) * 100` on a
+  **0-100 scale** (`0.0` when `files_analyzed <= 1`).
+- `cycles` keeps only the graph cycles containing the target.
+- `--format agent-json` emits `schema_version`, `model`, `target`,
+  `files_analyzed`, `fan_in`, `fan_out`, `direct_dependents`, `blast_radius`,
+  `blast_radius_percent`, `dependents` (`path`, `distance`), `cycles`, and
+  `truncated`; it drops `metric_profile` and `analyzer_version`.

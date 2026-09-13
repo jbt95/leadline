@@ -48,6 +48,52 @@ Only the fields an agent gates on are included. Full detail remains in `--json`.
 }
 ```
 
+`leadline impact <file> --format agent-json` returns the transitive dependents
+of one file so an agent can gauge blast radius before editing:
+
+```json
+{
+  "schema_version": 1,
+  "model": "impact-v1",
+  "target": "src/payment.ts",
+  "files_analyzed": 128,
+  "fan_in": 3,
+  "fan_out": 1,
+  "direct_dependents": 3,
+  "blast_radius": 9,
+  "blast_radius_percent": 7.09,
+  "dependents": [
+    { "path": "src/checkout.ts", "distance": 1 }
+  ],
+  "cycles": [],
+  "truncated": false
+}
+```
+
+`blast_radius_percent` is on a 0-100 scale. `dependents` are sorted by
+`(distance, path)`; `truncated` means `--top` hid rows while `blast_radius`
+still counts every dependent. Resolved imports are static evidence:
+relative JS/TS imports and exact Java type imports only, with no aliases,
+package graph, reflection, or runtime-built specifiers — inspect the listed
+dependents, but do not treat an empty list as proof that nothing else loads
+the file.
+
+## Pre-edit workflow
+
+Before editing a file, check what depends on it and what usually changes
+with it:
+
+```console
+leadline impact <file> --format agent-json
+leadline coupling <file> --format agent-json
+```
+
+`impact` answers "what imports this file?" (static evidence, incomplete
+where language or runtime configuration decides the real target);
+`coupling` answers "what usually changes with this file?" (process
+evidence, not a dependency). Inspect both lists, then make the smallest
+diff that covers them.
+
 ## MCP tools (read-only)
 
 The MCP server exposes five read-only tools. It never writes files, runs hooks, or executes project code.
