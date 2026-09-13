@@ -266,7 +266,7 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
   "schema_version": 1,
   "analyzer_version": "0.2.0",
   "metric_profile": "default-v1",
-  "model": "change-risk-v1",
+  "model": "change-risk-v2",
   "window": "90d",
   "git_available": true,
   "head_commit": "0c2d7309cd3c84d33e4ea8fec01a581cf5246b37",
@@ -275,14 +275,14 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
   "risks": [
     {
       "path": "src/risky.ts",
-      "score": 82.5,
+      "score": 73.0,
       "components": {
         "complexity": 100.0,
         "crap": 100.0,
         "churn": 100.0,
         "impact": 50.0,
-        "ownership": 50.0,
-        "policy": null
+        "ownership": 80.0,
+        "policy": 0.0
       },
       "raw": {
         "max_cognitive": 30,
@@ -290,21 +290,22 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
         "max_crap": 30.0,
         "changes": 20,
         "contributors": 2,
+        "concentration_percent": 80.0,
         "blast_radius": 1,
         "blast_radius_percent": 50.0,
         "fan_in": 1,
-        "fan_out": 0
+        "fan_out": 0,
+        "policy_severity": null
       }
     }
-  ],
-  "truncated": false
+  ]
 }
 ```
 
-- `model` is the versioned scoring rule (`change-risk-v1`); `score` is the
+- `model` is the versioned scoring rule (`change-risk-v2`); `score` is the
   weight-renormalized component mean on a 0-100 scale. See `risk.md` for the
-  per-component formulas, weights (complexity 25, CRAP 20, churn 20, impact
-  20, ownership 15, policy 0), and caps.
+  per-component formulas, weights (complexity 20, CRAP 15, churn 20, impact
+  20, ownership 10, policy 15), and caps.
 - `window`: `30d`, `90d`, or `365d`; `changes` and the `churn` component use
   it. Windows are relative to the HEAD commit time, mirroring `hotspots`;
   `head_commit` pins which snapshot the window is relative to.
@@ -313,15 +314,15 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
   file), and the terminal blast line pairs the percent with `scope_files`.
 - `null` means unknown, never zero: `crap` is `null` without coverage,
   `churn`/`ownership` (and `raw.changes`/`raw.contributors`) are `null` when
-  the file has no history row, and `policy` is always `null` in v1. The score
+  the file has no history row, and `policy` is `0.0` when no rule fires. The score
   renormalizes over the known components. `complexity` and `impact` are
   always present (`impact` is `0.0` for files with no graph node).
 - `git_available: false` (directory outside a repository, unborn HEAD, or no
   `git`) still ranks by the static dimensions with `null` churn/ownership.
 - Rows sort by `score` descending, ties by `path` ascending. `--limit N`
-  (default 10, `N >= 1`) caps the shown rows; `truncated` signals the cap.
-  The command is informational and exits `0`.
+  (default 10, `N >= 1`) caps terminal and agent-JSON rows; `--json` always
+  emits the full ranking. The command is informational and exits `0`.
 - `--format agent-json` emits `schema_version`, `model`, `window`,
-  `git_available`, `summary.{files_analyzed,scope_files,risks}`, one row per file
-  (`path`, `score`, `components` with the same six keys), and `truncated`;
+  `git_available`, `summary.{files_analyzed,scope_files,risks}`, and one row
+  per file (`path`, `score`, `components` with the same six keys);
   it drops `metric_profile`, `analyzer_version`, `head_commit`, and `raw`.

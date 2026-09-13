@@ -26,7 +26,7 @@ Shortest post-edit commands (all deterministic, JSON with `--format agent-json`)
 - Inspect a target before editing it: `leadline hotspots <path> --format agent-json` (files ranked by complexity x churn; the JSON carries the dimensions, not just a score).
 - Check what usually changes with a file: `leadline coupling <file> --format agent-json` (historically related files to inspect; co-change is a hint, not a dependency).
 - Check what depends on a file before editing it: `leadline impact <file> --format agent-json` (transitive dependents with distances and blast radius; static import evidence only).
-- Rank change risk before editing: `leadline risk <path> --format agent-json` (files scored by `change-risk-v1` components; informational only, never a developer ranking).
+- Rank change risk before editing: `leadline risk <path> --format agent-json` (files scored by `change-risk-v2` components; informational only, never a developer ranking).
 - Gate deltas: `leadline check . --base <rev> --regressions` (zero-tolerance unless `leadline.toml` sets `[regressions]` allowances).
 - Target tests: `leadline test-targets . --coverage <file>` (line coverage only; unknown lines are reported, never called uncovered).
 - Snapshot without Git history: `leadline baseline . --output <file>`, then `leadline check . --baseline <file> --regressions`.

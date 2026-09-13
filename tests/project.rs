@@ -5,7 +5,7 @@ use leadline::core::{
 };
 use leadline::duplication::detect;
 use leadline::graph::{DependencyEdge, DependencyFile, DependencyReport};
-use leadline::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport};
+use leadline::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow};
 use leadline::project::{PROJECT_SCHEMA_VERSION, ProjectInputs, build};
 use leadline::source_snapshot::SourceEntry;
 
@@ -154,6 +154,19 @@ fn project_joins_every_section_and_recomputes_aggregates() {
             edges: vec![],
         },
     };
+    let ownership = leadline::ownership::OwnershipReport {
+        files: vec![],
+        modules: vec![],
+    };
+    let policy = leadline::policy::evaluate(&graph, &[]);
+    let risk = leadline::risk::build(
+        &analysis,
+        &history,
+        &graph,
+        &ownership,
+        &policy,
+        HistoryWindow::Days90,
+    );
     let project = build(ProjectInputs {
         analysis: &analysis,
         generated_from: "HEAD".to_owned(),
@@ -163,9 +176,8 @@ fn project_joins_every_section_and_recomputes_aggregates() {
         mutation: None,
         test_relationships: None,
         duplication: &duplication,
-        policy: None,
-        risk_v1: None,
-        risk_v2: None,
+        policy: &policy,
+        risk: &risk,
         snapshots: None,
     });
 
@@ -186,7 +198,9 @@ fn project_joins_every_section_and_recomputes_aggregates() {
     assert!(project.temporal_coupling.is_some());
     assert!(project.ownership.is_none());
     assert!(project.coverage.is_none());
-    assert!(project.risk.rows.is_empty());
+    assert_eq!(project.risk.model, "change-risk-v2");
+    assert_eq!(project.risk.rows.len(), 2);
+    assert_eq!(project.summary.risk_model, Some("change-risk-v2"));
 
     let root = project
         .modules

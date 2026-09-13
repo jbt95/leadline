@@ -24,7 +24,6 @@ pub mod policy;
 pub mod project;
 pub mod report;
 pub mod risk;
-pub mod risk_v2;
 pub mod sarif;
 pub mod snapshots;
 pub mod source_snapshot;

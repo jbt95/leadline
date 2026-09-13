@@ -677,14 +677,6 @@ pub fn terminal_risk(report: &RiskReport) -> String {
         );
         output.push('\n');
     }
-    if report.truncated {
-        let _ = writeln!(
-            output,
-            "Showing the top {} of {} files (raise --limit for more).\n",
-            report.risks.len(),
-            report.files_analyzed
-        );
-    }
     output
 }
 

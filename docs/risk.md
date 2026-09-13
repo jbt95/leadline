@@ -1,10 +1,11 @@
 # Change risk
 
 `leadline risk` answers: which files combine hard-to-understand code, weak
-test backing, frequent editing, wide blast radius, and concentrated
-knowledge? It joins static source metrics, Git history facts, and the static
-dependency graph into one per-file score with explicit components
-(model `change-risk-v1`).
+test backing, frequent editing, wide blast radius, concentrated knowledge,
+and architecture violations? It joins static source metrics, Git history
+facts, ownership concentration, the static dependency graph, and
+architecture policy into one per-file score with explicit components
+(model `change-risk-v2`).
 
 ```console
 leadline risk
@@ -22,17 +23,16 @@ objective: every factor is in the same row next to it.
 ## Components
 
 All components are on a 0-100 scale. `null` means unknown, never zero (see
-null-renormalization below). Weights sum to 100 across the five measured
-components; `policy` carries weight 0 and does not redistribute.
+null-renormalization below).
 
 | Component | Formula | Weight | `null` when |
 | --- | --- | --- | --- |
-| `complexity` | `100 * max(min(max_cognitive / 30, 1), min(max_cyclomatic / 20, 1))` | 25 | never (`Some` always) |
-| `crap` | `100 * min(max_crap / 30, 1)` | 20 | no coverage for any function in the file |
+| `complexity` | `100 * max(min(max_cognitive / 30, 1), min(max_cyclomatic / 20, 1))` | 20 | never (`Some` always) |
+| `crap` | `100 * min(max_crap / 30, 1)` | 15 | no coverage for any function in the file |
 | `churn` | `100 * min(changes_in_window / 20, 1)` | 20 | file has no history row (new/untracked, or no Git) |
 | `impact` | `min(blast_radius_percent, 100)` | 20 | never (`Some` always; `0.0` when the file has no graph node) |
-| `ownership` | `100.0 / contributors` | 15 | file has no history row, or `contributors == 0` |
-| `policy` | always `null` in v1 | 0 | always |
+| `ownership` | touch concentration percent | 10 | file has no touches (no Git, or file outside the analyzed paths) |
+| `policy` | highest unresolved source severity: error 100, warning 60, info 30 | 15 | never (`Some(0.0)` when no rule fires) |
 
 - `max_cognitive` / `max_cyclomatic` are the worst per-metric function values
   in the file (they may come from different functions). A file with no
@@ -52,32 +52,34 @@ components; `policy` carries weight 0 and does not redistribute.
 
 `score = sum(weight_i * component_i) / sum(weight_i)` over the known
 (`Some`) components only. Unknown components are skipped, not zeroed, so a
-file without coverage or history is scored on what is known. A later model
-version carrying `policy` data will be `change-risk-v2`; v1 weights do not
-shift to absorb the null.
+file without coverage or history is scored on what is known.
 
 Worked example (from `tests/risk.rs`): a file with `complexity = 100`,
-`crap = 100`, `churn = 100`, `impact = 50`, `ownership = 50`,
-`policy = null` scores
-`(25*100 + 20*100 + 20*100 + 20*50 + 15*50) / 100 = 82.5`.
-The same file with no coverage and no history row keeps only complexity and
-impact: `(25*100 + 20*50) / 45 = 77.78`.
+`crap = 100`, `churn = 100`, `impact = 50`, `ownership = 80`,
+`policy = 0.0` scores
+`(20*100 + 15*100 + 20*100 + 20*50 + 10*80 + 15*0) / 100 = 73.0`.
+The same file with no coverage, no history row, and no touches keeps only
+complexity, impact, and policy: `(20*100 + 20*50 + 15*0) / 55 = 54.55`.
 
-## Ownership proxy and guardrail
+## Ownership concentration and guardrail
 
-`ownership` is a contributor-count concentration proxy: `100.0 / n`, so a
-solo-author file scores 100 and a four-contributor file scores 25. The
+`ownership` is the top identity's share of file touches (0-100) from the
+Git walk with the target `.mailmap` applied: a file touched only by one
+identity scores 100, an evenly split two-identity file scores 50. The
 reading is knowledge concentration ("how few people have touched this
-file?"), not authorship quality, and the tool reports counts only — never
-named contributor rankings. The proxy misranks solo-author files that are
-well understood; weight 15 bounds that damage. Do not use commit count,
-churn, or ownership metrics to rank developers.
+file?"), not authorship quality, and the tool reports the percent only —
+never named contributor rankings. The measure misranks solo-author files
+that are well understood; weight 10 bounds that damage. Do not use commit
+count, churn, or ownership metrics to rank developers.
 
 ## Policy
 
-`policy` is an explicit always-`null` v1 component with weight 0.0. It
-reserves the slot (and the weight budget) for architecture-rule input in a
-later model version without rescoring v1 reports.
+`policy` is the highest severity among unresolved violations whose source
+is the file: error 100, warning 60, info 30. Violations with status
+`resolved` are ignored. With no architecture rules configured (or no rule
+firing), the component is `Some(0.0)`: the absence of violations is known,
+not unknown. The raw row also carries `policy_severity` (`"info"` /
+`"warning"` / `"error"`, absent when nothing fires).
 
 ## Windows
 
@@ -89,13 +91,13 @@ via the shared history walk. A directory outside a Git repository, an unborn
 HEAD, or a machine without `git` reports `git_available: false` with `null`
 churn/ownership and still ranks by the static dimensions.
 
-## Ranking and truncation
+## Ranking and output caps
 
-Rows sort by `score` descending, ties by `path` ascending.
-`--limit N` (default 10, `N >= 1`) caps the shown rows across terminal,
-JSON, and agent JSON; `truncated` is true when more files were analyzed than
-shown. `--json` and `--format agent-json` are exclusive; `--format` accepts
-only `agent-json`.
+Rows sort by `score` descending, ties by `path` ascending. The report keeps
+the full ranking: `--json` always emits every file. `--limit N` (default
+10, `N >= 1`) caps rows only for the terminal report and agent JSON, which
+print a `raise --limit` hint when rows are hidden. `--json` and
+`--format agent-json` are exclusive; `--format` accepts only `agent-json`.
 
 ## Exit status
 

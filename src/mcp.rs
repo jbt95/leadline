@@ -1051,7 +1051,7 @@ fn tools_list_result() -> serde_json::Value {
         "tools": [
             {
                 "name": "analyze",
-                "description": "Measure function complexity across a path. Use for hotspot lists (sort_by/top) or specific metrics; use analyze_changed after edits.",
+                "description": "Measure function complexity across a path. Result paths are relative to the `path` argument (rejoin with it before passing one to analyze_function). Use for hotspot lists (sort_by/top) or specific metrics; use analyze_changed after edits.",
                 "annotations": { "title": "Analyze complexity", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
@@ -1144,7 +1144,7 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "repo_summary",
-                "description": "Use as a first look at unfamiliar code: totals plus the top functions by CRAP, cognitive, and cyclomatic complexity.",
+                "description": "Use as a first look at unfamiliar code: totals plus the top functions by CRAP, cognitive, and cyclomatic complexity. Result paths are relative to the `path` argument.",
                 "annotations": { "title": "Repository summary", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",

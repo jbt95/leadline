@@ -1,28 +1,36 @@
-//! Explainable change-risk model (`change-risk-v1`).
+//! Policy- and concentration-aware change risk (`change-risk-v2`).
 //!
-//! Joins static source metrics, Git history facts, and dependency impact into
-//! a per-file score with explicit components. `null` means unknown, never
-//! zero: missing history or coverage renormalizes the score over the known
-//! components instead of zeroing them.
+//! The single risk model: static source metrics, Git history facts,
+//! ownership concentration, dependency impact, and architecture policy
+//! join into a per-file score with explicit components. `null` means
+//! unknown, never zero: missing history or coverage renormalizes the
+//! score over the known components instead of zeroing them.
 
+use crate::config::Severity;
 use crate::core::AnalysisReport;
 use crate::graph::{DependencyFile, DependencyReport};
 use crate::history::{FileHistory, HistoryReport, HistoryWindow};
 use crate::impact::impact_counts;
+use crate::ownership::OwnershipReport;
+use crate::policy::{PolicyReport, PolicyStatus};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
 pub const RISK_SCHEMA_VERSION: u32 = 1;
-pub const RISK_MODEL: &str = "change-risk-v1";
+pub const RISK_MODEL: &str = "change-risk-v2";
 
 pub const COMPONENT_WEIGHTS: [(&str, f64); 6] = [
-    ("complexity", 25.0),
-    ("crap", 20.0),
+    ("complexity", 20.0),
+    ("crap", 15.0),
     ("churn", 20.0),
     ("impact", 20.0),
-    ("ownership", 15.0),
-    ("policy", 0.0),
+    ("ownership", 10.0),
+    ("policy", 15.0),
 ];
+
+const POLICY_INFO: f64 = 30.0;
+const POLICY_WARNING: f64 = 60.0;
+const POLICY_ERROR: f64 = 100.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RiskComponents {
@@ -41,10 +49,12 @@ pub struct RiskRaw {
     pub max_crap: Option<f64>,
     pub changes: Option<u64>,
     pub contributors: Option<u64>,
+    pub concentration_percent: Option<f64>,
     pub blast_radius: usize,
     pub blast_radius_percent: f64,
     pub fan_in: usize,
     pub fan_out: usize,
+    pub policy_severity: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -58,35 +68,26 @@ pub struct RiskRow {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RiskReport {
     pub schema_version: u32,
-    pub analyzer_version: &'static str,
     pub metric_profile: &'static str,
+    pub analyzer_version: &'static str,
     pub model: &'static str,
     pub window: &'static str,
     pub git_available: bool,
     pub head_commit: Option<String>,
     pub files_analyzed: usize,
-    /// Graph files the blast percents range over; equals `files_analyzed`
-    /// except when analysis covers a sub-scope (e.g. a single file).
     pub scope_files: usize,
     pub risks: Vec<RiskRow>,
-    pub truncated: bool,
 }
 
-/// Builds a ranked change-risk report from analyzed files and joined facts.
-///
-/// Files missing from `history` keep their static dimensions and carry `None`
-/// churn/ownership. Files missing from `graph` read zero fan-in/out and zero
-/// impact, defensively.
+/// Builds a complete v2 ranking (no truncation; consumers project budgets).
 pub fn build(
     analysis: &AnalysisReport,
     history: &HistoryReport,
     graph: &DependencyReport,
+    ownership: &OwnershipReport,
+    policy: &PolicyReport,
     window: HistoryWindow,
-    limit: usize,
 ) -> RiskReport {
-    // ponytail: one BFS per file over a single shared reverse map plus
-    // one BTreeMap lookup per join; the per-file BFS work is inherent to
-    // reachability
     let history_rows: BTreeMap<&str, &FileHistory> = history
         .files
         .iter()
@@ -97,54 +98,61 @@ pub fn build(
         .iter()
         .map(|row| (row.path.as_str(), row))
         .collect();
+    let ownership_rows: BTreeMap<&str, Option<f64>> = ownership
+        .files
+        .iter()
+        .map(|row| (row.path.as_str(), row.concentration_percent))
+        .collect();
     let counts = impact_counts(graph);
+    let policies = current_policy_severities(policy);
+
     let mut risks: Vec<RiskRow> = analysis
         .files
         .iter()
         .map(|file| {
-            let mut max_cognitive = 0_u32;
-            let mut max_cyclomatic = 0_u32;
-            let mut max_crap: Option<f64> = None;
-            for function in &file.functions {
-                max_cognitive = max_cognitive.max(function.metrics.cognitive);
-                max_cyclomatic = max_cyclomatic.max(function.metrics.cyclomatic);
-                if let Some(crap) = function.metrics.crap {
-                    max_crap = Some(max_crap.map_or(crap, |current: f64| current.max(crap)));
-                }
-            }
-
             let history_row = history_rows.get(file.path.as_str()).copied();
             let changes = history_row.map(|row| window.changes(row));
             let contributors = history_row.map(|row| row.contributors);
-
             let (fan_in, fan_out) = graph_rows
                 .get(file.path.as_str())
                 .map(|row| (row.fan_in, row.fan_out))
                 .unwrap_or((0, 0));
-
             let (blast_radius, blast_radius_percent) = counts
                 .get(file.path.as_str())
                 .map(|counts| (counts.blast_radius, counts.blast_radius_percent))
                 .unwrap_or((0, 0.0));
+            let max_cognitive = file
+                .functions
+                .iter()
+                .map(|function| function.metrics.cognitive)
+                .max()
+                .unwrap_or(0);
+            let max_cyclomatic = file
+                .functions
+                .iter()
+                .map(|function| function.metrics.cyclomatic)
+                .max()
+                .unwrap_or(0);
+            let max_crap = file
+                .functions
+                .iter()
+                .filter_map(|function| function.metrics.crap)
+                .reduce(f64::max);
+            let severity = policies.get(file.path.as_str()).copied();
+            let policy_value = severity.map(severity_value).unwrap_or(0.0);
 
-            let complexity = Some(
-                100.0
-                    * (f64::from(max_cognitive) / 30.0)
-                        .min(1.0)
-                        .max((f64::from(max_cyclomatic) / 20.0).min(1.0)),
-            );
-            let crap = max_crap.map(|value| 100.0 * (value / 30.0).min(1.0));
-            let churn = changes.map(|n| 100.0 * (n as f64 / 20.0).min(1.0));
-            let impact = Some(blast_radius_percent.min(100.0));
-            let ownership =
-                contributors.and_then(|n| if n == 0 { None } else { Some(100.0 / n as f64) });
             let components = RiskComponents {
-                complexity,
-                crap,
-                churn,
-                impact,
-                ownership,
-                policy: None,
+                complexity: Some(
+                    100.0
+                        * (max_cognitive as f64 / 30.0)
+                            .min(1.0)
+                            .max((max_cyclomatic as f64 / 20.0).min(1.0)),
+                ),
+                crap: max_crap.map(|value| 100.0 * (value / 30.0).min(1.0)),
+                churn: changes.map(|value| 100.0 * (value as f64 / 20.0).min(1.0)),
+                impact: Some(blast_radius_percent.min(100.0)),
+                ownership: ownership_rows.get(file.path.as_str()).copied().flatten(),
+                policy: Some(policy_value),
             };
             let score = weighted_score(&components);
             RiskRow {
@@ -157,10 +165,15 @@ pub fn build(
                     max_crap,
                     changes,
                     contributors,
+                    concentration_percent: ownership_rows
+                        .get(file.path.as_str())
+                        .copied()
+                        .flatten(),
                     blast_radius,
                     blast_radius_percent,
                     fan_in,
                     fan_out,
+                    policy_severity: severity.map(severity_name),
                 },
             }
         })
@@ -168,16 +181,14 @@ pub fn build(
     risks.sort_by(|left, right| {
         right
             .score
-            .partial_cmp(&left.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&left.score)
             .then_with(|| left.path.cmp(&right.path))
     });
-    let truncated = risks.len() > limit;
-    risks.truncate(limit);
+
     RiskReport {
         schema_version: RISK_SCHEMA_VERSION,
-        analyzer_version: analysis.analyzer_version,
         metric_profile: analysis.metric_profile,
+        analyzer_version: analysis.analyzer_version,
         model: RISK_MODEL,
         window: window.label(),
         git_available: history.available,
@@ -185,7 +196,37 @@ pub fn build(
         files_analyzed: analysis.files.len(),
         scope_files: graph.files.len(),
         risks,
-        truncated,
+    }
+}
+
+/// Highest current (non-resolved) policy severity per source file.
+fn current_policy_severities(policy: &PolicyReport) -> BTreeMap<&str, Severity> {
+    let mut severities: BTreeMap<&str, Severity> = BTreeMap::new();
+    for violation in &policy.violations {
+        if matches!(violation.status, Some(PolicyStatus::Resolved)) {
+            continue;
+        }
+        severities
+            .entry(violation.source.as_str())
+            .and_modify(|severity| *severity = (*severity).max(violation.severity))
+            .or_insert(violation.severity);
+    }
+    severities
+}
+
+fn severity_value(severity: Severity) -> f64 {
+    match severity {
+        Severity::Info => POLICY_INFO,
+        Severity::Warning => POLICY_WARNING,
+        Severity::Error => POLICY_ERROR,
+    }
+}
+
+fn severity_name(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Info => "info",
+        Severity::Warning => "warning",
+        Severity::Error => "error",
     }
 }
 

@@ -12,7 +12,6 @@ use crate::mutation::MutationReport;
 use crate::ownership::OwnershipReport;
 use crate::policy::{PolicyReport, PolicyViolation};
 use crate::risk::RiskReport;
-use crate::risk_v2::RiskV2Report;
 use crate::test_relationships::TestRelationshipReport;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -183,9 +182,8 @@ pub struct ProjectInputs<'a> {
     pub mutation: Option<&'a MutationReport>,
     pub test_relationships: Option<&'a TestRelationshipReport>,
     pub duplication: &'a DuplicationReport,
-    pub policy: Option<&'a PolicyReport>,
-    pub risk_v1: Option<&'a RiskReport>,
-    pub risk_v2: Option<&'a RiskV2Report>,
+    pub policy: &'a PolicyReport,
+    pub risk: &'a RiskReport,
     pub snapshots: Option<Vec<crate::snapshots::TrendPoint>>,
 }
 
@@ -272,76 +270,34 @@ pub fn build(inputs: ProjectInputs<'_>) -> Project {
         None => (None, None),
     };
 
-    let (risk, risk_model) = match (inputs.risk_v2, inputs.risk_v1) {
-        (Some(v2), _) => (
-            ProjectRisk {
-                model: v2.model,
-                window: v2.window.to_owned(),
-                git_available: v2.git_available,
-                head_commit: v2.head_commit.clone(),
-                rows: v2
-                    .risks
-                    .iter()
-                    .map(|row| ProjectRiskRow {
-                        path: row.path.clone(),
-                        score: row.score,
-                        components: v2_components(&row.components),
-                        max_cognitive: Some(row.raw.max_cognitive),
-                        max_cyclomatic: Some(row.raw.max_cyclomatic),
-                        max_crap: row.raw.max_crap,
-                        changes: row.raw.changes,
-                        contributors: row.raw.contributors,
-                        concentration_percent: row.raw.concentration_percent,
-                        blast_radius: row.raw.blast_radius,
-                        blast_radius_percent: row.raw.blast_radius_percent,
-                        fan_in: row.raw.fan_in,
-                        fan_out: row.raw.fan_out,
-                        policy_severity: row.raw.policy_severity,
-                    })
-                    .collect(),
-            },
-            Some(v2.model),
-        ),
-        (None, Some(v1)) => (
-            ProjectRisk {
-                model: v1.model,
-                window: v1.window.to_owned(),
-                git_available: v1.git_available,
-                head_commit: v1.head_commit.clone(),
-                rows: v1
-                    .risks
-                    .iter()
-                    .map(|row| ProjectRiskRow {
-                        path: row.path.clone(),
-                        score: row.score,
-                        components: v1_components(&row.components),
-                        max_cognitive: Some(row.raw.max_cognitive),
-                        max_cyclomatic: Some(row.raw.max_cyclomatic),
-                        max_crap: row.raw.max_crap,
-                        changes: row.raw.changes,
-                        contributors: row.raw.contributors,
-                        concentration_percent: None,
-                        blast_radius: row.raw.blast_radius,
-                        blast_radius_percent: row.raw.blast_radius_percent,
-                        fan_in: row.raw.fan_in,
-                        fan_out: row.raw.fan_out,
-                        policy_severity: None,
-                    })
-                    .collect(),
-            },
-            Some(v1.model),
-        ),
-        (None, None) => (
-            ProjectRisk {
-                model: "change-risk-v1",
-                window: "90d".to_owned(),
-                git_available: false,
-                head_commit: None,
-                rows: Vec::new(),
-            },
-            None,
-        ),
+    let report = inputs.risk;
+    let risk = ProjectRisk {
+        model: report.model,
+        window: report.window.to_owned(),
+        git_available: report.git_available,
+        head_commit: report.head_commit.clone(),
+        rows: report
+            .risks
+            .iter()
+            .map(|row| ProjectRiskRow {
+                path: row.path.clone(),
+                score: row.score,
+                components: risk_components(&row.components),
+                max_cognitive: Some(row.raw.max_cognitive),
+                max_cyclomatic: Some(row.raw.max_cyclomatic),
+                max_crap: row.raw.max_crap,
+                changes: row.raw.changes,
+                contributors: row.raw.contributors,
+                concentration_percent: row.raw.concentration_percent,
+                blast_radius: row.raw.blast_radius,
+                blast_radius_percent: row.raw.blast_radius_percent,
+                fan_in: row.raw.fan_in,
+                fan_out: row.raw.fan_out,
+                policy_severity: row.raw.policy_severity,
+            })
+            .collect(),
     };
+    let risk_model = Some(report.model);
 
     let coverage_functions = analysis
         .files
@@ -374,10 +330,7 @@ pub fn build(inputs: ProjectInputs<'_>) -> Project {
         mutation_score: inputs.mutation.and_then(|mutation| mutation.summary.score),
         duplication_groups: inputs.duplication.groups.len() as u64,
         duplicated_lines: inputs.duplication.duplicated_lines,
-        policy_violations: inputs
-            .policy
-            .map(|policy| policy.violations.len() as u64)
-            .unwrap_or(0),
+        policy_violations: inputs.policy.violations.len() as u64,
         risk_model,
     };
 
@@ -407,30 +360,14 @@ pub fn build(inputs: ProjectInputs<'_>) -> Project {
         mutation: inputs.mutation.cloned(),
         test_relationships: inputs.test_relationships.cloned(),
         duplication: inputs.duplication.clone(),
-        architecture_violations: inputs
-            .policy
-            .map(|policy| policy.violations.clone())
-            .unwrap_or_default(),
+        architecture_violations: inputs.policy.violations.clone(),
         risk,
         snapshots: inputs.snapshots,
     }
 }
 
-fn v1_components(components: &crate::risk::RiskComponents) -> BTreeMap<&'static str, Option<f64>> {
-    [
-        ("complexity", components.complexity),
-        ("crap", components.crap),
-        ("churn", components.churn),
-        ("impact", components.impact),
-        ("ownership", components.ownership),
-        ("policy", components.policy),
-    ]
-    .into_iter()
-    .collect()
-}
-
-fn v2_components(
-    components: &crate::risk_v2::RiskV2Components,
+fn risk_components(
+    components: &crate::risk::RiskComponents,
 ) -> BTreeMap<&'static str, Option<f64>> {
     [
         ("complexity", components.complexity),

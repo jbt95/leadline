@@ -13,11 +13,10 @@ use crate::external::InputBudget;
 use crate::graph::analyze_dependencies_from_sources;
 use crate::history::{HistoryWindow, analyze_git_at_with_mailmap};
 use crate::mutation::{MutationInput, ingest as ingest_mutation};
-use crate::ownership::{OwnershipMode, build as build_ownership};
+use crate::ownership::{OwnershipMode, OwnershipReport, build as build_ownership};
 use crate::policy::{PolicyReport, evaluate as evaluate_policy};
 use crate::project::{Project, ProjectInputs, build as build_project};
-use crate::risk::build as build_risk_v1;
-use crate::risk_v2::build as build_risk_v2;
+use crate::risk::build as build_risk;
 use crate::snapshots::{SnapshotOutcome, TrendPoint, TrendStore};
 use crate::source_snapshot::{SnapshotContext, SnapshotTarget, SourceSnapshot, load};
 use crate::test_relationships::ingest as ingest_test_relationships;
@@ -91,49 +90,22 @@ fn build_from_parts(
         )?)
     };
     let duplication = detect(&snapshot.entries, &context.config.duplication);
-    let policy = (!context.config.architecture_rules.is_empty())
-        .then(|| evaluate_policy(graph, &context.config.architecture_rules));
-    let risk_v1;
-    let risk_v2;
-    let (risk_v1, risk_v2) = match (&git, &policy) {
-        (Some(git), Some(policy)) => {
-            let ownership = ownership
-                .as_ref()
-                .expect("ownership exists whenever Git analytics exist");
-            risk_v1 = None;
-            risk_v2 = Some(build_risk_v2(
-                analysis,
-                &git.history,
-                graph,
-                ownership,
-                policy,
-                request.window,
-            ));
-            (risk_v1, risk_v2)
-        }
-        (Some(git), None) => {
-            risk_v1 = Some(build_risk_v1(
-                analysis,
-                &git.history,
-                graph,
-                request.window,
-                usize::MAX,
-            ));
-            risk_v2 = None;
-            (risk_v1, risk_v2)
-        }
-        (None, _) => {
-            risk_v1 = Some(build_risk_v1(
-                analysis,
-                &unavailable_history(),
-                graph,
-                request.window,
-                usize::MAX,
-            ));
-            risk_v2 = None;
-            (risk_v1, risk_v2)
-        }
+    let policy = evaluate_policy(graph, &context.config.architecture_rules);
+    let no_ownership = OwnershipReport {
+        files: Vec::new(),
+        modules: Vec::new(),
     };
+    let ownership_ref = ownership.as_ref().unwrap_or(&no_ownership);
+    let unavailable = unavailable_history();
+    let history_ref = git.as_ref().map(|git| &git.history).unwrap_or(&unavailable);
+    let risk = build_risk(
+        analysis,
+        history_ref,
+        graph,
+        ownership_ref,
+        &policy,
+        request.window,
+    );
     let snapshots = match &request.snapshots_path {
         Some(path) => Some(TrendStore::read(path)?.points),
         None => None,
@@ -147,9 +119,8 @@ fn build_from_parts(
         mutation: mutation.as_ref(),
         test_relationships: test_relationships.as_ref(),
         duplication: &duplication,
-        policy: policy.as_ref(),
-        risk_v1: risk_v1.as_ref(),
-        risk_v2: risk_v2.as_ref(),
+        policy: &policy,
+        risk: &risk,
         snapshots,
     }))
 }

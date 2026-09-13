@@ -8,7 +8,6 @@
 use crate::config::Thresholds;
 use crate::core::{FileAnalysis, FunctionAnalysis};
 use crate::risk::RiskReport;
-use crate::risk_v2::RiskV2Report;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -107,33 +106,8 @@ pub const RISK_COMPONENTS: [&str; 6] = [
     "policy",
 ];
 
-/// Projects a v1 report into comparable entries.
-pub fn risk_entries_v1(report: &RiskReport) -> Vec<RiskSideEntry> {
-    report
-        .risks
-        .iter()
-        .map(|row| {
-            let components = [
-                ("complexity", row.components.complexity),
-                ("crap", row.components.crap),
-                ("churn", row.components.churn),
-                ("impact", row.components.impact),
-                ("ownership", row.components.ownership),
-                ("policy", row.components.policy),
-            ]
-            .into_iter()
-            .collect();
-            RiskSideEntry {
-                path: row.path.clone(),
-                score: Some(row.score),
-                components,
-            }
-        })
-        .collect()
-}
-
-/// Projects a v2 report into comparable entries.
-pub fn risk_entries_v2(report: &RiskV2Report) -> Vec<RiskSideEntry> {
+/// Projects a risk report into comparable entries.
+pub fn risk_entries(report: &RiskReport) -> Vec<RiskSideEntry> {
     report
         .risks
         .iter()

@@ -72,12 +72,11 @@ Current modules:
 | `hotspots` | source metrics x Git facts, ranked with exposed dimensions | Milestone A |
 | `coupling` | temporal co-change indexing and related-file queries | Milestone B |
 | `graph`, `impact` | static dependencies, blast radius, cycles | Milestone C |
-| `risk` | explainable change-risk model | Milestone D |
+| `risk` | explainable change-risk model (`change-risk-v2`: ownership concentration, policy) | Milestone D |
 | `ownership` | anonymous concentration and optional author projection | branch |
 | `debt` | full-state threshold transitions and risk deltas | branch |
 | `mutation`, `test_relationships` | PIT/Stryker ingestion and explicit test maps | branch |
 | `duplication`, `policy` | token-clone detection and architecture rules | branch |
-| `risk_v2` | policy/concentration-aware scoring | branch |
 | `project`, `snapshots`, `analytics` | canonical model, trend store, orchestration | branch |
 | `report` (extended) | canonical report model plus static site generator (planned) | Milestone F |
 
@@ -200,7 +199,7 @@ invalidate parsed source metrics.
 | A | Git history model, churn, recency, age, contributors, hotspots, CLI + JSON, fixtures, benchmarks | **implemented** |
 | B | temporal coupling: co-change counts, directional coupling, Jaccard, `coupling` command | **implemented** |
 | C | dependency extraction, fan-in/out, transitive dependents, blast radius, cycles | **implemented** |
-| D | explainable `change-risk-v1` model (complexity, CRAP, churn, impact, ownership, policy) | **implemented** |
+| D | explainable `change-risk-v2` model (complexity, CRAP, churn, impact, ownership concentration, policy) | **implemented** |
 | E | diff intelligence: new vs existing vs resolved debt, risk regressions | engine + `debt` CLI done; full-state comparison |
 | F | static web report MVP: overview, distributions, hotspots, explorers, dependencies | not started; canonical `Project` model ready |
 | G | historical snapshots and trends, treemap, coupling and cycle views | store + `snapshot` CLI done; report views pending |

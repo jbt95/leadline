@@ -655,12 +655,49 @@ fn risk_command(args: &[String]) -> Result<ExitCode, CliError> {
             path.display()
         )));
     }
-    let history = leadline::history::analyze_history(&scope)
-        .map_err(|error| CliError::incomplete(error.to_string()))?;
     let graph = leadline::graph::analyze_dependencies(&scope, excludes)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
-    let report = leadline::risk::build(&analysis, &history, &graph, window, limit);
+    // ponytail: snapshot entries are loaded only for repo context (root,
+    // config, mailmap); analysis still goes through the cache above.
+    let (snapshot_context, snapshot) =
+        leadline::source_snapshot::load(&path, SnapshotTarget::Worktree)
+            .map_err(|error| CliError::incomplete(error.to_string()))?;
+    let revision = snapshot.commit.clone().unwrap_or_else(|| "HEAD".to_owned());
+    let (history, touches) = match snapshot_context.repo_root {
+        Some(_) => {
+            let git = leadline::history::analyze_git_at_with_mailmap(
+                &snapshot_context,
+                &revision,
+                snapshot.mailmap_bytes.as_deref(),
+            )
+            .map_err(|error| CliError::incomplete(error.to_string()))?;
+            (git.history, git.touches)
+        }
+        None => (
+            leadline::history::HistoryReport {
+                schema_version: leadline::history::HISTORY_SCHEMA_VERSION,
+                analyzer_version: env!("CARGO_PKG_VERSION"),
+                available: false,
+                reference: "head-commit-time",
+                head_commit: None,
+                head_timestamp: None,
+                files: Vec::new(),
+            },
+            Vec::new(),
+        ),
+    };
+    let source_paths: Vec<String> = analysis
+        .files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect();
+    let ownership =
+        leadline::ownership::build(&touches, &source_paths, OwnershipMode::AggregateOnly);
+    let policy = leadline::policy::evaluate(&graph, &snapshot_context.config.architecture_rules);
+    let mut report =
+        leadline::risk::build(&analysis, &history, &graph, &ownership, &policy, window);
     if agent_json {
+        report.risks.truncate(limit);
         println!(
             "{}",
             serde_json::to_string(&leadline::agent::risk_agent_json(&report))
@@ -673,7 +710,16 @@ fn risk_command(args: &[String]) -> Result<ExitCode, CliError> {
                 .map_err(|error| CliError::internal(error.to_string()))?
         );
     } else {
+        let total = report.risks.len();
+        report.risks.truncate(limit);
         print!("{}", leadline::report::terminal_risk(&report));
+        if report.risks.len() < total {
+            println!(
+                "Showing the top {} of {} files (raise --limit for more).\n",
+                report.risks.len(),
+                total
+            );
+        }
     }
     Ok(ExitCode::SUCCESS)
 }

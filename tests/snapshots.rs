@@ -9,7 +9,7 @@ fn point(commit: &str, fingerprint: &str) -> TrendPoint {
         config_hash: "config".to_owned(),
         mailmap_hash: None,
         metric_profile: "default-v1".to_owned(),
-        risk_model: "change-risk-v1".to_owned(),
+        risk_model: "change-risk-v2".to_owned(),
         duplication_profile: "tokens-v1".to_owned(),
         mutation_model: "none".to_owned(),
         source_hash: "source".to_owned(),
@@ -65,7 +65,7 @@ fn different_models_are_separate_series() {
     let mut store = TrendStore::new();
     store.append(point("a", "one"), false).unwrap();
     let mut other = point("a", "one");
-    other.risk_model = "change-risk-v2".to_owned();
+    other.risk_model = "change-risk-v0".to_owned();
     assert_eq!(store.append(other, false).unwrap(), SnapshotOutcome::Added);
     assert_eq!(store.points.len(), 2);
 }

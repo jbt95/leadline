@@ -1,8 +1,7 @@
 use leadline::config::Thresholds;
 use leadline::core::{FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, Language};
 use leadline::debt::{
-    DebtStatus, RiskChangeStatus, RiskSideEntry, classify, compare_risks, risk_entries_v1,
-    summarize,
+    DebtStatus, RiskChangeStatus, RiskSideEntry, classify, compare_risks, risk_entries, summarize,
 };
 use std::collections::BTreeMap;
 
@@ -242,7 +241,21 @@ fn removes_and_summarizes() {
 }
 
 #[test]
-fn v1_projection_matches_score_and_components() {
+fn projection_matches_score_and_components() {
+    let graph = leadline::graph::DependencyReport {
+        schema_version: 1,
+        metric_profile: "default-v1",
+        analyzer_version: "test",
+        files: vec![],
+        edges: vec![],
+        unresolved: vec![],
+        cycles: vec![],
+    };
+    let ownership = leadline::ownership::OwnershipReport {
+        files: vec![],
+        modules: vec![],
+    };
+    let policy = leadline::policy::evaluate(&graph, &[]);
     let report = leadline::risk::build(
         &leadline::core::AnalysisReport {
             schema_version: 1,
@@ -260,24 +273,20 @@ fn v1_projection_matches_score_and_components() {
             head_timestamp: None,
             files: vec![],
         },
-        &leadline::graph::DependencyReport {
-            schema_version: 1,
-            metric_profile: "default-v1",
-            analyzer_version: "test",
-            files: vec![],
-            edges: vec![],
-            unresolved: vec![],
-            cycles: vec![],
-        },
+        &graph,
+        &ownership,
+        &policy,
         leadline::history::HistoryWindow::Days90,
-        10,
     );
-    let entries = risk_entries_v1(&report);
+    let entries = risk_entries(&report);
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].score, Some(report.risks[0].score));
     assert_eq!(
         entries[0].components.get("complexity").copied().flatten(),
         Some(100.0)
     );
-    assert_eq!(entries[0].components.get("policy").copied().flatten(), None);
+    assert_eq!(
+        entries[0].components.get("policy").copied().flatten(),
+        Some(0.0)
+    );
 }

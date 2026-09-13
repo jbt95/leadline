@@ -360,7 +360,6 @@ pub fn risk_agent_json(report: &RiskReport) -> Value {
             "risks": report.risks.len(),
         },
         "risks": risks,
-        "truncated": report.truncated,
     })
 }
 

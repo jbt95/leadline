@@ -84,22 +84,21 @@ an agent can pick the riskiest files to inspect before editing:
 ```json
 {
   "schema_version": 1,
-  "model": "change-risk-v1",
+  "model": "change-risk-v2",
   "window": "90d",
   "git_available": true,
   "summary": { "files_analyzed": 128, "scope_files": 128, "risks": 10 },
   "risks": [
-    { "path": "src/payment.ts", "score": 82.5,
-      "components": { "complexity": 100.0, "crap": 100.0, "churn": 100.0, "impact": 50.0, "ownership": 50.0, "policy": null } }
-  ],
-  "truncated": false
+    { "path": "src/payment.ts", "score": 73.0,
+      "components": { "complexity": 100.0, "crap": 100.0, "churn": 100.0, "impact": 50.0, "ownership": 80.0, "policy": 0.0 } }
+  ]
 }
 ```
 
 `score` is the weight-renormalized mean of the known components on a 0-100
 scale; `null` components mean unknown, never zero. Rows sort by `score`
-descending; `truncated` means `--limit` hid rows. See `docs/risk.md` for the
-formulas, weights, and caps.
+descending; `--limit` caps terminal and agent-JSON rows while `--json` stays
+full. See `docs/risk.md` for the formulas, weights, and caps.
 
 ## Pre-edit workflow
 
