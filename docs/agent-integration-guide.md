@@ -33,6 +33,21 @@ Only the fields an agent gates on are included. Full detail remains in `--json`.
 }
 ```
 
+`leadline coupling <file> --format agent-json` returns historically related files so an agent can inspect hidden contracts before editing:
+
+```json
+{
+  "schema_version": 1,
+  "target": "src/payment.ts",
+  "git_available": true,
+  "target_commits": 20,
+  "related": [
+    { "path": "src/payment-validator.ts", "commits": 15, "co_changes": 12, "directional": 0.6, "jaccard": 0.52 }
+  ],
+  "truncated": false
+}
+```
+
 ## MCP tools (read-only)
 
 The MCP server exposes five read-only tools. It never writes files, runs hooks, or executes project code.

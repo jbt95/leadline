@@ -19,12 +19,13 @@ Run the Git-history benchmark:
 cargo bench --bench history
 ```
 
-Three groups measure different costs on synthetic repositories staged outside
+Four groups measure different costs on synthetic repositories staged outside
 every timed loop:
 
 - `raw_git_log`: the `git log --relative --no-merges --numstat -z -M30%` walk alone (subprocess, history walk, output generation), so leadline's parsing cost can be bounded by comparing it with the next group.
 - `history_analysis`: end-to-end `analyze_history` at 20 and 200 commits, including the HEAD lookup, streaming parse, rename resolution, and aggregation.
 - `hotspot_scoring`: the source x history join and ranking over 2,000 pre-analyzed files with no Git access.
+- `coupling_analysis`: co-change indexing for one target over the 200-commit repository, sharing the same staged walk and rename resolution.
 
 Criterion reports wall-clock distributions and line, byte, file, or commit throughput. Inputs and outputs are black-boxed, fixture creation is outside the timed loop, and temporary repository fixtures are removed even if a benchmark panics.
 
@@ -85,9 +86,10 @@ cargo bench --bench history -- --warm-up-time 0.1 --measurement-time 0.2 --sampl
 
 | Case | Median time | Throughput |
 | --- | ---: | ---: |
-| Raw `git log`, 200 commits / 1,000 records | 292.07 ms | 684.78 commits/s |
-| History analysis, 20 commits / 100 records | 79.101 ms | 252.84 commits/s |
-| History analysis, 200 commits / 1,000 records | 320.44 ms | 624.14 commits/s |
-| Hotspot scoring, 2,000 analyzed files | 296.03 µs | 6.756 Mfiles/s |
+| Raw `git log`, 200 commits / 1,000 records | 307.20 ms | 651.05 commits/s |
+| History analysis, 20 commits / 100 records | 81.006 ms | 246.90 commits/s |
+| History analysis, 200 commits / 1,000 records | 324.32 ms | 616.67 commits/s |
+| Hotspot scoring, 2,000 analyzed files | 293.27 µs | 6.820 Mfiles/s |
+| Coupling analysis, 200 commits / 1,000 records | 366.77 ms | 545.30 commits/s |
 
 These numbers are dominated by `git` process startup: history analysis of 200 commits (320 ms) is close to the raw log walk (292 ms), and the remaining difference includes the HEAD lookup subprocess. Parsing and aggregation are a small fraction of run time. Compare same-machine before/after; do not treat the absolute numbers as portable.

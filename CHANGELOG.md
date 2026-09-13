@@ -10,6 +10,7 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 - `leadline hotspots` with `--limit N`, `--since 30d|90d|365d`, `--json`, `--format agent-json`, and LCOV/JaCoCo coverage flags. Ranks files by `max cognitive complexity x changes in window` (`complexity-x-churn-v1`) and exposes every dimension: complexity, CRAP, coverage, churn, contributors, and age.
 - `docs/analytics-roadmap.md`: architecture proposal, normalized Project analytics schema, static report data contract, Git ingestion trade-offs, and milestones B-I. `docs/hotspots.md`: formulas, calculation rules, limitations, and the no-developer-ranking guardrail.
 - Git history benchmark target (`cargo bench --bench history`) measuring the raw log walk, end-to-end history analysis, and hotspot scoring separately; CI compiles it alongside the analyzer bench.
+- Temporal (change) coupling: `leadline coupling TARGET` lists files that repeatedly change in the same commits, with co-change counts, directional coupling, and Jaccard similarity. One shared streamed history walk; commits wider than 50 files do not create pairs; `--min-cochanges`, `--top`, `--json`, and `--format agent-json` supported. See `docs/coupling.md`.
 
 ## 0.2.0 - 2026-09-13
 

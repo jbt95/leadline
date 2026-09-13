@@ -141,3 +141,40 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
   `window`, `git_available`, `summary.{files_analyzed,hotspots}`, one row per
   hotspot (`path`, `score`, `cognitive`, `cyclomatic`, `crap`, `coverage`,
   `changes`, `contributors`), and `truncated`.
+
+## Coupling envelope
+
+```json
+{
+  "schema_version": 1,
+  "analyzer_version": "0.2.0",
+  "target": "src/payment/PaymentService.ts",
+  "git_available": true,
+  "target_commits": 20,
+  "pair_commits": 19,
+  "max_commit_files": 50,
+  "related": [
+    {
+      "path": "src/payment/PaymentValidator.ts",
+      "commits": 15,
+      "co_changes": 12,
+      "directional": 0.6,
+      "reverse_directional": 0.8,
+      "jaccard": 0.5217391304347826
+    }
+  ],
+  "truncated": false
+}
+```
+
+- `target_commits` counts every commit touching the target, including commits
+  wider than `max_commit_files`; `pair_commits` counts the target commits small
+  enough to contribute pairs.
+- `directional` is `co_changes / target_commits`; `reverse_directional` is
+  `co_changes / commits`; `jaccard` is
+  `co_changes / (target_commits + commits - co_changes)`.
+- `git_available: false` yields `target_commits: 0` and an empty `related`
+  list. Rows are sorted by `directional`, then `co_changes`, then path.
+- `--format agent-json` emits `schema_version`, `target`, `git_available`,
+  `target_commits`, one row per related file (`path`, `commits`, `co_changes`,
+  `directional`, `jaccard`), and `truncated`.

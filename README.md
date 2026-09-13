@@ -190,6 +190,18 @@ developers. The [analytics roadmap](docs/analytics-roadmap.md) describes the
 dependency, coupling, ownership, risk, and static-report milestones built on this
 foundation.
 
+Find files that repeatedly change together even when no import connects them:
+
+```console
+leadline coupling src/payment/PaymentService.ts
+leadline coupling src/payment/PaymentService.ts --min-cochanges 1 --format agent-json
+```
+
+Coupling reports co-change counts, directional coupling, and Jaccard similarity
+from the same history walk. Commits wider than 50 files never create pairs, and
+co-change is process evidence to inspect, not a dependency to trust — see
+[coupling](docs/coupling.md).
+
 ## Coverage limits
 
 LCOV and JaCoCo line coverage are supported, with Windows and Unix report paths normalized.

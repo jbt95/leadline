@@ -11,6 +11,7 @@ leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitiv
 leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by KEY] [--min-crap X] [--min-delta D]
 leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by KEY] [--min-crap X] [--min-delta D]
 leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]
+leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]
 leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]
 leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]
 leadline --version
@@ -25,6 +26,7 @@ leadline skill
 - `check`: like `analyze`, but keeps only violations and parse errors. It requires at least one threshold flag unless `--regressions` is selected. With `--base REV`, gates changed functions between the revision and the working tree. With `--baseline FILE`, gates current functions against a saved snapshot instead (exclusive with `--base`): paired functions fail on absolute or (with `--regressions`) delta violations, new functions fail only on absolute thresholds, and deleted functions are ignored. `--regressions` applies configured positive-delta limits to paired functions; added and removed functions are excluded. Absolute and delta gates combine, and either failure exits `1`.
 - `changed` / `diff`: functions changed between a base revision and a comparison target (default the working tree). `changed` takes `--base REV` (default `HEAD~1`); `diff` takes the base revision positionally. `--staged` compares against the index instead of the working tree; `--target REV` compares against another revision instead; the two are mutually exclusive (exit `2`). `--renames` enables Git file rename detection (`-M`), pairing old-path content with new content under the new path. `--explain` adds deterministic multiset-added contribution causes, with after-side lines, to regression rows in agent JSON. Both commands accept `--path` to scope to a file or directory.
 - `hotspots`: rank files by `max cognitive complexity x changes in the selected window` and expose every dimension (complexity, CRAP, coverage, churn, contributors, age). Git history is read with one streamed `git log --relative` walk; recency windows are relative to the HEAD commit time, not the wall clock (deterministic). A directory without Git still ranks by complexity and reports `git_available: false`. See `docs/hotspots.md` for formulas and limitations. `--limit N` (default 10) caps rows; `--since 30d|90d|365d` selects the window (default `90d`); coverage flags merge LCOV/JaCoCo before the join.
+- `coupling`: list files that repeatedly change in the same commits as `TARGET` (a file under the scope), ranked by directional coupling. Exposes `co_changes`, `commits`, directional, reverse-directional, and Jaccard values; commits wider than 50 files do not create pairs, and `--min-cochanges N` (default 2) suppresses one-off coincidences. `TARGET` must exist; use `--path ROOT` to set the analysis scope (default `.`). A directory without Git reports `git_available: false`. See `docs/coupling.md` for formulas and limitations.
 - `test-targets`: rank functions holding decision lines with known zero line-coverage hits, sorted by CRAP descending, then path/function/line. Coverage is required (exit `2` without it). Rows carry `uncovered` (known-zero-hit) and `unknown` (absent from the coverage record) contribution lines; unknown is never called uncovered. Output is capped at `--top N` (default 200). Coverage is line coverage, not branch coverage.
 - `baseline`: snapshot current function metrics to `FILE` (writes atomically via a sibling temp file, then rename). Review the file, commit it, and gate later edits with `check --baseline FILE --regressions`. Snapshot rows pair with current functions by path and name in same-name source order; parsing rejects unknown schemas, unknown metric profiles, and duplicate identities (exit `3`).
 - `--version` / `-V` / `version`: print `leadline <version>`.
@@ -37,9 +39,9 @@ leadline skill
 | Flag | Commands | Meaning |
 | --- | --- | --- |
 | `--json` | all analysis | Emit JSON report instead of terminal text. Exclusive with any `--format`. |
-| `--format agent-json` | analyze, function, check, changed, diff, hotspots, test-targets | Emit the compact agent-oriented JSON shape. Carries a `truncated` bool when budget flags drop entries. |
+| `--format agent-json` | analyze, function, check, changed, diff, hotspots, coupling, test-targets | Emit the compact agent-oriented JSON shape. Carries a `truncated` bool when budget flags drop entries. |
 | `--format sarif` | analyze, check | Emit SARIF 2.1.0 (`version` / `runs` / `results`), violations only. Exclusive with `--json`. |
-| `--top N` | analyze, function, check, changed, diff, test-targets | Keep at most `N` entries per list (`test-targets` default cap is 200). Only with `--format agent-json` (`N >= 1`), except `test-targets` where it also caps terminal output. |
+| `--top N` | analyze, function, check, changed, diff, coupling, test-targets | Keep at most `N` entries per list (`coupling` default 20, `test-targets` default 200). Only with `--format agent-json` (`N >= 1`), except `coupling` and `test-targets` where it also caps terminal/JSON output. |
 | `--sort-by KEY` | analyze, function, check, changed, diff | Sort budget entries by `crap`, `cognitive`, or `cyclomatic`. Only with `--format agent-json`. |
 | `--min-crap X` | analyze, function, check, changed, diff | Drop entries below CRAP `X`. Only with `--format agent-json`. |
 | `--min-delta D` | changed, diff | Drop entries whose max before/after delta is below `D`. Only with `--format agent-json`. |
@@ -57,7 +59,8 @@ leadline skill
 | `--staged` | changed, diff | Compare `--base`/`REV` against the index (staged blobs) instead of the working tree. Exclusive with `--target`. |
 | `--target REV` | changed, diff | Compare `--base`/`REV` against another revision instead of the working tree. Exclusive with `--staged`. |
 | `--renames` | changed, diff | Detect Git file renames (`-M`) and pair a renamed file's old content with its new content under the new path. |
-| `--path PATH` | changed, diff | Scope changed analysis to a file or directory. |
+| `--path PATH` | changed, diff, coupling | Scope changed analysis to a file or directory; on `coupling` it sets the history scope (default `.`). |
+| `--min-cochanges N` | coupling | Drop related files with fewer than `N` shared commits (default 2, minimum 1). |
 
 Budget flags with `--json` or default terminal output are a usage error (exit `2`), never silently ignored. `--top 0` and unparsable budget values are usage errors.
 

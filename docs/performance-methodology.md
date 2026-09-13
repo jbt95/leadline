@@ -19,6 +19,7 @@ cargo bench --bench history
 - `raw_git_log`: the production `git log --relative --no-merges --numstat -z -M30%` walk alone, so parsing overhead is bounded by comparing it with `history_analysis`.
 - `history_analysis`: end-to-end history ingestion at 20 and 200 commits (HEAD lookup, streaming parse, rename resolution, aggregation). Reported in commits/s.
 - `hotspot_scoring`: source x history join and ranking over 2,000 pre-analyzed files, no Git access. Reported in files/s.
+- `coupling_analysis`: co-change indexing for one target over the 200-commit repository. Reported in commits/s.
 
 Synthetic repositories for the history benches are staged once, outside the timed loops, with deterministic content.
 
@@ -67,7 +68,8 @@ Never compare runs across machines as one series. Never commit a benchmark resul
 
 | Case | Median | Throughput |
 | --- | ---: | ---: |
-| Raw `git log`, 200 commits / 1,000 records | 292.07 ms | 684.78 commits/s |
-| History analysis, 20 commits / 100 records | 79.101 ms | 252.84 commits/s |
-| History analysis, 200 commits / 1,000 records | 320.44 ms | 624.14 commits/s |
-| Hotspot scoring, 2,000 files | 296.03 µs | 6.756 Mfiles/s |
+| Raw `git log`, 200 commits / 1,000 records | 307.20 ms | 651.05 commits/s |
+| History analysis, 20 commits / 100 records | 81.006 ms | 246.90 commits/s |
+| History analysis, 200 commits / 1,000 records | 324.32 ms | 616.67 commits/s |
+| Hotspot scoring, 2,000 files | 293.27 µs | 6.820 Mfiles/s |
+| Coupling analysis, 200 commits / 1,000 records | 366.77 ms | 545.30 commits/s |

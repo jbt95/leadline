@@ -62,7 +62,7 @@ Current modules:
 | `core`, `parser`, `discovery`, `coverage`, `diff`, `report`, `sarif` | existing source-metric engine and changed-code analysis | released |
 | `history` | Git history to normalized per-file facts | Milestone A |
 | `hotspots` | source metrics x Git facts, ranked with exposed dimensions | Milestone A |
-| `coupling` | temporal co-change (planned) | Milestone B |
+| `coupling` | temporal co-change indexing and related-file queries | Milestone B |
 | `graph`, `impact` | static dependencies, blast radius, cycles (planned) | Milestone C |
 | `risk` | explainable change-risk model (planned) | Milestone D |
 | `duplication`, `tests`, `policy` | clone detection, test relationships, architecture rules (planned) | Milestones H/I |
@@ -185,7 +185,7 @@ invalidate parsed source metrics.
 | Milestone | Scope | Status |
 | --- | --- | --- |
 | A | Git history model, churn, recency, age, contributors, hotspots, CLI + JSON, fixtures, benchmarks | **implemented** |
-| B | temporal coupling: co-change counts, directional coupling, Jaccard, `coupling` command | next |
+| B | temporal coupling: co-change counts, directional coupling, Jaccard, `coupling` command | **implemented** |
 | C | dependency extraction, fan-in/out, transitive dependents, blast radius, cycles | planned |
 | D | explainable `change-risk-v1` model (complexity, CRAP, churn, impact, ownership, policy) | planned |
 | E | diff intelligence: new vs existing vs resolved debt, risk regressions | planned |
@@ -202,9 +202,9 @@ are only added when a concrete question needs them.
 - Function-level churn attribution: per-function `git blame` is too slow for
   whole repositories; candidate strategies are blame-on-demand for hotspots
   and per-function change counts from line-range tracking between snapshots.
-- Temporal coupling thresholds: minimum support before a co-change edge is
-  reported, and how to suppress mega-commits (formatting sweeps, dependency
-  bumps) without hiding real coupling.
+- Temporal coupling windows and adaptive thresholds: coupling currently uses
+  full history with a fixed 50-file commit cap; time-windowed coupling and
+  adaptive suppression of sweeping commits remain open.
 - Snapshot cadence and storage format for Milestone G; JSON first, compact
   binary only if scale requires it.
 - Whether architecture policies evaluate the existing `-M30%` rename map or a
