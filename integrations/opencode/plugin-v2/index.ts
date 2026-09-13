@@ -20,9 +20,33 @@ interface FunctionInput {
   name?: string;
 }
 
+// V2 code mode reads `output`; `content` carries the display text. Failures are
+// returned as text so the model sees the analyzer error instead of a bare
+// "no output" result.
+async function textResult(run: () => Promise<string>) {
+  try {
+    const text = await run();
+    return { output: text, content: [{ type: "text" as const, text }] };
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error);
+    return { output: text, content: [{ type: "text" as const, text }] };
+  }
+}
+
 export default Plugin.define({
   id: "leadline",
   async setup(ctx) {
+    // The V2 tool context carries only the session ID; resolve the project
+    // directory per call so relative paths match the session's project.
+    const directoryFor = async (sessionID: string): Promise<string | undefined> => {
+      try {
+        const info = await ctx.session.get({ sessionID: sessionID as Parameters<typeof ctx.session.get>[0]["sessionID"] });
+        return info.location.directory;
+      } catch {
+        return undefined;
+      }
+    };
+
     await ctx.tool.transform((editor) => {
       editor.add({
         name: "leadline_changed",
@@ -35,9 +59,11 @@ export default Plugin.define({
           },
           additionalProperties: false,
         },
-        execute: async (input) => {
+        output: { type: "string" },
+        execute: async (input, context) => {
           const { base, path } = input as ChangedInput;
-          return { content: await runChanged({ base, path }) };
+          const directory = await directoryFor(context.sessionID);
+          return textResult(() => runChanged({ base, path }, directory));
         },
       });
       editor.add({
@@ -51,16 +77,22 @@ export default Plugin.define({
           },
           additionalProperties: false,
         },
-        execute: async (input) => {
+        output: { type: "string" },
+        execute: async (input, context) => {
           const { path = "", name = "" } = input as FunctionInput;
-          return { content: await runFunction({ file: path, name }) };
+          const directory = await directoryFor(context.sessionID);
+          return textResult(() => runFunction({ file: path, name }, directory));
         },
       });
       editor.add({
         name: "leadline_check",
         description: "Run the leadline quality gate over the project and list functions above the thresholds.",
         input: { type: "object", properties: {}, additionalProperties: false },
-        execute: async () => ({ content: await runCheck({}) }),
+        output: { type: "string" },
+        execute: async (_input, context) => {
+          const directory = await directoryFor(context.sessionID);
+          return textResult(() => runCheck({}, directory));
+        },
       });
     });
   },

@@ -38,20 +38,29 @@ equivalent of Option A is:
 ## Option C — Native plugin for OpenCode V2 (experimental)
 
 > The V2 plugin API is unstable (see `plugin-v2/README.md`). The V1
-> plugin above is the stable path.
+> plugin above is the stable path; MCP is the portable path.
 
-V2 discovers every plugin directory under `~/.config/opencode/plugins/`,
-so install by linking `plugin-v2/` into that directory:
+Requires `bun install` in `plugin-v2/` once, then link the directory into
+the global plugins directory and reference the **entry file** (not the
+directory) from `opencode.json`:
 
 ```console
 ln -sfn /path/to/leadline/integrations/opencode/plugin-v2 \
   ~/.config/opencode/plugins/leadline
+```
+
+```jsonc
+{ "plugins": ["./plugins/leadline/index.ts"] }
+```
+
+```console
 opencode2 service restart
 ```
 
-Do **not** also add a `plugins` entry for the same directory to
-`opencode.json`: V2 would load it twice and fail the whole plugin reload
-with `Duplicate plugin ID: leadline`.
+A directory entry (`./plugins/leadline`) loads the directory and its
+`index.ts` and fails the reload with `Duplicate plugin ID: leadline`.
+Confirm with a real `opencode2 run` tool call; `opencode2 plugin list` does
+not list directory-loaded plugins.
 
 ## Skill
 

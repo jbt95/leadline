@@ -5,11 +5,12 @@
 > reference host. Expect breakage across V2 betas; check the
 > [V2 plugins guide](https://opencode.ai/v2/docs/build/plugins) and the
 > [V1 migration guide](https://opencode.ai/v2/docs/build/plugins/migrate-v1)
-> when it stops loading. The V1 plugin in `../plugin/` is the stable path.
+> when it stops loading. The V1 plugin in `../plugin/` is the stable path;
+> MCP (`leadline mcp`) is the portable path.
 
-Thin wrapper with the same contract as the V1 plugin: shells out to the
-`leadline` binary and returns compact JSON. No metrics are reimplemented.
-Effective tool names are unchanged:
+Thin wrapper over the shared adapter core: shells out to the `leadline`
+binary and returns compact text. No metrics are reimplemented. Effective tool
+names are unchanged:
 
 - `leadline_changed` — changed functions vs git base
 - `leadline_function` — one function by file and name
@@ -24,23 +25,43 @@ Requires `leadline` on `PATH` (`leadline --version` must work).
    cd integrations/opencode/plugin-v2
    bun install
    ```
-2. Reference the directory from your `opencode.json(c)` (path relative to
-   the config file):
+2. Link the plugin directory into the global plugins directory:
+   ```console
+   ln -sfn /path/to/leadline/integrations/opencode/plugin-v2 \
+     ~/.config/opencode/plugins/leadline
+   ```
+3. Add a **file-level** entry to `opencode.json(c)`:
    ```jsonc
    {
      "$schema": "https://opencode.ai/config.json",
-     "plugins": ["./integrations/opencode/plugin-v2"],
+     "plugins": ["./plugins/leadline/index.ts"]
    }
    ```
-3. Restart the OpenCode service (`opencode2 service restart`) and confirm
-   the `leadline_*` tools are registered.
+   Point the entry at `index.ts`, not at the directory: a directory entry
+   loads both the directory and its `index.ts` and fails the whole plugin
+   reload with `Duplicate plugin ID: leadline`.
+4. Restart the service and confirm the tools register:
+   ```console
+   opencode2 service restart
+   ```
+   A real `opencode2 run` tool call is the only reliable confirmation;
+   `opencode2 plugin list` does not show directory-loaded plugins.
+
+## Notes
+
+- Tool results declare a string `output` schema plus a text `content` block:
+  the V2 code-mode runtime reads `output`, so a result without it shows up as
+  "no output" even when the tool ran.
+- Each call resolves the session's project directory (`ctx.session.get`) and
+  runs `leadline` there, so relative paths match the session.
 
 ## Permissions
 
 Same as V1: grant `leadline` subprocess execution only. The plugin never
-edits source, never touches the network, and truncates output to 4000
-chars to protect context.
+edits source, never touches the network, and caps tool output to protect
+context.
 
 ## Uninstall
 
-Remove the `plugins` entry. No other project files are touched.
+Remove the `plugins` entry and the `plugins/leadline` link. No other project
+files are touched.
