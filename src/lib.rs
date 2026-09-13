@@ -14,6 +14,7 @@ pub mod history;
 pub mod hotspots;
 pub mod impact;
 pub mod mcp;
+pub mod ownership;
 pub mod parser;
 pub mod report;
 pub mod risk;
