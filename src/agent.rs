@@ -1,5 +1,6 @@
 use crate::core::{AnalysisReport, FunctionAnalysis, FunctionMetrics, MetricContribution};
 use crate::diff::ChangedReport;
+use crate::hotspots::HotspotReport;
 use serde_json::{Value, json};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -189,6 +190,41 @@ pub fn changed_agent_json_budgeted(report: &ChangedReport, budget: &Budget) -> V
         "regressions": regressions.into_iter().map(|entry| entry.value).collect::<Vec<_>>(),
         "improvements": improvements.into_iter().map(|entry| entry.value).collect::<Vec<_>>(),
         "truncated": truncated,
+    })
+}
+
+/// Compact agent-oriented view of a ranked hotspot report.
+///
+/// Keeps one row per file with the dimensions an agent needs to decide what to
+/// inspect; the full report keeps the remaining churn detail.
+pub fn hotspots_agent_json(report: &HotspotReport) -> Value {
+    let hotspots: Vec<Value> = report
+        .hotspots
+        .iter()
+        .map(|hotspot| {
+            json!({
+                "path": hotspot.path,
+                "score": hotspot.score,
+                "cognitive": hotspot.max_cognitive,
+                "cyclomatic": hotspot.max_cyclomatic,
+                "crap": hotspot.max_crap,
+                "coverage": hotspot.coverage,
+                "changes": hotspot.changes,
+                "contributors": hotspot.contributors,
+            })
+        })
+        .collect();
+    json!({
+        "schema_version": report.schema_version,
+        "model": report.model,
+        "window": report.window,
+        "git_available": report.git_available,
+        "summary": {
+            "files_analyzed": report.files_analyzed,
+            "hotspots": report.hotspots.len(),
+        },
+        "hotspots": hotspots,
+        "truncated": report.truncated,
     })
 }
 

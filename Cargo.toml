@@ -30,6 +30,10 @@ criterion = "0.8"
 name = "analyzer"
 harness = false
 
+[[bench]]
+name = "history"
+harness = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

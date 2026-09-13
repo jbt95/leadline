@@ -5,6 +5,7 @@ use leadline::core::{
     OUTPUT_SCHEMA_VERSION, Thresholds,
 };
 use leadline::coverage::CoverageMap;
+use leadline::history::HistoryWindow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -99,6 +100,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
         "changed" | "diff" => changed_command(command, &args[1..]),
         "check" => check_command(&args[1..]),
         "baseline" => baseline_command(&args[1..]),
+        "hotspots" => hotspots_command(&args[1..]),
         "test-targets" => test_targets_command(&args[1..]),
         "doctor" => doctor_command(&args[1..]),
         "mcp" => match leadline::mcp::serve() {
@@ -311,7 +313,7 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
             }
             "--top" => {
                 index += 1;
-                budget.top = Some(parse_top(args.get(index))?);
+                budget.top = Some(parse_top(args.get(index), "--top")?);
                 has_budget = true;
             }
             "--sort-by" => {
@@ -389,14 +391,147 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
     Ok(ExitCode::SUCCESS)
 }
 
-/// Parse `--top N`; zero keeps nothing, so it is a usage error.
-fn parse_top(raw: Option<&String>) -> Result<usize, CliError> {
-    let raw = raw.ok_or_else(|| CliError::usage("--top requires a count"))?;
+/// Ranked complexity-x-churn hotspots with the underlying dimensions exposed.
+fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut path = PathBuf::from(".");
+    let mut has_path = false;
+    let mut limit = 10_usize;
+    let mut window = HistoryWindow::Days90;
+    let mut json = false;
+    let mut agent_json = false;
+    let mut coverage = CoverageMap::default();
+    let mut has_coverage = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => json = true,
+            "--format" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
+                if value != "agent-json" {
+                    return Err(CliError::usage(format!(
+                        "unknown --format '{value}': expected 'agent-json'"
+                    )));
+                }
+                agent_json = true;
+            }
+            "--limit" => {
+                index += 1;
+                limit = parse_top(args.get(index), "--limit")?;
+            }
+            "--since" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--since requires a window"))?;
+                window = HistoryWindow::parse(value).ok_or_else(|| {
+                    CliError::usage(format!(
+                        "unknown --since '{value}': expected '30d', '90d', or '365d'"
+                    ))
+                })?;
+            }
+            "--lcov" => {
+                index += 1;
+                let file = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--lcov requires a file"))?;
+                coverage.merge(load_coverage(file, CoverageFormat::Lcov)?);
+                has_coverage = true;
+            }
+            "--jacoco" => {
+                index += 1;
+                let file = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--jacoco requires a file"))?;
+                coverage.merge(load_coverage(file, CoverageFormat::Jacoco)?);
+                has_coverage = true;
+            }
+            "--coverage" => {
+                index += 1;
+                let file = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--coverage requires a file"))?;
+                coverage.merge(load_coverage(file, CoverageFormat::Auto)?);
+                has_coverage = true;
+            }
+            value if !value.starts_with('-') && !has_path => {
+                path = PathBuf::from(value);
+                has_path = true;
+            }
+            value => {
+                return Err(CliError::usage(format!(
+                    "unknown hotspots option '{value}'"
+                )));
+            }
+        }
+        index += 1;
+    }
+    if json && agent_json {
+        return Err(CliError::usage(
+            "--json and --format agent-json are exclusive",
+        ));
+    }
+    let config = load_config_for(&path)?;
+    let excludes: &[String] = config
+        .as_ref()
+        .map(|selected| selected.analysis_excludes.as_slice())
+        .unwrap_or(&[]);
+    let coverage = has_coverage.then_some(coverage);
+    let (analysis, scope) = if path.is_file() {
+        let scope = config_dir(&path);
+        let analyzed = leadline::analyze_file(&path, &scope, coverage.as_ref())
+            .map_err(|error| CliError::incomplete(error.to_string()))?;
+        (
+            AnalysisReport {
+                schema_version: OUTPUT_SCHEMA_VERSION,
+                metric_profile: METRIC_PROFILE,
+                analyzer_version: env!("CARGO_PKG_VERSION"),
+                metric_specs: MetricSpecs::default(),
+                files: vec![analyzed],
+            },
+            scope,
+        )
+    } else {
+        let analyzed = analyze_with_cache(&path, coverage.as_ref(), excludes, None)?;
+        (analyzed, path.clone())
+    };
+    if analysis.files.is_empty() {
+        return Err(CliError::incomplete(format!(
+            "no supported files found under {}",
+            path.display()
+        )));
+    }
+    let history = leadline::history::analyze_history(&scope)
+        .map_err(|error| CliError::incomplete(error.to_string()))?;
+    let report = leadline::hotspots::build(&analysis, &history, window, limit);
+    if agent_json {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::agent::hotspots_agent_json(&report))
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else {
+        print!("{}", leadline::report::terminal_hotspots(&report));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Parse `--top N` / `--limit N`; zero keeps nothing, so it is a usage error.
+fn parse_top(raw: Option<&String>, flag: &str) -> Result<usize, CliError> {
+    let raw = raw.ok_or_else(|| CliError::usage(format!("{flag} requires a count")))?;
     let top: usize = raw
         .parse()
-        .map_err(|_| CliError::usage("--top requires a positive integer"))?;
+        .map_err(|_| CliError::usage(format!("{flag} requires a positive integer")))?;
     if top == 0 {
-        return Err(CliError::usage("--top must be at least 1"));
+        return Err(CliError::usage(format!("{flag} must be at least 1")));
     }
     Ok(top)
 }
@@ -873,7 +1008,7 @@ fn test_targets_command(args: &[String]) -> Result<ExitCode, CliError> {
             }
             "--top" => {
                 index += 1;
-                top = Some(parse_top(args.get(index))?);
+                top = Some(parse_top(args.get(index), "--top")?);
             }
             "--lcov" => {
                 index += 1;
@@ -1255,7 +1390,7 @@ impl CommonOptions {
                 }
                 "--top" => {
                     index += 1;
-                    budget.top = Some(parse_top(args.get(index))?);
+                    budget.top = Some(parse_top(args.get(index), "--top")?);
                     has_budget = true;
                 }
                 "--sort-by" => {
@@ -1444,5 +1579,5 @@ fn load_coverage(path: &str, format: CoverageFormat) -> Result<CoverageMap, CliE
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp\n  leadline skill\n  leadline version\n  leadline --version"
+    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp\n  leadline skill\n  leadline version\n  leadline --version"
 }

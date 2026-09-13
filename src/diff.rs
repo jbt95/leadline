@@ -4,6 +4,7 @@ use crate::core::{
     FunctionAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION, ParseDiagnostic,
 };
 use crate::parser::detect_language;
+use crate::strip_verbatim_prefix;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -409,27 +410,9 @@ fn group_by_name(functions: Vec<FunctionAnalysis>) -> BTreeMap<String, Vec<Funct
 }
 /// `std::fs::canonicalize` returns verbatim (`\\?\`) paths on Windows, which
 /// never match the plain paths git prints. Both the requested path and the
-/// git-reported root pass through canonicalization plus this strip, so scope
-/// comparison always compares like with like. Identity off Windows.
-#[cfg(windows)]
-fn strip_verbatim_prefix(path: &Path) -> PathBuf {
-    const UNC_PREFIX: &str = r"\\?\UNC\";
-    const VERBATIM_PREFIX: &str = r"\\?\";
-    let text = path.as_os_str().to_string_lossy();
-    if let Some(rest) = text.strip_prefix(UNC_PREFIX) {
-        return PathBuf::from(format!("\\\\{rest}"));
-    }
-    if let Some(rest) = text.strip_prefix(VERBATIM_PREFIX) {
-        return PathBuf::from(rest);
-    }
-    path.to_path_buf()
-}
-
-#[cfg(not(windows))]
-fn strip_verbatim_prefix(path: &Path) -> PathBuf {
-    path.to_path_buf()
-}
-
+/// git-reported root pass through canonicalization plus
+/// [`crate::strip_verbatim_prefix`], so scope comparison always compares like
+/// with like.
 fn git<'a>(cwd: &Path, args: impl IntoIterator<Item = &'a str>) -> Result<Output> {
     let output = Command::new("git").current_dir(cwd).args(args).output()?;
     if output.status.success() {

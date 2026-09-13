@@ -1,5 +1,6 @@
 use crate::core::{AnalysisReport, FunctionAnalysis};
 use crate::diff::ChangedReport;
+use crate::hotspots::HotspotReport;
 use std::fmt::Write;
 
 pub fn terminal(report: &AnalysisReport) -> String {
@@ -81,6 +82,94 @@ pub fn terminal_changed(report: &ChangedReport) -> String {
             change.after.as_ref().map(|f| f.metrics.loc as f64),
         );
         output.push('\n');
+    }
+    output
+}
+
+pub fn terminal_hotspots(report: &HotspotReport) -> String {
+    let mut output = String::new();
+    if !report.git_available {
+        output.push_str(
+            "Git history unavailable (no repository or no commits); ranking by complexity only.\n\n",
+        );
+    }
+    if report.hotspots.is_empty() {
+        return output;
+    }
+    let _ = writeln!(
+        output,
+        "Top engineering hotspots (window: {})\n",
+        report.window
+    );
+    for (index, hotspot) in report.hotspots.iter().enumerate() {
+        let _ = writeln!(output, "{}. {}", index + 1, hotspot.path);
+        output.push('\n');
+        match (hotspot.score, hotspot.changes) {
+            (Some(score), Some(changes)) => {
+                let _ = writeln!(
+                    output,
+                    "   Hotspot score      {score:>8}  (max cognitive {} x changes/{} {changes})",
+                    hotspot.max_cognitive, report.window
+                );
+            }
+            _ => {
+                let _ = writeln!(
+                    output,
+                    "   Hotspot score            n/a  (Git history unavailable)"
+                );
+            }
+        }
+        let _ = writeln!(output, "   Cognitive          {:>8}", hotspot.max_cognitive);
+        let _ = writeln!(
+            output,
+            "   Cyclomatic         {:>8}",
+            hotspot.max_cyclomatic
+        );
+        let _ = writeln!(
+            output,
+            "   CRAP               {:>8}",
+            hotspot
+                .max_crap
+                .map(|value| format!("{value:.1}"))
+                .unwrap_or_else(|| "unavailable".to_owned())
+        );
+        let _ = writeln!(
+            output,
+            "   Coverage           {:>8}",
+            hotspot
+                .coverage
+                .map(|value| format!("{:.1}%", value * 100.0))
+                .unwrap_or_else(|| "unavailable".to_owned())
+        );
+        let _ = writeln!(output, "   LOC                {:>8}", hotspot.loc);
+        let _ = writeln!(output, "   Functions          {:>8}", hotspot.functions);
+        if let Some(changes) = hotspot.changes_30d {
+            let _ = writeln!(output, "   Changes / 30 days  {changes:>8}");
+        }
+        if let Some(changes) = hotspot.changes_90d {
+            let _ = writeln!(output, "   Changes / 90 days  {changes:>8}");
+        }
+        if let Some(changes) = hotspot.changes_365d {
+            let _ = writeln!(output, "   Changes / 365 days {changes:>8}");
+        }
+        if let Some(contributors) = hotspot.contributors {
+            let _ = writeln!(output, "   Contributors       {contributors:>8}");
+        }
+        if let Some(recent) = hotspot.recent_contributors {
+            let _ = writeln!(output, "   Recent contributors {recent:>8}");
+        }
+        if let Some(days) = hotspot.days_since_last_change {
+            let _ = writeln!(output, "   Last change        {days:>8} days ago");
+        }
+        output.push('\n');
+    }
+    if report.truncated {
+        let _ = writeln!(
+            output,
+            "Showing the top {} of {} files (raise --limit for more).\n",
+            report.hotspots.len(),
+            report.files_analyzed
+        );
     }
     output
 }

@@ -6,6 +6,8 @@ pub mod core;
 pub mod coverage;
 pub mod diff;
 pub mod discovery;
+pub mod history;
+pub mod hotspots;
 pub mod mcp;
 pub mod parser;
 pub mod report;
@@ -18,7 +20,7 @@ use crate::core::{
 use crate::coverage::CoverageMap;
 use crate::parser::{ParserBackend, TreeSitterBackend};
 use rayon::prelude::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -98,4 +100,27 @@ pub fn normalize_path(path: &Path) -> String {
         }
     }
     parts.join("/")
+}
+
+/// `std::fs::canonicalize` returns verbatim (`\\?\`) paths on Windows, which
+/// never match the plain paths git prints. Git-facing code passes
+/// canonicalized paths through this strip so comparisons always compare like
+/// with like. Identity off Windows.
+#[cfg(windows)]
+pub(crate) fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    const UNC_PREFIX: &str = r"\\?\UNC\";
+    const VERBATIM_PREFIX: &str = r"\\?\";
+    let text = path.as_os_str().to_string_lossy();
+    if let Some(rest) = text.strip_prefix(UNC_PREFIX) {
+        return PathBuf::from(format!("\\\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(VERBATIM_PREFIX) {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
+#[cfg(not(windows))]
+pub(crate) fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
