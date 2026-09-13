@@ -7,6 +7,9 @@ use leadline::core::{
 use leadline::coupling::CouplingOptions;
 use leadline::coverage::CoverageMap;
 use leadline::history::HistoryWindow;
+use leadline::mutation::MutationInput;
+use leadline::ownership::OwnershipMode;
+use leadline::source_snapshot::SnapshotTarget;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -107,6 +110,9 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
         "dependencies" => dependencies_command(&args[1..]),
         "impact" => impact_command(&args[1..]),
         "test-targets" => test_targets_command(&args[1..]),
+        "project" => project_command(&args[1..]),
+        "debt" => debt_command(&args[1..]),
+        "snapshot" => snapshot_command(&args[1..]),
         "doctor" => doctor_command(&args[1..]),
         "mcp" => match leadline::mcp::serve() {
             Ok(()) => Ok(ExitCode::SUCCESS),
@@ -659,6 +665,330 @@ fn risk_command(args: &[String]) -> Result<ExitCode, CliError> {
     } else {
         print!("{}", leadline::report::terminal_risk(&report));
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Canonical project build across every analytics section.
+fn project_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut path = PathBuf::from(".");
+    let mut has_path = false;
+    let mut json = false;
+    let mut agent_json = false;
+    let mut window = HistoryWindow::Days90;
+    let mut target = SnapshotTarget::Worktree;
+    let mut mutation_inputs = Vec::new();
+    let mut test_maps = Vec::new();
+    let mut snapshots_path: Option<PathBuf> = None;
+    let mut ownership_mode: Option<OwnershipMode> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => json = true,
+            "--format" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
+                if value != "agent-json" {
+                    return Err(CliError::usage(format!(
+                        "unknown --format '{value}': expected 'agent-json'"
+                    )));
+                }
+                agent_json = true;
+            }
+            "--since" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--since requires a window"))?;
+                window = HistoryWindow::parse(value).ok_or_else(|| {
+                    CliError::usage(format!(
+                        "unknown --since '{value}': expected '30d', '90d', or '365d'"
+                    ))
+                })?;
+            }
+            "--target" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--target requires a revision"))?;
+                target = SnapshotTarget::Revision(value.clone());
+            }
+            "--pit" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--pit requires a file"))?;
+                mutation_inputs.push(MutationInput::Pit(PathBuf::from(value)));
+            }
+            "--stryker" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--stryker requires a file"))?;
+                mutation_inputs.push(MutationInput::Stryker(PathBuf::from(value)));
+            }
+            "--test-map" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--test-map requires a file"))?;
+                test_maps.push(PathBuf::from(value));
+            }
+            "--snapshots" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--snapshots requires a file"))?;
+                snapshots_path = Some(PathBuf::from(value));
+            }
+            "--include-authors" => {
+                set_ownership_mode(&mut ownership_mode, OwnershipMode::IncludeAuthors)?
+            }
+            "--anonymize-authors" => {
+                set_ownership_mode(&mut ownership_mode, OwnershipMode::AnonymizeAuthors)?
+            }
+            "--exclude-git-identities" => {
+                set_ownership_mode(&mut ownership_mode, OwnershipMode::AggregateOnly)?
+            }
+            value if !value.starts_with('-') && !has_path => {
+                path = PathBuf::from(value);
+                has_path = true;
+            }
+            value => {
+                return Err(CliError::usage(format!("unknown project option '{value}'")));
+            }
+        }
+        index += 1;
+    }
+    if json && agent_json {
+        return Err(CliError::usage(
+            "--json and --format agent-json are exclusive",
+        ));
+    }
+    let request = leadline::analytics::ProjectRequest {
+        path,
+        target,
+        window,
+        mutation_inputs,
+        test_maps,
+        ownership_mode: ownership_mode.unwrap_or(OwnershipMode::AggregateOnly),
+        snapshots_path,
+    };
+    let report = leadline::analytics::build(&request)
+        .map_err(|error| CliError::incomplete(error.to_string()))?;
+    if agent_json {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::agent::project_agent_json(&report))
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else {
+        print!("{}", leadline::report::terminal_project(&report));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn set_ownership_mode(
+    mode: &mut Option<OwnershipMode>,
+    value: OwnershipMode,
+) -> Result<(), CliError> {
+    if mode.is_some() {
+        return Err(CliError::usage(
+            "--include-authors, --anonymize-authors, and --exclude-git-identities are exclusive",
+        ));
+    }
+    *mode = Some(value);
+    Ok(())
+}
+
+/// Full-state debt and risk comparison against a base revision.
+fn debt_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut path = PathBuf::from(".");
+    let mut base = "HEAD~1".to_owned();
+    let mut target = SnapshotTarget::Worktree;
+    let mut target_flagged = false;
+    let mut staged = false;
+    let mut detect_renames = false;
+    let mut fail_on_regression = false;
+    let mut json = false;
+    let mut agent_json = false;
+    let mut window = HistoryWindow::Days90;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => json = true,
+            "--format" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
+                if value != "agent-json" {
+                    return Err(CliError::usage(format!(
+                        "unknown --format '{value}': expected 'agent-json'"
+                    )));
+                }
+                agent_json = true;
+            }
+            "--base" => {
+                index += 1;
+                base = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--base requires a revision"))?
+                    .clone();
+            }
+            "--staged" => {
+                if target_flagged {
+                    return Err(CliError::usage("--staged and --target are exclusive"));
+                }
+                staged = true;
+                target = SnapshotTarget::Index;
+            }
+            "--target" => {
+                if staged {
+                    return Err(CliError::usage("--staged and --target are exclusive"));
+                }
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--target requires a revision"))?;
+                target_flagged = true;
+                target = SnapshotTarget::Revision(value.clone());
+            }
+            "--renames" => detect_renames = true,
+            "--fail-on-regression" => fail_on_regression = true,
+            "--since" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--since requires a window"))?;
+                window = HistoryWindow::parse(value).ok_or_else(|| {
+                    CliError::usage(format!(
+                        "unknown --since '{value}': expected '30d', '90d', or '365d'"
+                    ))
+                })?;
+            }
+            "--path" => {
+                index += 1;
+                path = PathBuf::from(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--path requires a path"))?,
+                );
+            }
+            value => {
+                return Err(CliError::usage(format!("unknown debt option '{value}'")));
+            }
+        }
+        index += 1;
+    }
+    if json && agent_json {
+        return Err(CliError::usage(
+            "--json and --format agent-json are exclusive",
+        ));
+    }
+    let request = leadline::analytics::DebtRequest {
+        path,
+        base,
+        target,
+        detect_renames,
+        window,
+        fail_on_regression,
+    };
+    let report = leadline::analytics::analyze_debt(&request)
+        .map_err(|error| CliError::incomplete(error.to_string()))?;
+    if agent_json {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::agent::debt_agent_json(&report))
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else {
+        print!("{}", leadline::report::terminal_debt(&report));
+    }
+    if fail_on_regression && (report.summary.new > 0 || report.summary.risk_increased > 0) {
+        return Ok(ExitCode::from(1));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Captures one HEAD-keyed trend point into a snapshot store.
+fn snapshot_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut path = PathBuf::from(".");
+    let mut has_path = false;
+    let mut output: Option<PathBuf> = None;
+    let mut window = HistoryWindow::Days90;
+    let mut replace = false;
+    let mut mutation_inputs = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--output" => {
+                index += 1;
+                output =
+                    Some(PathBuf::from(args.get(index).ok_or_else(|| {
+                        CliError::usage("--output requires a file")
+                    })?));
+            }
+            "--since" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--since requires a window"))?;
+                window = HistoryWindow::parse(value).ok_or_else(|| {
+                    CliError::usage(format!(
+                        "unknown --since '{value}': expected '30d', '90d', or '365d'"
+                    ))
+                })?;
+            }
+            "--replace" => replace = true,
+            "--pit" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--pit requires a file"))?;
+                mutation_inputs.push(MutationInput::Pit(PathBuf::from(value)));
+            }
+            "--stryker" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--stryker requires a file"))?;
+                mutation_inputs.push(MutationInput::Stryker(PathBuf::from(value)));
+            }
+            value if !value.starts_with('-') && !has_path => {
+                path = PathBuf::from(value);
+                has_path = true;
+            }
+            value => {
+                return Err(CliError::usage(format!(
+                    "unknown snapshot option '{value}'"
+                )));
+            }
+        }
+        index += 1;
+    }
+    let output = output.ok_or_else(|| CliError::usage("snapshot requires --output FILE"))?;
+    let outcome =
+        leadline::analytics::capture_trend(&path, &output, window, &mutation_inputs, replace)
+            .map_err(|error| CliError::incomplete(error.to_string()))?;
+    let label = match outcome {
+        leadline::snapshots::SnapshotOutcome::Added => "added",
+        leadline::snapshots::SnapshotOutcome::Unchanged => "unchanged",
+        leadline::snapshots::SnapshotOutcome::Replaced => "replaced",
+    };
+    println!("snapshot: {label} {}", output.display());
     Ok(ExitCode::SUCCESS)
 }
 
@@ -2013,5 +2343,5 @@ fn usage() -> &'static str {
     "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]
   leadline risk [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]
   leadline dependencies [PATH] [--json] [--format agent-json]
-  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp\n  leadline skill\n  leadline version\n  leadline --version"
+  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp\n  leadline skill\n  leadline version\n  leadline --version"
 }

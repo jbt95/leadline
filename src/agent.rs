@@ -364,6 +364,90 @@ pub fn risk_agent_json(report: &RiskReport) -> Value {
     })
 }
 
+/// Compact agent-oriented view of a canonical Project.
+///
+/// Keeps identity, summary KPIs, and the top risk rows; full detail stays in
+/// the canonical `--json` document.
+pub fn project_agent_json(report: &crate::project::Project) -> Value {
+    let risks: Vec<Value> = report
+        .risk
+        .rows
+        .iter()
+        .take(20)
+        .map(|row| {
+            json!({
+                "path": row.path,
+                "score": row.score,
+                "components": row.components,
+            })
+        })
+        .collect();
+    json!({
+        "schema_version": report.meta.schema_version,
+        "generated_from": report.meta.generated_from,
+        "git_available": report.meta.git_available,
+        "head_commit": report.meta.head_commit,
+        "summary": {
+            "files": report.summary.files,
+            "functions": report.summary.functions,
+            "dependency_edges": report.summary.dependency_edges,
+            "dependency_cycles": report.summary.dependency_cycles,
+            "coverage_percent": report.summary.coverage_percent,
+            "duplication_groups": report.summary.duplication_groups,
+            "duplicated_lines": report.summary.duplicated_lines,
+            "policy_violations": report.summary.policy_violations,
+            "risk_model": report.summary.risk_model,
+        },
+        "risk": risks,
+        "truncated": report.risk.rows.len() > 20,
+    })
+}
+
+/// Compact agent-oriented view of a debt comparison.
+pub fn debt_agent_json(report: &crate::debt::DebtReport) -> Value {
+    let findings: Vec<Value> = report
+        .findings
+        .iter()
+        .take(50)
+        .map(|finding| {
+            json!({
+                "path": finding.path,
+                "name": finding.name,
+                "dimension": finding.dimension,
+                "threshold": finding.threshold,
+                "before": finding.before,
+                "after": finding.after,
+                "status": finding.status,
+            })
+        })
+        .collect();
+    let risk_changes: Vec<Value> = report
+        .risk_changes
+        .iter()
+        .filter(|change| change.status != crate::debt::RiskChangeStatus::Unchanged)
+        .take(50)
+        .map(|change| {
+            json!({
+                "path": change.path,
+                "status": change.status,
+                "before": change.before_score,
+                "after": change.after_score,
+                "delta": change.delta,
+            })
+        })
+        .collect();
+    json!({
+        "schema_version": report.schema_version,
+        "model": report.model,
+        "base": report.base,
+        "target_commit": report.target_commit,
+        "summary": report.summary,
+        "findings": findings,
+        "risk_changes": risk_changes,
+        "truncated": report.findings.len() > 50 || report.risk_changes.len() > 50,
+    })
+}
+
 /// Compact agent-oriented view of a blast-radius report.
 ///
 /// Keeps target metrics and the ordered dependent list; drops report

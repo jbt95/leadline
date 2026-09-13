@@ -323,6 +323,136 @@ pub fn terminal_hotspots(report: &HotspotReport) -> String {
     output
 }
 
+/// Terminal summary of a canonical Project build.
+pub fn terminal_project(report: &crate::project::Project) -> String {
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "Project ({}): {} files, {} functions, {} dependency edges\n",
+        report.meta.generated_from,
+        report.summary.files,
+        report.summary.functions,
+        report.summary.dependency_edges
+    );
+    if let Some(commit) = &report.meta.head_commit {
+        let _ = writeln!(output, "HEAD             {commit}");
+    }
+    let _ = writeln!(output, "Risk model       {}", report.risk.model);
+    let _ = writeln!(
+        output,
+        "Coverage         {}",
+        report
+            .summary
+            .coverage_percent
+            .map(|percent| format!("{percent:.1}%"))
+            .unwrap_or_else(|| "n/a".to_owned())
+    );
+    let _ = writeln!(
+        output,
+        "Duplication      {} groups, {} duplicated lines{}",
+        report.summary.duplication_groups,
+        report.summary.duplicated_lines,
+        if report.duplication.complete {
+            ""
+        } else {
+            " (incomplete)"
+        }
+    );
+    let _ = writeln!(
+        output,
+        "Policy           {} violations",
+        report.summary.policy_violations
+    );
+    if !report.risk.rows.is_empty() {
+        let _ = writeln!(output, "\nTop risks");
+        for row in report.risk.rows.iter().take(5) {
+            let _ = writeln!(output, "  {:>6.1}  {}", row.score, row.path);
+        }
+    }
+    output
+}
+
+/// Terminal summary of a full-state debt comparison.
+pub fn terminal_debt(report: &crate::debt::DebtReport) -> String {
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "Debt {} -> {} (model: {})\n",
+        report.base,
+        report.target_commit.as_deref().unwrap_or("worktree"),
+        report.model
+    );
+    let _ = writeln!(
+        output,
+        "Debt findings    new {} / existing {} / resolved {} / unknown {}",
+        report.summary.new,
+        report.summary.existing,
+        report.summary.resolved,
+        report.summary.unknown
+    );
+    let _ = writeln!(
+        output,
+        "Risk changes     +{} / -{} / added {} / removed {}",
+        report.summary.risk_increased,
+        report.summary.risk_decreased,
+        report.summary.risk_added,
+        report.summary.risk_removed
+    );
+    if !report.findings.is_empty() {
+        let _ = writeln!(output, "\nFindings");
+        for finding in report.findings.iter().take(20) {
+            let status = match finding.status {
+                crate::debt::DebtStatus::New => "new",
+                crate::debt::DebtStatus::Existing => "existing",
+                crate::debt::DebtStatus::Resolved => "resolved",
+            };
+            let _ = writeln!(
+                output,
+                "  {:8} {} {} {} ({} -> {})",
+                status,
+                finding.path,
+                finding.name,
+                finding.dimension,
+                finding
+                    .before
+                    .map(|value| format!("{value:.1}"))
+                    .unwrap_or_else(|| "n/a".to_owned()),
+                finding
+                    .after
+                    .map(|value| format!("{value:.1}"))
+                    .unwrap_or_else(|| "n/a".to_owned())
+            );
+        }
+    }
+    if !report.risk_changes.is_empty() {
+        let _ = writeln!(output, "\nRisk changes");
+        for change in report.risk_changes.iter().take(20) {
+            let status = match change.status {
+                crate::debt::RiskChangeStatus::Added => "added",
+                crate::debt::RiskChangeStatus::Increased => "increased",
+                crate::debt::RiskChangeStatus::Decreased => "decreased",
+                crate::debt::RiskChangeStatus::Removed => "removed",
+                crate::debt::RiskChangeStatus::Unchanged => "unchanged",
+            };
+            let _ = writeln!(
+                output,
+                "  {:9} {} ({} -> {})",
+                status,
+                change.path,
+                change
+                    .before_score
+                    .map(|value| format!("{value:.1}"))
+                    .unwrap_or_else(|| "n/a".to_owned()),
+                change
+                    .after_score
+                    .map(|value| format!("{value:.1}"))
+                    .unwrap_or_else(|| "n/a".to_owned())
+            );
+        }
+    }
+    output
+}
+
 pub fn terminal_risk(report: &RiskReport) -> String {
     let mut output = String::new();
     if !report.git_available {
