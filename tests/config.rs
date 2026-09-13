@@ -36,9 +36,106 @@ fn parses_full_config() {
                 max_nesting: Some(4),
             },
             regressions: config::RegressionLimits::default(),
+            duplication: config::DuplicationConfig::default(),
+            architecture_rules: Vec::new(),
         }
     );
     config.validate().unwrap();
+}
+
+const DUPLICATION: &str = r#"
+[duplication]
+min_tokens = 80
+min_lines = 6
+exclude = ["generated/**"]
+"#;
+
+const ARCHITECTURE: &str = r#"
+[[architecture.rules]]
+name = "domain-no-ui"
+source = "src/domain/**"
+deny = ["src/ui/**", "src/widgets/**"]
+severity = "error"
+[[architecture.rules]]
+name = "api-no-db"
+source = "src/api/**"
+deny = ["src/db/**"]
+severity = "warning"
+"#;
+
+#[test]
+fn duplication_defaults_and_parsing() {
+    let default = config::DuplicationConfig::default();
+    assert_eq!(default.min_tokens, 50);
+    assert_eq!(default.min_lines, 5);
+    assert!(default.excludes.is_empty());
+
+    let parsed = parse_str(DUPLICATION).unwrap();
+    assert_eq!(parsed.duplication.min_tokens, 80);
+    assert_eq!(parsed.duplication.min_lines, 6);
+    assert_eq!(parsed.duplication.excludes, ["generated/**"]);
+}
+
+#[test]
+fn duplication_rejects_unknown_keys_and_non_positive_minimums() {
+    for doc in [
+        "[duplication]\nmin_tokens = 0\n",
+        "[duplication]\nmin_lines = 0\n",
+        "[duplication]\nmin_tokens = -1\n",
+        "[duplication]\nbogus = 1\n",
+        "[duplication]\nexclude = \"not-an-array\"\n",
+        "[duplication]\nexclude = [1]\n",
+    ] {
+        assert!(parse_str(doc).is_err(), "accepted: {doc:?}");
+    }
+}
+
+#[test]
+fn architecture_rules_preserve_order_and_severity() {
+    let parsed = parse_str(ARCHITECTURE).unwrap();
+    assert_eq!(parsed.architecture_rules.len(), 2);
+    let first = &parsed.architecture_rules[0];
+    assert_eq!(first.name, "domain-no-ui");
+    assert_eq!(first.source, "src/domain/**");
+    assert_eq!(first.deny, ["src/ui/**", "src/widgets/**"]);
+    assert_eq!(first.severity, config::Severity::Error);
+    assert_eq!(
+        parsed.architecture_rules[1].severity,
+        config::Severity::Warning
+    );
+}
+
+#[test]
+fn architecture_rejects_invalid_rules() {
+    for doc in [
+        // Duplicate names.
+        "[[architecture.rules]]\nname = \"a\"\nsource = \"src/**\"\ndeny = [\"x/**\"]\nseverity = \"info\"\n[[architecture.rules]]\nname = \"a\"\nsource = \"src/**\"\ndeny = [\"y/**\"]\nseverity = \"info\"\n",
+        // Empty name.
+        "[[architecture.rules]]\nname = \"\"\nsource = \"src/**\"\ndeny = [\"x/**\"]\nseverity = \"info\"\n",
+        // Missing fields.
+        "[[architecture.rules]]\nname = \"a\"\ndeny = [\"x/**\"]\nseverity = \"info\"\n",
+        "[[architecture.rules]]\nname = \"a\"\nsource = \"src/**\"\nseverity = \"info\"\n",
+        "[[architecture.rules]]\nname = \"a\"\nsource = \"src/**\"\ndeny = [\"x/**\"]\n",
+        // Invalid severity.
+        "[[architecture.rules]]\nname = \"a\"\nsource = \"src/**\"\ndeny = [\"x/**\"]\nseverity = \"fatal\"\n",
+        // Empty deny list or non-string entries.
+        "[[architecture.rules]]\nname = \"a\"\nsource = \"src/**\"\ndeny = []\nseverity = \"info\"\n",
+        "[[architecture.rules]]\nname = \"a\"\nsource = \"src/**\"\ndeny = [1]\nseverity = \"info\"\n",
+        // Rejected glob forms.
+        "[[architecture.rules]]\nname = \"a\"\nsource = \"!src/**\"\ndeny = [\"x/**\"]\nseverity = \"info\"\n",
+        "[[architecture.rules]]\nname = \"a\"\nsource = \"/src/**\"\ndeny = [\"x/**\"]\nseverity = \"info\"\n",
+        "[[architecture.rules]]\nname = \"a\"\nsource = \"src/**/\"\ndeny = [\"x/**\"]\nseverity = \"info\"\n",
+        "[[architecture.rules]]\nname = \"a\"\nsource = \"../src/**\"\ndeny = [\"x/**\"]\nseverity = \"info\"\n",
+        "[[architecture.rules]]\nname = \"a\"\nsource = \"src/**\"\ndeny = [\"C:\\\\x/**\"]\nseverity = \"info\"\n",
+        "[[architecture.rules]]\nname = \"a\"\nsource = \"src/**\"\ndeny = [\"x/**\"]\nextra = 1\nseverity = \"info\"\n",
+    ] {
+        assert!(parse_str(doc).is_err(), "accepted: {doc:?}");
+    }
+}
+
+#[test]
+fn architecture_rejects_unknown_keys_in_section() {
+    assert!(parse_str("[architecture]\nbogus = []\n").is_err());
 }
 
 #[test]

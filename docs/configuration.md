@@ -21,6 +21,17 @@ cognitive = 1
 cyclomatic = 0
 max_nesting = 0
 crap = 0.0
+
+[duplication]
+min_tokens = 50
+min_lines = 5
+exclude = ["generated/**"]
+
+[[architecture.rules]]
+name = "domain-no-ui"
+source = "src/domain/**"
+deny = ["src/ui/**"]
+severity = "error"
 ```
 
 ## `[analysis]`
@@ -42,6 +53,18 @@ Absolute limits for `check`. Any subset of `cognitive`, `cyclomatic`, `max_nesti
 ## `[regressions]`
 
 Allowed positive deltas for `check --base REV --regressions` and `check --baseline FILE --regressions`. Values are non-negative. Missing values default to zero. Only paired functions are checked; added and removed functions are ignored. Absolute thresholds and regression limits can run together. A failure in either gate exits `1`.
+
+## `[duplication]`
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `min_tokens` | integer >= 1 | `50` | Minimum normalized token sequence for a clone. |
+| `min_lines` | integer >= 1 | `5` | Minimum line span of every occurrence. |
+| `exclude` | list of glob strings | none | Extra paths skipped in addition to `[analysis].exclude`. |
+
+## `[[architecture.rules]]`
+
+Ordered deny rules over resolved dependency edges. Each rule needs `name` (unique), `source` (one glob), `deny` (at least one glob), and `severity` (`info`, `warning`, or `error`). Globs are analysis-root-relative gitignore-style patterns; negation, absolute/drive paths, trailing `/`, and escaping `..` are rejected. Violations classify `new`, `existing`, or `resolved` against `--base`.
 
 ## Baselines
 
