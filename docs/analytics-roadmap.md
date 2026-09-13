@@ -5,7 +5,13 @@ function-level metric analyzer into a local engineering-intelligence engine.
 It records the module boundaries, the normalized analytics model, the static
 report data contract, and the planned milestones. Milestones A (Git history and
 hotspots), B (temporal coupling), C (dependencies and impact), and D
-(change risk) are implemented; later sections describe designed-but-unbuilt work.
+(change risk) are implemented. The E-I engines are partially implemented on the
+`feature/complete-analytics-roadmap` branch: full-state debt comparison with
+`project`/`debt`/`snapshot` commands, deterministic source snapshots and Git
+analytics, ownership, duplication, policy with `change-risk-v2`, mutation/test
+adapters, the canonical `Project` model, and the trend store. The static web
+report, focused mutation/duplication/policy CLI surfaces, MCP parity, and
+Project coverage wiring remain open.
 
 The product question is not "how many metrics do we have" but "where is
 engineering risk concentrated, why does it matter, and what does changed code
@@ -61,12 +67,18 @@ Current modules:
 | Module | Role | Status |
 | --- | --- | --- |
 | `core`, `parser`, `discovery`, `coverage`, `diff`, `report`, `sarif` | existing source-metric engine and changed-code analysis | released |
-| `history` | Git history to normalized per-file facts | Milestone A |
+| `git`, `source_snapshot` | no-fetch Git access and worktree/index/revision snapshots | branch |
+| `history` | Git history, identity touches, whole-project coupling from one walk | Milestone A |
 | `hotspots` | source metrics x Git facts, ranked with exposed dimensions | Milestone A |
 | `coupling` | temporal co-change indexing and related-file queries | Milestone B |
 | `graph`, `impact` | static dependencies, blast radius, cycles | Milestone C |
 | `risk` | explainable change-risk model | Milestone D |
-| `duplication`, `tests`, `policy` | clone detection, test relationships, architecture rules (planned) | Milestones H/I |
+| `ownership` | anonymous concentration and optional author projection | branch |
+| `debt` | full-state threshold transitions and risk deltas | branch |
+| `mutation`, `test_relationships` | PIT/Stryker ingestion and explicit test maps | branch |
+| `duplication`, `policy` | token-clone detection and architecture rules | branch |
+| `risk_v2` | policy/concentration-aware scoring | branch |
+| `project`, `snapshots`, `analytics` | canonical model, trend store, orchestration | branch |
 | `report` (extended) | canonical report model plus static site generator (planned) | Milestone F |
 
 ## Normalized analytics schema
@@ -189,11 +201,11 @@ invalidate parsed source metrics.
 | B | temporal coupling: co-change counts, directional coupling, Jaccard, `coupling` command | **implemented** |
 | C | dependency extraction, fan-in/out, transitive dependents, blast radius, cycles | **implemented** |
 | D | explainable `change-risk-v1` model (complexity, CRAP, churn, impact, ownership, policy) | **implemented** |
-| E | diff intelligence: new vs existing vs resolved debt, risk regressions | planned |
-| F | static web report MVP: overview, distributions, hotspots, explorers, dependencies | planned |
-| G | historical snapshots and trends, treemap, coupling and cycle views | planned |
-| H | mutation ingestion (PIT, Stryker) and test-to-code relationships | planned |
-| I | duplication detection and architecture policies with drift detection | planned |
+| E | diff intelligence: new vs existing vs resolved debt, risk regressions | engine + `debt` CLI done; full-state comparison |
+| F | static web report MVP: overview, distributions, hotspots, explorers, dependencies | not started; canonical `Project` model ready |
+| G | historical snapshots and trends, treemap, coupling and cycle views | store + `snapshot` CLI done; report views pending |
+| H | mutation ingestion (PIT, Stryker) and test-to-code relationships | adapters done; focused CLI + MCP pending |
+| I | duplication detection and architecture policies with drift detection | engines done; focused CLI + MCP pending |
 
 Deferred on purpose: additional OO metrics (NPath, LCOM, RFC, DIT, CBO, WMC)
 are only added when a concrete question needs them.

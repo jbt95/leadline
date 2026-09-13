@@ -2,6 +2,27 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## 0.3.0 - Unreleased
+
+### Added
+
+- Hardened read-only Git access (`leadline::git`): every subprocess sets `GIT_NO_LAZY_FETCH=1`, `GIT_OPTIONAL_LOCKS=0`, and a stable C locale; annotated tags peel to exactly one commit; repository corruption and missing objects propagate instead of degrading silently.
+- Source snapshots (`leadline::source_snapshot`): deterministic worktree, index, and revision source states with one shared source filter, symlink/regular-file rules, streamed `cat-file` object reads, target config/mailmap blobs, and strict path validation. In-memory analysis (`analyze_sources`, `analyze_dependencies_from_sources`) matches filesystem analysis.
+- Revision-bounded Git analytics (`analyze_git_at[_with_mailmap]`): one walk yields history, per-file identity touches, and whole-project coupling; raw `%an/%ae` with a deterministic target `.mailmap` adapter (git-faithful precedence, no ambient config).
+- Ownership analytics (`leadline::ownership`): anonymous touch concentration, bus factor 50, module sums, and opt-in author rows with artifact-local anonymized labels. Aggregate reports never contain identities.
+- Full-state diff intelligence (`leadline::debt`): threshold-transition debt (`new`/`existing`/`resolved` per dimension, unknown counted separately) plus complete-state risk deltas with component breakdown; `leadline debt [--base REV] [--staged|--target REV] [--renames] [--fail-on-regression]`.
+- Mutation and test adapters (`leadline::mutation`, `leadline::test_relationships`): PIT `mutations.xml` and Stryker JSON normalize to one row shape with provenance IDs, git-mailmap-safe identities, strict external paths, and a documented score; explicit versioned test maps resolve against analyzed functions.
+- Duplication (`leadline::duplication`, profile `tokens-v1`): type-2 token clones with language partitions, bounded candidate comparisons, stable content IDs, occurrence-level drift with rename mapping, and incomplete-report signaling at ceilings.
+- Architecture policy (`leadline::policy`) and `change-risk-v2` (`leadline::risk_v2`): ordered deny rules over high-confidence edges, `new`/`existing`/`resolved` drift, and policy/concentration-aware scoring. `change-risk-v1` stays byte-for-byte unchanged.
+- Canonical Project model (`leadline::project`) with meta, summary, modules, files, functions, dependencies, cycles, Git activity, coupling, ownership, coverage, mutation, test relationships, duplication, policy violations, risk, and optional trend points.
+- Trend snapshots (`leadline::snapshots`): HEAD-tree capture, config/model-aware keys, idempotent append, `--replace` for changed inputs, and lock-protected atomic writes; `leadline snapshot --output FILE`.
+- Orchestration (`leadline::analytics`) and new CLI commands: `leadline project`, `leadline debt`, and `leadline snapshot` with JSON and agent-JSON projections.
+- Configuration: `[duplication]` settings and `[[architecture.rules]]` with strict validation; bounded external inputs (config 1 MiB/16 levels, XML/JSON per-file and aggregate limits, JSON/XML depth caps, DTD/entity/encoding rejection) and strict report-path parsing.
+
+### Notes
+
+- Remaining E-I work on this branch: static web report generation, focused `mutation`/`duplication`/`policy` CLI commands, MCP tool parity, and Project coverage/mutation CLI inputs.
+
 ## Unreleased
 
 ### Added

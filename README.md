@@ -191,6 +191,20 @@ developers. The [analytics roadmap](docs/analytics-roadmap.md) describes the own
 and static-report milestones still to build on this foundation
 (coupling, dependencies, impact, and risk are implemented; see above and below).
 
+Build the canonical project model and compare complete states before editing:
+
+```console
+leadline project . --json
+leadline debt --base HEAD~1 --fail-on-regression
+leadline snapshot . --output trends.json
+```
+
+`project` joins every analytics section (dependencies, churn, coupling,
+ownership, duplication, policy, risk) into one deterministic document; `debt`
+classifies threshold transitions and risk deltas between complete repository
+states; `snapshot` appends one HEAD-keyed trend point. The static web report is
+not built yet.
+
 Find files that repeatedly change together even when no import connects them:
 
 ```console
