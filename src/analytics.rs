@@ -34,12 +34,13 @@ pub struct ProjectRequest {
     pub test_maps: Vec<PathBuf>,
     pub ownership_mode: OwnershipMode,
     pub snapshots_path: Option<PathBuf>,
+    pub coverage: Option<crate::coverage::CoverageMap>,
 }
 
 /// Loads a source snapshot and builds the canonical Project.
 pub fn build(request: &ProjectRequest) -> Result<Project> {
     let (context, snapshot) = load(&request.path, request.target.clone())?;
-    let analysis = crate::analyze_sources(&snapshot.entries, None)?;
+    let analysis = crate::analyze_sources(&snapshot.entries, request.coverage.as_ref())?;
     let graph = analyze_dependencies_from_sources(&snapshot.entries)?;
     let mut budget = InputBudget::new();
     build_from_parts(&context, &snapshot, &analysis, &graph, request, &mut budget)
@@ -189,6 +190,7 @@ pub fn capture_trend(
         test_maps: Vec::new(),
         ownership_mode: OwnershipMode::AggregateOnly,
         snapshots_path: None,
+        coverage: None,
     };
     let (context, snapshot) = load(&request.path, request.target.clone())?;
     let Some(commit) = snapshot.commit.clone() else {
@@ -289,6 +291,7 @@ pub fn analyze_debt(request: &DebtRequest) -> Result<DebtReport> {
         test_maps: Vec::new(),
         ownership_mode: OwnershipMode::AggregateOnly,
         snapshots_path: None,
+        coverage: None,
     })?;
     let after = build(&ProjectRequest {
         path: request.path.clone(),
@@ -298,6 +301,7 @@ pub fn analyze_debt(request: &DebtRequest) -> Result<DebtReport> {
         test_maps: Vec::new(),
         ownership_mode: OwnershipMode::AggregateOnly,
         snapshots_path: None,
+        coverage: None,
     })?;
     let renames = if request.detect_renames {
         detect_renames(&request.path, &request.base)?
@@ -395,4 +399,80 @@ pub fn policy_for(request: &ProjectRequest) -> Result<PolicyReport> {
     let (context, snapshot) = load(&request.path, request.target.clone())?;
     let graph = analyze_dependencies_from_sources(&snapshot.entries)?;
     Ok(evaluate_policy(&graph, &context.config.architecture_rules))
+}
+
+/// Evaluates policy for one state, or `new`/`existing`/`resolved` drift when
+/// `base` is given.
+pub fn analyze_policy(
+    path: &Path,
+    target: SnapshotTarget,
+    base: Option<&str>,
+) -> Result<PolicyReport> {
+    let (context, snapshot) = load(path, target.clone())?;
+    let graph = analyze_dependencies_from_sources(&snapshot.entries)?;
+    let rules = &context.config.architecture_rules;
+    match base {
+        Some(base) => {
+            let (_, base_snapshot) = load(path, SnapshotTarget::Revision(base.to_owned()))?;
+            let base_graph = analyze_dependencies_from_sources(&base_snapshot.entries)?;
+            let renames = detect_renames(path, base).unwrap_or_default();
+            Ok(crate::policy::compare(&base_graph, &graph, rules, &renames))
+        }
+        None => Ok(evaluate_policy(&graph, rules)),
+    }
+}
+
+/// One duplication run: a current-state report or a drift comparison.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DuplicationOutcome {
+    Single(crate::duplication::DuplicationReport),
+    Drift(crate::duplication::DuplicationDriftReport),
+}
+
+/// Detects clones for one state, or compares occurrences against `base`.
+pub fn analyze_duplication(
+    path: &Path,
+    target: SnapshotTarget,
+    base: Option<&str>,
+) -> Result<DuplicationOutcome> {
+    let (context, snapshot) = load(path, target.clone())?;
+    let after = detect(&snapshot.entries, &context.config.duplication);
+    match base {
+        Some(base) => {
+            let (base_context, base_snapshot) =
+                load(path, SnapshotTarget::Revision(base.to_owned()))?;
+            let before = detect(&base_snapshot.entries, &base_context.config.duplication);
+            let renames = detect_renames(path, base).unwrap_or_default();
+            Ok(DuplicationOutcome::Drift(crate::duplication::compare(
+                &before, &after, &renames,
+            )))
+        }
+        None => Ok(DuplicationOutcome::Single(after)),
+    }
+}
+
+/// Normalizes every external mutation input plus optional test maps.
+pub fn analyze_mutation(
+    path: &Path,
+    target: SnapshotTarget,
+    mutation_inputs: &[MutationInput],
+    test_maps: &[PathBuf],
+) -> Result<(
+    crate::mutation::MutationReport,
+    Option<crate::test_relationships::TestRelationshipReport>,
+)> {
+    let (_, snapshot) = load(path, target)?;
+    let analysis = crate::analyze_sources(&snapshot.entries, None)?;
+    let mut budget = InputBudget::new();
+    let mutation = ingest_mutation(mutation_inputs, &snapshot.entries, &analysis, &mut budget)?;
+    let relationships = if test_maps.is_empty() {
+        None
+    } else {
+        Some(ingest_test_relationships(
+            test_maps,
+            &analysis,
+            &mut budget,
+        )?)
+    };
+    Ok((mutation, relationships))
 }

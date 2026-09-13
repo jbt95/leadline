@@ -453,6 +453,140 @@ pub fn terminal_debt(report: &crate::debt::DebtReport) -> String {
     output
 }
 
+/// Terminal summary of one duplication report.
+pub fn terminal_duplication(report: &crate::duplication::DuplicationReport) -> String {
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "Duplication ({}){}",
+        report.profile,
+        if report.complete { "" } else { " [incomplete]" }
+    );
+    let _ = writeln!(
+        output,
+        "  {} groups, {} duplicated lines, {} tokens, {} comparisons",
+        report.groups.len(),
+        report.duplicated_lines,
+        report.total_tokens,
+        report.comparisons
+    );
+    for group in report.groups.iter().take(10) {
+        let _ = writeln!(
+            output,
+            "  {} tokens, {} occurrences",
+            group.token_count,
+            group.occurrences.len()
+        );
+        for occurrence in group.occurrences.iter().take(5) {
+            let _ = writeln!(
+                output,
+                "    {}:{}-{}",
+                occurrence.path, occurrence.start_line, occurrence.end_line
+            );
+        }
+    }
+    output
+}
+
+/// Terminal summary of duplication drift.
+pub fn terminal_duplication_drift(report: &crate::duplication::DuplicationDriftReport) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "Duplication drift (model: {})", report.model);
+    let _ = writeln!(
+        output,
+        "  groups {}, added occurrences {}, removed occurrences {}",
+        report.groups.len(),
+        report.added_occurrences,
+        report.removed_occurrences
+    );
+    for group in report.groups.iter().take(10) {
+        let status = match group.status {
+            Some(crate::duplication::GroupStatus::New) => "new",
+            Some(crate::duplication::GroupStatus::Existing) => "existing",
+            Some(crate::duplication::GroupStatus::Resolved) => "resolved",
+            None => "unknown",
+        };
+        let _ = writeln!(
+            output,
+            "  {:8} {} tokens, {} occurrences",
+            status,
+            group.token_count,
+            group.occurrences.len()
+        );
+    }
+    output
+}
+
+/// Terminal summary of policy violations.
+pub fn terminal_policy(report: &crate::policy::PolicyReport) -> String {
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "Policy: {} rules, {} info / {} warning / {} error",
+        report.rules, report.info, report.warning, report.error
+    );
+    for violation in report.violations.iter().take(20) {
+        let status = match violation.status {
+            Some(crate::policy::PolicyStatus::New) => " [new]",
+            Some(crate::policy::PolicyStatus::Existing) => " [existing]",
+            Some(crate::policy::PolicyStatus::Resolved) => " [resolved]",
+            None => "",
+        };
+        let _ = writeln!(
+            output,
+            "  {:8} {} -> {} ({}){}",
+            match violation.severity {
+                crate::config::Severity::Info => "info",
+                crate::config::Severity::Warning => "warning",
+                crate::config::Severity::Error => "error",
+            },
+            violation.source,
+            violation.target,
+            violation.rule,
+            status
+        );
+    }
+    output
+}
+
+/// Terminal summary of normalized mutation and test-map inputs.
+pub fn terminal_mutation(
+    report: &crate::mutation::MutationReport,
+    relationships: Option<&crate::test_relationships::TestRelationshipReport>,
+) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "Mutation (model: {})", report.model);
+    let summary = &report.summary;
+    let _ = writeln!(
+        output,
+        "  {} mutants: {} killed, {} timed out, {} survived, {} no coverage, {} unresolved",
+        summary.total,
+        summary.killed,
+        summary.timed_out,
+        summary.survived,
+        summary.no_coverage,
+        summary.unresolved
+    );
+    let _ = writeln!(
+        output,
+        "  score {} over {} scored mutants",
+        summary
+            .score
+            .map(|score| format!("{score:.1}%"))
+            .unwrap_or_else(|| "n/a".to_owned()),
+        summary.scored_mutants
+    );
+    if let Some(relationships) = relationships {
+        let _ = writeln!(
+            output,
+            "  test relationships: {} resolved, {} unresolved",
+            relationships.relationships.len() as u64 - relationships.unresolved,
+            relationships.unresolved
+        );
+    }
+    output
+}
+
 pub fn terminal_risk(report: &RiskReport) -> String {
     let mut output = String::new();
     if !report.git_available {

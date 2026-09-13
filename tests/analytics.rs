@@ -48,6 +48,7 @@ fn request(path: &Path, target: SnapshotTarget) -> ProjectRequest {
         test_maps: Vec::new(),
         ownership_mode: OwnershipMode::AggregateOnly,
         snapshots_path: None,
+        coverage: None,
     }
 }
 
