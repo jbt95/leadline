@@ -67,7 +67,8 @@ impl Default for DuplicationConfig {
 }
 
 /// Severity of an architecture rule violation, in ascending order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Severity {
     Info,
     Warning,
