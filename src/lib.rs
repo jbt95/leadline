@@ -5,6 +5,7 @@ pub mod config;
 pub mod core;
 pub mod coupling;
 pub mod coverage;
+pub mod debt;
 pub mod diff;
 pub mod discovery;
 pub mod external;
