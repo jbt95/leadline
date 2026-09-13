@@ -58,6 +58,58 @@ fn analyze_smoke(name: &str, root: &std::path::Path) -> (usize, usize) {
     (files, functions)
 }
 
+/// Join smoke on one fixture: the risk model and the project join must
+/// build over real data with non-empty risk rows. History is unavailable
+/// (no revision walk here), so churn/ownership stay unknown by design.
+fn join_smoke(path: &std::path::Path) {
+    let analysis = analyze_path(path, None).expect("realworld join analysis succeeds");
+    let graph = leadline::graph::analyze_dependencies(path, &[])
+        .expect("realworld join graph succeeds");
+    let history = leadline::history::HistoryReport {
+        schema_version: leadline::history::HISTORY_SCHEMA_VERSION,
+        analyzer_version: env!("CARGO_PKG_VERSION"),
+        available: false,
+        reference: "head-commit-time",
+        head_commit: None,
+        head_timestamp: None,
+        files: Vec::new(),
+    };
+    let ownership = leadline::ownership::OwnershipReport {
+        files: Vec::new(),
+        modules: Vec::new(),
+    };
+    let policy = leadline::policy::evaluate(&graph, &[]);
+    let risk = leadline::risk::build(
+        &analysis,
+        &history,
+        &graph,
+        &ownership,
+        &policy,
+        leadline::history::HistoryWindow::Days90,
+    );
+    assert!(!risk.risks.is_empty(), "realworld join: empty risk rows");
+    let duplication =
+        leadline::duplication::detect(&[], &leadline::config::DuplicationConfig::default());
+    let project = leadline::project::build(leadline::project::ProjectInputs {
+        analysis: &analysis,
+        generated_from: "realworld".to_owned(),
+        git: None,
+        graph: &graph,
+        ownership: None,
+        mutation: None,
+        test_relationships: None,
+        duplication: &duplication,
+        policy: &policy,
+        risk: &risk,
+        snapshots: None,
+    });
+    assert!(
+        !project.risk.rows.is_empty(),
+        "realworld join: empty project risk rows"
+    );
+    println!("realworld: join smoke ok ({} risk rows)", risk.risks.len());
+}
+
 fn realworld(c: &mut criterion::Criterion) {
     let root = fixture_root();
     for fixture in &manifest().fixture {
@@ -75,6 +127,9 @@ fn realworld(c: &mut criterion::Criterion) {
             "realworld: {} — {files} files, {functions} functions",
             fixture.name
         );
+        if fixture.name == "tanstack-query" {
+            join_smoke(&path);
+        }
         let mut group = c.benchmark_group("realworld");
         group.throughput(Throughput::Elements(files as u64));
         group.bench_function(&fixture.name, |bench| {
