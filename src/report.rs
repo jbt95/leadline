@@ -1,4 +1,5 @@
 use crate::core::{AnalysisReport, FunctionAnalysis};
+use crate::coupling::CouplingReport;
 use crate::diff::ChangedReport;
 use crate::hotspots::HotspotReport;
 use std::fmt::Write;
@@ -82,6 +83,45 @@ pub fn terminal_changed(report: &ChangedReport) -> String {
             change.after.as_ref().map(|f| f.metrics.loc as f64),
         );
         output.push('\n');
+    }
+    output
+}
+
+pub fn terminal_coupling(report: &CouplingReport) -> String {
+    let mut output = String::new();
+    if !report.git_available {
+        output.push_str("Git history unavailable (no repository or no commits).\n");
+        return output;
+    }
+    let _ = writeln!(
+        output,
+        "Historically related files (target: {})\n",
+        report.target
+    );
+    if report.related.is_empty() {
+        let _ = writeln!(
+            output,
+            "No repeated co-changes found (try --min-cochanges 1)."
+        );
+        return output;
+    }
+    for related in &report.related {
+        let _ = writeln!(
+            output,
+            "{:<40} {:>5.0}%   co-changes {} of {}   jaccard {:.0}%",
+            related.path,
+            related.directional * 100.0,
+            related.co_changes,
+            report.target_commits,
+            related.jaccard * 100.0
+        );
+    }
+    if report.truncated {
+        let _ = writeln!(
+            output,
+            "\nShowing the top {} related files (raise --top for more).",
+            report.related.len()
+        );
     }
     output
 }

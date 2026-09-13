@@ -140,11 +140,40 @@ fn unavailable() -> HistoryReport {
 /// A rename that crosses the scope boundary is reported as an add or delete,
 /// because only one side of the pair is inside the scope.
 pub fn analyze_history(scope: &Path) -> Result<HistoryReport> {
-    let workdir = if scope.is_dir() {
+    let workdir = workdir_for(scope);
+    let Some((head_commit, head_timestamp)) = repository_head(workdir)? else {
+        return Ok(unavailable());
+    };
+    let Some(head_timestamp) = head_timestamp else {
+        let mut report = unavailable();
+        report.available = true;
+        return Ok(report);
+    };
+    let mut accumulator = HistoryAccumulator::new(head_timestamp);
+    walk_commits(workdir, |meta, files| accumulator.record(meta, files))?;
+    Ok(HistoryReport {
+        schema_version: HISTORY_SCHEMA_VERSION,
+        analyzer_version: env!("CARGO_PKG_VERSION"),
+        available: true,
+        reference: "head-commit-time",
+        head_commit: Some(head_commit.unwrap_or_default()),
+        head_timestamp: Some(head_timestamp),
+        files: accumulator.finish(),
+    })
+}
+
+fn workdir_for(scope: &Path) -> &Path {
+    if scope.is_dir() {
         scope
     } else {
         scope.parent().unwrap_or(Path::new("."))
-    };
+    }
+}
+
+/// HEAD metadata for `workdir`; `None` when Git or a repository is absent.
+///
+/// The tuple is `(commit, timestamp)`; both are `None` for an unborn HEAD.
+pub(crate) fn repository_head(workdir: &Path) -> Result<Option<(Option<String>, Option<i64>)>> {
     let Some(head) = git_optional(
         workdir,
         &[
@@ -156,24 +185,9 @@ pub fn analyze_history(scope: &Path) -> Result<HistoryReport> {
         ],
     )?
     else {
-        return Ok(unavailable());
+        return Ok(None);
     };
-    let (head_commit, head_timestamp) = parse_head(&head);
-    let Some(head_timestamp) = head_timestamp else {
-        let mut report = unavailable();
-        report.available = true;
-        return Ok(report);
-    };
-    let files = stream_log(workdir, head_timestamp)?;
-    Ok(HistoryReport {
-        schema_version: HISTORY_SCHEMA_VERSION,
-        analyzer_version: env!("CARGO_PKG_VERSION"),
-        available: true,
-        reference: "head-commit-time",
-        head_commit: Some(head_commit.unwrap_or_default()),
-        head_timestamp: Some(head_timestamp),
-        files,
-    })
+    Ok(Some(parse_head(&head)))
 }
 
 /// Parses `--format=%H%x00%ct` output. Returns `(None, None)` for an unborn HEAD.
@@ -192,14 +206,35 @@ fn parse_head(bytes: &[u8]) -> (Option<String>, Option<i64>) {
     }
 }
 
-/// Streams one `git log --relative` walk and returns the finished facts in
-/// path order.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CommitMeta {
+    pub author: String,
+    pub email: String,
+    pub timestamp: i64,
+}
+
+/// One file touched by one commit, keyed by its resolved current path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CommitFile {
+    pub path: String,
+    pub lines_added: u64,
+    pub lines_deleted: u64,
+}
+
+/// Streams the repository history once, newest first, calling `sink` for each
+/// commit that touched at least one in-scope file.
+///
+/// Both file-history aggregation and temporal-coupling indexing run through
+/// this single walk, so the rename framing and config hardening exist once.
 ///
 /// `--date-order` guarantees that a commit is emitted before its parents even
 /// when commit dates are skewed, so a rename record is always seen before the
 /// older records it must claim. `--no-show-signature` and `--no-notes` keep
 /// the byte stream to the requested format regardless of user config.
-fn stream_log(workdir: &Path, head_timestamp: i64) -> Result<Vec<FileHistory>> {
+pub(crate) fn walk_commits(
+    workdir: &Path,
+    mut sink: impl FnMut(&CommitMeta, &[CommitFile]),
+) -> Result<()> {
     let mut child = Command::new("git")
         .current_dir(workdir)
         .args([
@@ -226,26 +261,54 @@ fn stream_log(workdir: &Path, head_timestamp: i64) -> Result<Vec<FileHistory>> {
         let _ = std::io::Read::read_to_end(&mut stderr, &mut bytes);
         bytes
     });
-    let parsed = parse_log(BufReader::new(stdout), head_timestamp);
+    let parsed = parse_stream(BufReader::new(stdout), &mut sink);
     let status = child.wait()?;
     let stderr = stderr_thread.join().unwrap_or_default();
     if !status.success() {
         let stderr = String::from_utf8_lossy(&stderr);
         return Err(format!("git log failed: {}", stderr.trim()).into());
     }
-    Ok(parsed?
-        .into_values()
-        // Defensive: `--relative` can print `../` pre-images for cross-scope
-        // renames on some git versions; those paths are outside the scope.
-        .filter(|file| !file.path.starts_with("../"))
-        .collect())
+    parsed
 }
 
-#[derive(Clone, Debug, Default)]
-struct CommitMeta {
-    author: String,
-    email: String,
-    timestamp: i64,
+struct HistoryAccumulator {
+    head_timestamp: i64,
+    files: BTreeMap<String, FileFacts>,
+}
+
+impl HistoryAccumulator {
+    fn new(head_timestamp: i64) -> Self {
+        Self {
+            head_timestamp,
+            files: BTreeMap::new(),
+        }
+    }
+
+    fn record(&mut self, meta: &CommitMeta, files: &[CommitFile]) {
+        for file in files {
+            let facts = self.files.entry(file.path.clone()).or_default();
+            facts.record(
+                meta,
+                self.head_timestamp,
+                file.lines_added,
+                file.lines_deleted,
+            );
+        }
+    }
+
+    fn finish(self) -> Vec<FileHistory> {
+        let mut result = Vec::new();
+        for (path, facts) in self.files {
+            // Defensive: `--relative` can print `../` pre-images for
+            // cross-scope renames on some git versions; those paths are
+            // outside the scope.
+            if path.starts_with("../") {
+                continue;
+            }
+            result.push(facts.finish(path, self.head_timestamp));
+        }
+        result
+    }
 }
 
 #[derive(Default)]
@@ -335,16 +398,16 @@ impl FileFacts {
 /// A rename record arrives as `added\tdeleted\t` followed by the old path and
 /// then the new path. Everything else that starts with a number is a regular
 /// record. `-` marks binary files and counts as zero lines.
-fn parse_log<R: BufRead>(
+fn parse_stream<R: BufRead>(
     mut reader: R,
-    head_timestamp: i64,
-) -> Result<BTreeMap<String, FileHistory>> {
-    let mut files: BTreeMap<String, FileFacts> = BTreeMap::new();
+    sink: &mut impl FnMut(&CommitMeta, &[CommitFile]),
+) -> Result<()> {
     let mut aliases: BTreeMap<String, String> = BTreeMap::new();
     let mut meta: Option<CommitMeta> = None;
     let mut state = 0_u8; // 0 = hash, 1 = author, 2 = email, 3 = timestamp, 4 = records
     let mut rename: Option<(u64, u64, String)> = None;
     let mut chunk = Vec::new();
+    let mut files: Vec<CommitFile> = Vec::new();
 
     loop {
         chunk.clear();
@@ -358,6 +421,7 @@ fn parse_log<R: BufRead>(
             continue;
         }
         if chunk[0] == 1 && chunk.len() >= 8 && chunk[1..].iter().all(u8::is_ascii_hexdigit) {
+            flush_commit(sink, &meta, &mut files);
             meta = Some(CommitMeta::default());
             state = 1;
             rename = None;
@@ -391,9 +455,9 @@ fn parse_log<R: BufRead>(
                 state = 4;
             }
             _ => {
-                let Some(meta) = meta.as_ref() else {
+                if meta.is_none() {
                     continue;
-                };
+                }
                 let record_bytes: &[u8] = chunk.strip_prefix(b"\n").unwrap_or(&chunk);
                 if let Some((added, deleted, old)) = rename.as_mut() {
                     if old.is_empty() {
@@ -402,12 +466,11 @@ fn parse_log<R: BufRead>(
                         let new = String::from_utf8_lossy(record_bytes).into_owned();
                         let resolved = resolve_alias(&aliases, &new);
                         aliases.insert(old.clone(), resolved.clone());
-                        files.entry(resolved).or_default().record(
-                            meta,
-                            head_timestamp,
-                            *added,
-                            *deleted,
-                        );
+                        files.push(CommitFile {
+                            path: resolved,
+                            lines_added: *added,
+                            lines_deleted: *deleted,
+                        });
                         rename = None;
                     }
                     continue;
@@ -426,21 +489,59 @@ fn parse_log<R: BufRead>(
                     continue;
                 }
                 let resolved = resolve_alias(&aliases, &path);
-                files
-                    .entry(resolved)
-                    .or_default()
-                    .record(meta, head_timestamp, added, deleted);
+                files.push(CommitFile {
+                    path: resolved,
+                    lines_added: added,
+                    lines_deleted: deleted,
+                });
             }
         }
     }
 
-    Ok(files
-        .into_iter()
-        .map(|(path, facts)| {
-            let finished = facts.finish(path.clone(), head_timestamp);
-            (path, finished)
-        })
-        .collect())
+    flush_commit(sink, &meta, &mut files);
+    Ok(())
+}
+
+/// Emits the buffered files of a finished commit and resets the buffer.
+///
+/// Files are sorted and merged by path so a commit contributes one record per
+/// file; duplicate records (possible with unusual rename detection output)
+/// sum their line deltas instead of dropping them.
+fn flush_commit(
+    sink: &mut impl FnMut(&CommitMeta, &[CommitFile]),
+    meta: &Option<CommitMeta>,
+    files: &mut Vec<CommitFile>,
+) {
+    if files.is_empty() {
+        return;
+    }
+    let Some(meta) = meta else {
+        files.clear();
+        return;
+    };
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    let mut merged: Vec<CommitFile> = Vec::with_capacity(files.len());
+    for file in files.drain(..) {
+        if let Some(last) = merged.last_mut().filter(|last| last.path == file.path) {
+            last.lines_added = last.lines_added.saturating_add(file.lines_added);
+            last.lines_deleted = last.lines_deleted.saturating_add(file.lines_deleted);
+            continue;
+        }
+        merged.push(file);
+    }
+    sink(meta, &merged);
+}
+
+/// Test seam: aggregates a synthetic byte stream exactly like production does.
+#[cfg(test)]
+fn parse_log<R: BufRead>(reader: R, head_timestamp: i64) -> Result<BTreeMap<String, FileHistory>> {
+    let mut accumulator = HistoryAccumulator::new(head_timestamp);
+    parse_stream(reader, &mut |meta, files| accumulator.record(meta, files))?;
+    let mut files = BTreeMap::new();
+    for file in accumulator.finish() {
+        files.insert(file.path.clone(), file);
+    }
+    Ok(files)
 }
 
 fn resolve_alias(aliases: &BTreeMap<String, String>, path: &str) -> String {
@@ -546,6 +647,22 @@ mod tests {
         let files = parse(bytes);
         assert_eq!(files["just_out.ts"].changes_30d, 0);
         assert_eq!(files["just_out.ts"].changes_90d, 1);
+    }
+
+    #[test]
+    fn duplicate_path_records_merge_deltas_in_one_commit() {
+        let bytes = commit(
+            "a",
+            "Alice",
+            "a@x",
+            HEAD,
+            &["3\t1\tsrc/a.ts", "2\t2\tsrc/a.ts"],
+        );
+        let files = parse(bytes);
+        let a = &files["src/a.ts"];
+        assert_eq!(a.commits, 1);
+        assert_eq!(a.lines_added, 5);
+        assert_eq!(a.lines_deleted, 3);
     }
 
     #[test]

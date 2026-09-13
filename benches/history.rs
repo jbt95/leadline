@@ -2,6 +2,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use leadline::core::{
     AnalysisReport, FileAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION,
 };
+use leadline::coupling::{CouplingOptions, analyze_coupling};
 use leadline::history::{
     FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow, analyze_history,
 };
@@ -196,5 +197,38 @@ fn hotspot_scoring(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, raw_git_log, history_analysis, hotspot_scoring);
+/// Co-change indexing for one target over the same staged repository; the
+/// target is written in round 0, so it has history in every size.
+fn coupling_analysis(c: &mut Criterion) {
+    let repo = stage_repository(200);
+    let scope = repo.path().to_path_buf();
+    let target = "src/mod0/file0.ts";
+    let preflight = analyze_coupling(&scope, target, &CouplingOptions::default()).unwrap();
+    assert!(preflight.git_available);
+    assert!(preflight.target_commits > 0);
+    let mut group = c.benchmark_group("coupling_analysis");
+    group.sample_size(10);
+    group.throughput(Throughput::Elements(200));
+    group.bench_function("200-commits", |bench| {
+        bench.iter(|| {
+            black_box(
+                analyze_coupling(
+                    black_box(&scope),
+                    black_box(target),
+                    &CouplingOptions::default(),
+                )
+                .unwrap(),
+            )
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    raw_git_log,
+    history_analysis,
+    hotspot_scoring,
+    coupling_analysis
+);
 criterion_main!(benches);

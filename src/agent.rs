@@ -1,4 +1,5 @@
 use crate::core::{AnalysisReport, FunctionAnalysis, FunctionMetrics, MetricContribution};
+use crate::coupling::CouplingReport;
 use crate::diff::ChangedReport;
 use crate::hotspots::HotspotReport;
 use serde_json::{Value, json};
@@ -224,6 +225,34 @@ pub fn hotspots_agent_json(report: &HotspotReport) -> Value {
             "hotspots": report.hotspots.len(),
         },
         "hotspots": hotspots,
+        "truncated": report.truncated,
+    })
+}
+
+/// Compact agent-oriented view of a change-coupling report.
+///
+/// Agents use this before editing: the related paths are candidates to
+/// inspect for hidden contracts the static graph cannot see.
+pub fn coupling_agent_json(report: &CouplingReport) -> Value {
+    let related: Vec<Value> = report
+        .related
+        .iter()
+        .map(|related| {
+            json!({
+                "path": related.path,
+                "commits": related.commits,
+                "co_changes": related.co_changes,
+                "directional": related.directional,
+                "jaccard": related.jaccard,
+            })
+        })
+        .collect();
+    json!({
+        "schema_version": report.schema_version,
+        "target": report.target,
+        "git_available": report.git_available,
+        "target_commits": report.target_commits,
+        "related": related,
         "truncated": report.truncated,
     })
 }
