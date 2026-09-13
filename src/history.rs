@@ -275,27 +275,37 @@ impl Mailmap {
         Mailmap { rules }
     }
 
-    /// Applies the first matching rule; otherwise the raw identity is kept.
+    /// Resolves an identity like git's mailmap: a name-specific rule wins over
+    /// an email-only rule for the same address, regardless of file order.
     fn identity(&self, meta: &CommitMeta) -> String {
         if meta.email.is_empty() {
             return meta.author.clone();
         }
+        let mut email_only: Option<&MailmapRule> = None;
         for rule in &self.rules {
             if !rule.old_email.eq_ignore_ascii_case(&meta.email) {
                 continue;
             }
-            if let Some(old_name) = &rule.old_name
-                && !old_name.eq_ignore_ascii_case(&meta.author)
-            {
-                continue;
+            match &rule.old_name {
+                Some(old_name) if old_name.eq_ignore_ascii_case(&meta.author) => {
+                    return resolved_email(rule, meta);
+                }
+                Some(_) => {}
+                None if email_only.is_none() => email_only = Some(rule),
+                None => {}
             }
-            if let Some(new_email) = &rule.new_email {
-                return new_email.to_lowercase();
-            }
-            break;
         }
-        meta.email.to_lowercase()
+        match email_only {
+            Some(rule) => resolved_email(rule, meta),
+            None => meta.email.to_lowercase(),
+        }
     }
+}
+
+fn resolved_email(rule: &MailmapRule, meta: &CommitMeta) -> String {
+    rule.new_email
+        .clone()
+        .unwrap_or_else(|| meta.email.to_lowercase())
 }
 
 /// Parses the four documented git-mailmap forms:
@@ -323,9 +333,7 @@ fn parse_mailmap_line(line: &[u8]) -> Option<MailmapRule> {
         emails.push(email);
         rest = &after[close + 1..];
     }
-    if !rest.trim().is_empty() {
-        return None;
-    }
+    // Git ignores content after the final `>`; do the same.
     match (names.len(), emails.len()) {
         // `Proper Name <commit@email>`: name replacement only.
         (1, 1) => Some(MailmapRule {
@@ -986,5 +994,67 @@ mod tests {
             "a path that starts with 0x01 must survive as a rename target"
         );
         assert_eq!(files["\u{1}weird.ts"].commits, 2);
+    }
+
+    fn meta(author: &str, email: &str) -> CommitMeta {
+        CommitMeta {
+            author: author.to_owned(),
+            email: email.to_owned(),
+            timestamp: HEAD,
+        }
+    }
+
+    #[test]
+    fn mailmap_parses_all_four_documented_forms() {
+        // Form 1: name replacement only; identity keeps the email.
+        let form_one = Mailmap::parse(b"Proper Name <same@x>\n");
+        assert_eq!(form_one.identity(&meta("Raw", "same@x")), "same@x");
+        // Form 2: email-only replacement.
+        let form_two = Mailmap::parse(b"<proper@x> <commit@x>\n");
+        assert_eq!(form_two.identity(&meta("Raw", "commit@x")), "proper@x");
+        // Form 3: proper name plus email-only old side.
+        let form_three = Mailmap::parse(b"Proper Name <proper@x> <commit@x>\n");
+        assert_eq!(form_three.identity(&meta("Raw", "commit@x")), "proper@x");
+        // Form 4: name-specific old side.
+        let form_four = Mailmap::parse(b"Proper <proper@x> Old Name <commit@x>\n");
+        assert_eq!(
+            form_four.identity(&meta("Old Name", "commit@x")),
+            "proper@x"
+        );
+        assert_eq!(
+            form_four.identity(&meta("Different Name", "commit@x")),
+            "commit@x"
+        );
+    }
+
+    #[test]
+    fn mailmap_matching_is_case_insensitive() {
+        let mailmap = Mailmap::parse(b"Proper <proper@x> Old Name <Commit@X>\n");
+        assert_eq!(mailmap.identity(&meta("old name", "commit@x")), "proper@x");
+        assert_eq!(mailmap.identity(&meta("OLD NAME", "COMMIT@X")), "proper@x");
+    }
+
+    #[test]
+    fn mailmap_name_specific_rule_wins_over_email_only_rule_in_any_order() {
+        // Git merges a simple email entry with name-specific overrides; the
+        // name-specific rule must win regardless of .mailmap line order.
+        let lines = b"Canon <canon@x> <shared@x>\nOther <other@x> Alias <shared@x>\n";
+        let mailmap = Mailmap::parse(lines);
+        assert_eq!(mailmap.identity(&meta("Alias", "shared@x")), "other@x");
+        assert_eq!(mailmap.identity(&meta("Someone", "shared@x")), "canon@x");
+
+        let reversed = b"Other <other@x> Alias <shared@x>\nCanon <canon@x> <shared@x>\n";
+        let mailmap = Mailmap::parse(reversed);
+        assert_eq!(mailmap.identity(&meta("Alias", "shared@x")), "other@x");
+        assert_eq!(mailmap.identity(&meta("Someone", "shared@x")), "canon@x");
+    }
+
+    #[test]
+    fn mailmap_ignores_comments_crlf_and_malformed_lines() {
+        let mailmap = Mailmap::parse(
+            b"# comment\r\nnot a mapping\r\n\r\nProper <proper@x> <commit@x> trailing\r\n",
+        );
+        assert_eq!(mailmap.identity(&meta("Raw", "commit@x")), "proper@x");
+        assert_eq!(mailmap.identity(&meta("Raw", "other@x")), "other@x");
     }
 }

@@ -141,6 +141,56 @@ fn churn_windows_contributors_and_age_are_normalized() {
 }
 
 #[test]
+fn worktree_mailmap_merges_contributor_identities() {
+    let root = temporary_directory();
+    init(&root);
+    write(
+        &root,
+        ".mailmap",
+        "Canonical <canonical@example.invalid> <b@example.invalid>\n",
+    );
+    write(&root, "src/a.ts", "export const a = 1;\n");
+    commit(&root, "one", "2026-01-02T12:00:00Z");
+
+    git(&root, &["config", "user.name", "Author B"]);
+    git(&root, &["config", "user.email", "b@example.invalid"]);
+    write(
+        &root,
+        "src/a.ts",
+        "export const a = 1;\nexport const a2 = 2;\n",
+    );
+    commit(&root, "two", "2026-01-03T12:00:00Z");
+
+    let report = analyze_history(&root).unwrap();
+    let a = report
+        .files
+        .iter()
+        .find(|file| file.path == "src/a.ts")
+        .unwrap();
+    assert_eq!(a.commits, 2);
+    assert_eq!(a.contributors, 2);
+    assert_eq!(a.recent_contributors, 2);
+
+    // Both raw identities fold into one canonical address; the raw author
+    // name keeps the mapping name-specific when the mapping is name-scoped.
+    write(
+        &root,
+        ".mailmap",
+        "Canonical <canonical@example.invalid> <a@example.invalid>\nCanonical <canonical@example.invalid> <b@example.invalid>\n",
+    );
+    let report = analyze_history(&root).unwrap();
+    let a = report
+        .files
+        .iter()
+        .find(|file| file.path == "src/a.ts")
+        .unwrap();
+    assert_eq!(a.contributors, 1);
+    assert_eq!(a.recent_contributors, 1);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn rename_carries_history_to_the_new_path() {
     let root = temporary_directory();
     init(&root);
