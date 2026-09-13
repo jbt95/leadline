@@ -26,7 +26,11 @@
 //!   an unavailable report instead of an error, so source snapshots keep
 //!   working.
 
-use crate::{Result, git};
+use crate::Result;
+use crate::coupling::{ProjectCoupling, ProjectCouplingAccumulator};
+use crate::discovery::SourceFilter;
+use crate::git;
+use crate::source_snapshot::SnapshotContext;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead, BufReader};
@@ -128,6 +132,240 @@ fn unavailable() -> HistoryReport {
     }
 }
 
+/// Anonymous per-file touch counts by contributor identity.
+///
+/// A touch is one commit by one identity affecting one file, regardless of
+/// line count. Identities are never serialized by default; ownership
+/// aggregation decides how (or whether) to project them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileTouches {
+    pub path: String,
+    /// `(identity, touches)` sorted by identity.
+    pub identities: Vec<(String, u64)>,
+}
+
+/// One revision-bounded walk's history, touches, and coupling.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GitAnalyticsSnapshot {
+    pub history: HistoryReport,
+    #[serde(skip)]
+    pub touches: Vec<FileTouches>,
+    pub coupling: ProjectCoupling,
+}
+
+/// Analyzes the commit `revision` and its ancestors without a mailmap.
+pub fn analyze_git_at(context: &SnapshotContext, revision: &str) -> Result<GitAnalyticsSnapshot> {
+    analyze_git_at_with_mailmap(context, revision, None)
+}
+
+/// Analyzes `revision` and its ancestors with an explicit target `.mailmap`.
+///
+/// The mailmap bytes come from the selected snapshot (a revision blob or the
+/// worktree file); ambient `mailmap.file` configuration is never consulted.
+pub fn analyze_git_at_with_mailmap(
+    context: &SnapshotContext,
+    revision: &str,
+    mailmap: Option<&[u8]>,
+) -> Result<GitAnalyticsSnapshot> {
+    let Some(root) = context.repo_root.as_deref() else {
+        return Ok(unavailable_analytics());
+    };
+    let (commit, commit_timestamp) = git::resolve_commit(root, revision)?;
+    let mailmap = mailmap.map(Mailmap::parse).unwrap_or_default();
+    let filter = SourceFilter::new(&context.analysis_root, &context.config.analysis_excludes)?;
+
+    let mut history = HistoryAccumulator::new(commit_timestamp);
+    let mut touches = TouchAccumulator::default();
+    let mut coupling = ProjectCouplingAccumulator::new();
+    walk_commits(&context.analysis_root, &commit, |meta, files| {
+        let identity = mailmap.identity(meta);
+        let kept: Vec<CommitFile> = files
+            .iter()
+            .filter(|file| {
+                !file.path.starts_with("../") && filter.accepts_file(Path::new(&file.path))
+            })
+            .cloned()
+            .collect();
+        history.record(meta, &identity, &kept);
+        touches.record(&identity, &kept);
+        coupling.record(&kept);
+    })?;
+
+    Ok(GitAnalyticsSnapshot {
+        history: HistoryReport {
+            schema_version: HISTORY_SCHEMA_VERSION,
+            analyzer_version: env!("CARGO_PKG_VERSION"),
+            available: true,
+            reference: "head-commit-time",
+            head_commit: Some(commit),
+            head_timestamp: Some(commit_timestamp),
+            files: history.finish(),
+        },
+        touches: touches.finish(),
+        coupling: coupling.finish(),
+    })
+}
+
+fn unavailable_analytics() -> GitAnalyticsSnapshot {
+    GitAnalyticsSnapshot {
+        history: unavailable(),
+        touches: Vec::new(),
+        coupling: ProjectCoupling::unavailable("git_unavailable"),
+    }
+}
+
+#[derive(Default)]
+struct TouchAccumulator {
+    files: BTreeMap<String, BTreeMap<String, u64>>,
+}
+
+impl TouchAccumulator {
+    fn record(&mut self, identity: &str, files: &[CommitFile]) {
+        let mut seen: HashSet<&str> = HashSet::new();
+        for file in files {
+            if !seen.insert(file.path.as_str()) {
+                continue;
+            }
+            *self
+                .files
+                .entry(file.path.clone())
+                .or_default()
+                .entry(identity.to_owned())
+                .or_default() += 1;
+        }
+    }
+
+    fn finish(self) -> Vec<FileTouches> {
+        self.files
+            .into_iter()
+            .map(|(path, identities)| FileTouches {
+                path,
+                identities: identities.into_iter().collect(),
+            })
+            .collect()
+    }
+}
+
+/// Deterministic `.mailmap` application for one target blob.
+#[derive(Clone, Debug, Default)]
+struct Mailmap {
+    rules: Vec<MailmapRule>,
+}
+
+#[derive(Clone, Debug)]
+struct MailmapRule {
+    old_name: Option<String>,
+    old_email: String,
+    new_email: Option<String>,
+}
+
+impl Mailmap {
+    /// Parses mailmap lines; comments and malformed lines are ignored.
+    fn parse(bytes: &[u8]) -> Mailmap {
+        let mut rules = Vec::new();
+        for line in bytes.split(|byte| *byte == b'\n') {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            if line.is_empty() || line.starts_with(b"#") {
+                continue;
+            }
+            if let Some(rule) = parse_mailmap_line(line) {
+                rules.push(rule);
+            }
+        }
+        Mailmap { rules }
+    }
+
+    /// Applies the first matching rule; otherwise the raw identity is kept.
+    fn identity(&self, meta: &CommitMeta) -> String {
+        if meta.email.is_empty() {
+            return meta.author.clone();
+        }
+        for rule in &self.rules {
+            if !rule.old_email.eq_ignore_ascii_case(&meta.email) {
+                continue;
+            }
+            if let Some(old_name) = &rule.old_name
+                && !old_name.eq_ignore_ascii_case(&meta.author)
+            {
+                continue;
+            }
+            if let Some(new_email) = &rule.new_email {
+                return new_email.to_lowercase();
+            }
+            break;
+        }
+        meta.email.to_lowercase()
+    }
+}
+
+/// Parses the four documented git-mailmap forms:
+///
+/// 1. `Proper Name <commit@email>`
+/// 2. `<proper@email> <commit@email>`
+/// 3. `Proper Name <proper@email> <commit@email>`
+/// 4. `Proper Name <proper@email> Commit Name <commit@email>`
+fn parse_mailmap_line(line: &[u8]) -> Option<MailmapRule> {
+    let text = std::str::from_utf8(line).ok()?;
+    let mut names: Vec<&str> = Vec::new();
+    let mut emails: Vec<&str> = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('<') {
+        let name = rest[..open].trim();
+        let after = &rest[open + 1..];
+        let close = after.find('>')?;
+        let email = after[..close].trim();
+        if email.is_empty() {
+            return None;
+        }
+        if !name.is_empty() {
+            names.push(name);
+        }
+        emails.push(email);
+        rest = &after[close + 1..];
+    }
+    if !rest.trim().is_empty() {
+        return None;
+    }
+    match (names.len(), emails.len()) {
+        // `Proper Name <commit@email>`: name replacement only.
+        (1, 1) => Some(MailmapRule {
+            old_name: None,
+            old_email: emails[0].to_owned(),
+            new_email: None,
+        }),
+        // `<proper@email> <commit@email>`.
+        (0, 2) => Some(MailmapRule {
+            old_name: None,
+            old_email: emails[1].to_owned(),
+            new_email: Some(emails[0].to_owned()),
+        }),
+        // `Proper Name <proper@email> <commit@email>`.
+        (1, 2) => Some(MailmapRule {
+            old_name: None,
+            old_email: emails[1].to_owned(),
+            new_email: Some(emails[0].to_owned()),
+        }),
+        // `Proper Name <proper@email> Commit Name <commit@email>`.
+        (2, 2) => Some(MailmapRule {
+            old_name: Some(names[1].to_owned()),
+            old_email: emails[1].to_owned(),
+            new_email: Some(emails[0].to_owned()),
+        }),
+        _ => None,
+    }
+}
+
+/// Reads the worktree `.mailmap` at the enclosing repository root, if any.
+fn worktree_mailmap(start: &Path) -> Option<Vec<u8>> {
+    for ancestor in start.ancestors() {
+        if ancestor.join(".git").exists() {
+            let bytes = std::fs::read(ancestor.join(".mailmap")).ok()?;
+            return (!bytes.is_empty()).then_some(bytes);
+        }
+    }
+    None
+}
+
 /// Analyzes Git history for every file under `scope`.
 ///
 /// `scope` is a repository directory; results are keyed relative to it and
@@ -149,8 +387,14 @@ pub fn analyze_history(scope: &Path) -> Result<HistoryReport> {
         report.available = true;
         return Ok(report);
     };
+    let commit = head_commit.clone().unwrap_or_else(|| "HEAD".to_owned());
+    let mailmap = worktree_mailmap(workdir)
+        .map(|bytes| Mailmap::parse(&bytes))
+        .unwrap_or_default();
     let mut accumulator = HistoryAccumulator::new(head_timestamp);
-    walk_commits(workdir, |meta, files| accumulator.record(meta, files))?;
+    walk_commits(workdir, &commit, |meta, files| {
+        accumulator.record(meta, &mailmap.identity(meta), files)
+    })?;
     Ok(HistoryReport {
         schema_version: HISTORY_SCHEMA_VERSION,
         analyzer_version: env!("CARGO_PKG_VERSION"),
@@ -223,12 +467,14 @@ pub(crate) struct CommitFile {
 /// the byte stream to the requested format regardless of user config.
 pub(crate) fn walk_commits(
     workdir: &Path,
+    commit: &str,
     mut sink: impl FnMut(&CommitMeta, &[CommitFile]),
 ) -> Result<()> {
     let mut child = git::command(
         workdir,
         &[
             "log",
+            commit,
             "--relative",
             "--date-order",
             "--no-merges",
@@ -237,7 +483,9 @@ pub(crate) fn walk_commits(
             "--numstat",
             "-z",
             "-M30%",
-            "--format=%x01%H%x00%aN%x00%aE%x00%ct%x00",
+            // Raw author fields: mailmap application is deterministic and
+            // target-scoped, never ambient Git configuration.
+            "--format=%x01%H%x00%an%x00%ae%x00%ct%x00",
         ],
     )
     .stdout(Stdio::piped())
@@ -275,11 +523,12 @@ impl HistoryAccumulator {
         }
     }
 
-    fn record(&mut self, meta: &CommitMeta, files: &[CommitFile]) {
+    fn record(&mut self, meta: &CommitMeta, identity: &str, files: &[CommitFile]) {
         for file in files {
             let facts = self.files.entry(file.path.clone()).or_default();
             facts.record(
                 meta,
+                identity,
                 self.head_timestamp,
                 file.lines_added,
                 file.lines_deleted,
@@ -320,6 +569,7 @@ impl FileFacts {
     fn record(
         &mut self,
         meta: &CommitMeta,
+        identity: &str,
         head_timestamp: i64,
         lines_added: u64,
         lines_deleted: u64,
@@ -345,15 +595,10 @@ impl FileFacts {
         if age <= 365 * DAY_SECONDS {
             self.changes_365d += 1;
         }
-        let identity = if meta.email.is_empty() {
-            meta.author.clone()
-        } else {
-            meta.email.to_lowercase()
-        };
         if age <= (RECENT_DAYS as i64) * DAY_SECONDS {
-            self.recent_contributors.insert(identity.clone());
+            self.recent_contributors.insert(identity.to_owned());
         }
-        self.contributors.insert(identity);
+        self.contributors.insert(identity.to_owned());
     }
 
     fn finish(self, path: String, head_timestamp: i64) -> FileHistory {
@@ -527,7 +772,14 @@ fn flush_commit(
 #[cfg(test)]
 fn parse_log<R: BufRead>(reader: R, head_timestamp: i64) -> Result<BTreeMap<String, FileHistory>> {
     let mut accumulator = HistoryAccumulator::new(head_timestamp);
-    parse_stream(reader, &mut |meta, files| accumulator.record(meta, files))?;
+    parse_stream(reader, &mut |meta, files| {
+        let identity = if meta.email.is_empty() {
+            meta.author.clone()
+        } else {
+            meta.email.to_lowercase()
+        };
+        accumulator.record(meta, &identity, files)
+    })?;
     let mut files = BTreeMap::new();
     for file in accumulator.finish() {
         files.insert(file.path.clone(), file);

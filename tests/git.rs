@@ -300,8 +300,9 @@ fn history_uses_exactly_two_git_subprocesses() {
     let invocations = std::fs::read_to_string(&log).unwrap();
     assert_eq!(invocations.matches("command=").count(), 2, "{invocations}");
     assert!(invocations.contains("command=log -1 "), "{invocations}");
+    // The walk names its revision before the options.
     assert!(
-        invocations.contains("command=log --relative "),
+        invocations.contains(" --relative --date-order "),
         "{invocations}"
     );
 
