@@ -281,6 +281,33 @@ fn assert_fake_resolve_error(label: &str) {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn history_uses_exactly_two_git_subprocesses() {
+    let _lock = env_lock();
+    let root = temporary_directory("history-two-subprocesses");
+    let bin = root.join("bin");
+    let log = root.join("git.log");
+    std::fs::create_dir(&bin).unwrap();
+    write_fake_git(&bin.join("git"));
+
+    {
+        let _env = FakeGitEnv::install(&bin, &log, &root);
+        let report = leadline::history::analyze_history(&root).unwrap();
+        assert!(report.available);
+    }
+
+    let invocations = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(invocations.matches("command=").count(), 2, "{invocations}");
+    assert!(invocations.contains("command=log -1 "), "{invocations}");
+    assert!(
+        invocations.contains("command=log --relative "),
+        "{invocations}"
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 fn env_lock() -> MutexGuard<'static, ()> {
     ENV_LOCK
         .lock()

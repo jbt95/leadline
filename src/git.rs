@@ -118,11 +118,9 @@ pub(crate) fn read_index_blob_optional(root: &Path, path: &str) -> Result<Option
 }
 
 pub(crate) fn repository_head_optional(cwd: &Path) -> Result<Option<Vec<u8>>> {
-    let Some(root) = repo_root(cwd)? else {
-        return Ok(None);
-    };
+    let has_marker = has_git_marker(cwd)?;
     run_optional_when(
-        &root,
+        cwd,
         &[
             "log",
             "-1",
@@ -137,6 +135,7 @@ pub(crate) fn repository_head_optional(cwd: &Path) -> Result<Option<Vec<u8>>> {
             let stderr = String::from_utf8_lossy(&output.stderr);
             stderr.contains("does not have any commits yet")
                 || stderr.contains("bad default revision 'HEAD'")
+                || (!has_marker && stderr.contains("not a git repository"))
         },
     )
 }
