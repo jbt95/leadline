@@ -14,12 +14,14 @@ pub mod history;
 pub mod hotspots;
 pub mod impact;
 pub mod mcp;
+pub mod mutation;
 pub mod ownership;
 pub mod parser;
 pub mod report;
 pub mod risk;
 pub mod sarif;
 pub mod source_snapshot;
+pub mod test_relationships;
 pub mod test_targets;
 
 use crate::core::{
