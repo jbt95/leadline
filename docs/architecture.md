@@ -13,6 +13,10 @@ git repository -> history walk -> commit stream (resolved paths, deltas)
              file history facts                 co-change index
                      │                                 │
    function results ─┴─> hotspots -> ranked    coupling -> related files
+
+source files -> graph -> dependency edges -> impact -> dependents
+                                                 │
+   function results + history + graph/impact ────┴─> risk -> ranked
 ```
 
 The parser seam is `ParserBackend::analyze`. The Tree-sitter adapter owns grammar selection, syntax names, and tree walking. The core engine receives only normalized events and source byte spans. It does not import Tree-sitter. A future Oxc adapter can implement the same interface without changing metrics.

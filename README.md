@@ -87,7 +87,7 @@ leadline check . --cognitive 15 --cyclomatic 10 --max-nesting 4
 
 ```mermaid
 flowchart TD
-    CLI["CLI: analyze, function, changed, diff, check, baseline, hotspots, test-targets, doctor, version, skill"]
+    CLI["CLI: analyze, function, changed, diff, check, baseline, hotspots, coupling, dependencies, impact, risk, test-targets, doctor, version, skill"]
     CLI --> Human["Humans and CI: terminal, JSON, SARIF, exit codes 0-5"]
     CLI --> MCP["MCP server, read-only stdio: analyze, analyze_changed, analyze_function, check, explain_metric, test_targets"]
     MCP --> Harnesses["Claude Code, Pi, OMP, OpenCode, Codex, Gemini, Cursor, Cline, Windsurf, Copilot"]
@@ -187,8 +187,8 @@ A directory outside a Git repository, a machine without `git`, or an unborn HEAD
 still ranks by complexity and reports `git_available: false` with `null` churn
 fields. Merge commits are excluded. See [hotspots](docs/hotspots.md) for formulas,
 limitations, and the ethical guardrail: commit and ownership signals must never rank
-developers. The [analytics roadmap](docs/analytics-roadmap.md) describes the ownership,
-risk, and static-report milestones still to build on this foundation
+developers. The [analytics roadmap](docs/analytics-roadmap.md) describes the ownership
+and static-report milestones still to build on this foundation
 (coupling, dependencies, impact, and risk are implemented; see above and below).
 
 Find files that repeatedly change together even when no import connects them:
