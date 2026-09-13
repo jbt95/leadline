@@ -4,13 +4,13 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "strict": true,
+    "skipLibCheck": true,
     "noEmit": true,
     "types": ["node"]
   },
   "include": [
     "core/**/*.ts",
     "pi/**/*.ts",
-    "omp/**/*.ts",
     "../../pi/index.ts",
     "../../omp/index.ts",
     "../../opencode/plugin/leadline.ts"

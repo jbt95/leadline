@@ -5,11 +5,15 @@ dependencies; Node built-ins only.
 
 - `core/` — binary discovery (PATH plus `~/.cargo/bin/leadline`,
   `/usr/local/bin/leadline`, `/opt/homebrew/bin/leadline`), process
-  spawn with fixed argument lists, JSON decoding, and compact formatting
-  (capped at 50 functions with a truncation note). No metric logic lives
-  here; all metrics come from the `leadline` Rust binary.
-- `pi/` — thin Pi registration shim (lifecycle/registration only).
-- `omp/` — thin OMP registration shim (lifecycle/registration only).
+  spawn with fixed argument lists, agent-json decoding, compact
+  formatting (capped at 50 lines), and warn-mode post-edit feedback.
+  No metric logic lives here; all metrics come from the `leadline`
+  Rust binary, and the core imports no harness APIs.
+- `pi/` — Pi registration shim (three tools plus post-edit feedback).
+  OMP vendors the same extension API, so `integrations/omp/` re-exports
+  this registration instead of duplicating it.
 
 Tools: `leadline_changed`, `leadline_function`, `leadline_check`.
 Post-edit feedback runs in warn mode only and never gates the agent.
+
+Typecheck with `npm install && npm run check` in this directory.

@@ -1,10 +1,9 @@
-// Native Pi extension for `leadline`. Uses the shared adapter core; the
-// `leadline` binary owns all metrics. Post-edit feedback is warn mode only
-// and never gates the agent.
+// Native Pi extension entrypoint. Pi loads this file and calls the default
+// export with the ExtensionAPI; registration lives in the shared adapter.
 
-import { registerPiExtension } from "../agent-adapter-ts/pi/index.js";
-import type { ExtensionHost, LeadlineTools } from "../agent-adapter-ts/core/index.js";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerLeadlineExtension } from "../agent-adapter-ts/pi/index.js";
 
-export function activate(host: ExtensionHost): LeadlineTools {
-  return registerPiExtension(host, { postEditMode: "warn" });
+export default function (pi: ExtensionAPI): void {
+  registerLeadlineExtension(pi);
 }

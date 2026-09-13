@@ -1,6 +1,8 @@
 # leadline for OpenCode
 
 Thin wrappers around the `leadline` binary. No metrics are reimplemented.
+OpenCode V1 still uses the plugin in `plugin/`; the OpenCode V2 beta must
+use `plugin-v2/` because the plugin APIs are incompatible.
 
 ## Requires
 
@@ -17,33 +19,39 @@ Merge `mcp.example.json` into your OpenCode config (`opencode.json`):
 Best when you move between machines or share config with other
 MCP-capable harnesses.
 
-## Option B — Native plugin (low overhead)
+## Option B — Native plugin for OpenCode V1
 
-Load `plugin/leadline.ts` as an OpenCode plugin. It registers three
+Load `plugin/leadline.ts` as an OpenCode V1 plugin. It registers three
 stable tools that shell out to the same binary:
 
 - `leadline_changed` — changed functions vs git base
 - `leadline_function` — one function by file and name
 - `leadline_check` — quality-gate check (warn mode)
 
-Prefer the native plugin for daily local use; keep MCP supported
-for portability. Both return semantically identical results.
+MCP on V2 uses a nested shape (`mcp.servers`); the local-stdio
+equivalent of Option A is:
+
+```jsonc
+{ "mcp": { "servers": { "leadline": { "type": "local", "command": ["leadline", "mcp"] } } } }
+```
 
 ## Option C — Native plugin for OpenCode V2 (experimental)
 
 > The V2 plugin API is unstable (see `plugin-v2/README.md`). The V1
 > plugin above is the stable path.
 
-`plugin-v2/` is a V2 port of Option B with the same three tools
-(`leadline_changed`, `leadline_function`, `leadline_check`) and the same
-shell-out contract. Setup and caveats are in `plugin-v2/README.md`.
+V2 discovers every plugin directory under `~/.config/opencode/plugins/`,
+so install by linking `plugin-v2/` into that directory:
 
-MCP on V2 uses a nested shape (`mcp.servers`); the local-stdio equivalent
-of Option A is:
-
-```jsonc
-{ "mcp": { "servers": { "leadline": { "type": "local", "command": ["leadline", "mcp"] } } } }
+```console
+ln -sfn /path/to/leadline/integrations/opencode/plugin-v2 \
+  ~/.config/opencode/plugins/leadline
+opencode2 service restart
 ```
+
+Do **not** also add a `plugins` entry for the same directory to
+`opencode.json`: V2 would load it twice and fail the whole plugin reload
+with `Duplicate plugin ID: leadline`.
 
 ## Skill
 
@@ -53,13 +61,13 @@ interpret it. Reference it from your OpenCode instructions.
 ## Permissions
 
 Grant `leadline` subprocess execution only. The plugin never edits
-source, never touches the network, and truncates output to 4000
-chars to protect context.
+source, never touches the network, and caps tool output to protect
+context (50 report lines in the shared core).
 
 Recommended: allow `leadline *`, deny shell for everything else
 in this integration's scope.
 
 ## Uninstall
 
-Remove the MCP entry or plugin file. No other project files are
-touched, so removal leaves config clean.
+Remove the `plugins/leadline` link or the MCP entry. No other project
+files are touched, so removal leaves config clean.

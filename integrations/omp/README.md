@@ -1,22 +1,31 @@
 # leadline OMP extension
 
-Native OMP extension for the `leadline` analyzer. It shares its adapter
-core with the Pi extension (`../agent-adapter-ts/core/`); only the thin
-registration shim (`../agent-adapter-ts/omp/`) is harness-specific. All
-analysis runs in the `leadline` binary. No metric logic lives here.
+Native OMP extension for the `leadline` analyzer. OMP vendors the Pi
+extension API, so this package re-exports the same registration as the Pi
+extension (`../pi/index.ts`); only the manifests are harness-specific.
+All analysis runs in the `leadline` binary. No metric logic lives here.
 
 ## Install
 
-1. Put the `leadline` binary on your PATH (`cargo build --release` in the
-   leadline repository, then copy `target/release/leadline` to a PATH
-   directory such as `~/.cargo/bin`).
-2. Register this extension with OMP (see your OMP version's extension
-   install flow) pointing at `integrations/omp/index.ts`.
-3. Confirm the tools are listed: `leadline_changed`, `leadline_function`,
-   `leadline_check`.
+1. Install the release binary (puts `leadline` on `~/.local/bin`):
 
-If the binary is missing, every tool fails with a message telling you
-where it looked (PATH plus well-known install locations).
+   ```console
+   curl -fsSL https://raw.githubusercontent.com/jbt95/leadline/main/install.sh | sh
+   ```
+
+2. Install the extension from this repository:
+
+   ```console
+   omp plugin install git:github.com/jbt95/leadline
+   ```
+
+3. Restart OMP and confirm the plugin is healthy:
+
+   ```console
+   omp plugin doctor
+   ```
+
+   It must report a `pi` manifest and no load errors.
 
 ## MCP fallback
 
@@ -33,32 +42,19 @@ expose duplicate `leadline` tools.
 
 ## Uninstall
 
-Remove the extension registration from your OMP configuration. Clean
-removal: the extension writes no files outside OMP's own config, so
-removing the registration leaves nothing behind. Optionally remove the
-`leadline` binary from your PATH.
+```console
+omp plugin uninstall leadline
+```
 
 ## Permissions
 
 The extension needs permission to spawn the `leadline` subprocess and to
 read the repository files you ask it to analyze.
 
-## What data is read
-
-Only the source files under the analyzed path, plus git metadata for the
-base revision in `leadline_changed`. Nothing leaves the machine; the
-binary runs locally.
-
 ## Commands executed
 
 - `leadline changed --base <rev> --format agent-json [--path <path>]`
 - `leadline function <file> <name> --format agent-json`
-- `leadline check <path> --format agent-json`
-
-## How to disable
-
-Unregister the extension, or set its post-edit mode off (`gate` and
-`advisory` modes produce no post-edit output; only `warn` emits
-feedback, and it never blocks). Removing the `leadline` binary also
-silently disables analysis. To switch to the MCP fallback instead,
-unregister this extension first, then add `leadline mcp`.
+- `leadline check <path> --format agent-json [--cognitive N --cyclomatic N --max-nesting N]`
+- Post-edit (warn mode, after successful edit/write tool results):
+  `leadline changed --base HEAD~1 --format agent-json`

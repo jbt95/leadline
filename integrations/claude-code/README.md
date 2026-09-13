@@ -8,24 +8,28 @@ Thin plugin around the `leadline` binary. No metrics are reimplemented here.
 
 ## Install
 
-One command (project-local):
-
-```bash
-claude plugin add ./integrations/claude-code
+```console
+claude plugin marketplace add jbt95/leadline
+claude plugin install leadline@leadline
 ```
 
-Or copy `integrations/claude-code` into your project and register
-`hooks/hooks.json` in Claude Code settings.
+Restart Claude Code, then confirm the plugin and its MCP server:
+
+```console
+claude plugin list
+claude mcp list
+```
+
+The plugin ships three components: the `leadline` MCP server
+(`leadline mcp`), warn-mode `PostToolUse` / `Stop` hooks, and the
+`leadline` skill.
 
 ## Uninstall
 
-```bash
-claude plugin remove leadline
+```console
+claude plugin uninstall leadline@leadline
+claude plugin marketplace remove leadline
 ```
-
-Manual installs: delete the copied directory and remove the
-`hooks/hooks.json` entry. No other project files are touched, so
-removal leaves config clean.
 
 ## Permissions
 

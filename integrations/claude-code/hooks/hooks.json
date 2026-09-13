@@ -1,1 +1,27 @@
-{"hooks":{"PostToolUse":[{"hooks":[{"command":"\"$CLAUDE_PROJECT_DIR\"/integrations/claude-code/hooks/leadline-changed.sh","timeout":60,"type":"command"}],"matcher":"Write|Edit|MultiEdit"}],"Stop":[{"hooks":[{"command":"\"$CLAUDE_PROJECT_DIR\"/integrations/claude-code/hooks/leadline-check.sh","timeout":60,"type":"command"}]}]}}
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/leadline-changed.sh",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/leadline-check.sh",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,6 +1,15 @@
 {
   "name": "leadline-pi",
-  "version": "0.1.0",
+  "version": "0.3.2",
   "description": "Native Pi extension for the leadline analyzer (warn-mode feedback, no metric logic)",
-  "type": "module"
+  "type": "module",
+  "keywords": ["pi-package", "pi-extension"],
+  "pi": {
+    "extensions": ["./index.ts"],
+    "skills": ["./SKILL.md"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
 }

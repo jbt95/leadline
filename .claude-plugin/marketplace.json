@@ -1,0 +1,14 @@
+{
+  "name": "leadline",
+  "owner": {
+    "name": "jbt95"
+  },
+  "description": "Deterministic function-level complexity feedback for changed code.",
+  "plugins": [
+    {
+      "name": "leadline",
+      "source": "./integrations/claude-code",
+      "description": "Deterministic function-level complexity feedback for changed code."
+    }
+  ]
+}

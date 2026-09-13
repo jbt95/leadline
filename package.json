@@ -1,0 +1,11 @@
+{
+  "name": "leadline",
+  "version": "0.3.2",
+  "private": true,
+  "description": "Deterministic function-level complexity analysis for Java, JavaScript, TypeScript, and TSX.",
+  "keywords": ["pi-package", "pi-extension", "complexity", "static-analysis"],
+  "pi": {
+    "extensions": ["./integrations/pi/index.ts"],
+    "skills": ["./integrations/common/leadline-skill"]
+  }
+}

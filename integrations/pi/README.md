@@ -6,23 +6,28 @@ post-edit feedback. No metric logic lives here.
 
 ## Install
 
-1. Put the `leadline` binary on your PATH (`cargo build --release` in the
-   leadline repository, then copy `target/release/leadline` to a PATH
-   directory such as `~/.cargo/bin`).
-2. Register this extension with Pi (see your Pi version's extension
-   install flow) pointing at `integrations/pi/index.ts`.
-3. Confirm the tools are listed: `leadline_changed`, `leadline_function`,
-   `leadline_check`.
+1. Install the release binary (puts `leadline` on `~/.local/bin`):
 
-If the binary is missing, every tool fails with a message telling you
-where it looked (PATH plus well-known install locations).
+   ```console
+   curl -fsSL https://raw.githubusercontent.com/jbt95/leadline/main/install.sh | sh
+   ```
+
+2. Install the extension from this repository:
+
+   ```console
+   pi install git:github.com/jbt95/leadline
+   ```
+
+3. Restart Pi and confirm the tools are listed: `leadline_changed`,
+   `leadline_function`, `leadline_check`.
 
 ## Uninstall
 
-Remove the extension registration from your Pi configuration and delete
-this directory reference. Clean removal: the extension writes no files
-outside Pi's own config, so removing the registration leaves nothing
-behind. Optionally remove the `leadline` binary from your PATH.
+```console
+pi remove git:github.com/jbt95/leadline
+```
+
+Removing the `leadline` binary also silently disables analysis.
 
 ## Permissions
 
@@ -39,7 +44,9 @@ binary runs locally.
 
 - `leadline changed --base <rev> --format agent-json [--path <path>]`
 - `leadline function <file> <name> --format agent-json`
-- `leadline check <path> --format agent-json`
+- `leadline check <path> --format agent-json [--cognitive N --cyclomatic N --max-nesting N]`
+- Post-edit (warn mode, after successful edit/write tool results):
+  `leadline changed --base HEAD~1 --format agent-json`
 
 ## How to disable
 
