@@ -2,6 +2,13 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## 0.3.1 - 2026-09-13
+
+### Fixed
+
+- Windows: `source_snapshot` strips the `\\?\` verbatim prefix from the canonicalized analysis root, so scope resolution no longer fails with "analysis path is outside the Git repository" on Windows CI.
+- Windows: the snapshot test suite compares plain (non-verbatim) repository paths, and Unix-only import/property tests are gated to Unix targets.
+
 ## 0.3.0 - 2026-09-13
 
 ### Added

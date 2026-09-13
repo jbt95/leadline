@@ -128,6 +128,19 @@ fn paths(snapshot: &SourceSnapshot) -> Vec<&str> {
         .collect()
 }
 
+/// Canonicalizes like Git prints on Windows (without the `\\?\` prefix).
+fn plain_path(path: &Path) -> PathBuf {
+    let canonical = std::fs::canonicalize(path).unwrap();
+    #[cfg(windows)]
+    {
+        let text = canonical.to_string_lossy();
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    canonical
+}
+
 fn bytes_of<'a>(snapshot: &'a SourceSnapshot, path: &str) -> &'a [u8] {
     &snapshot
         .entries
@@ -353,12 +366,9 @@ fn scope_prefix_maps_repository_paths_into_the_analysis_root() {
     assert_eq!(context.scope_prefix, "src/");
     assert_eq!(
         context.repo_root.as_deref(),
-        Some(std::fs::canonicalize(&fixture.root).unwrap().as_path())
+        Some(plain_path(&fixture.root).as_path())
     );
-    assert_eq!(
-        context.analysis_root,
-        std::fs::canonicalize(&nested).unwrap()
-    );
+    assert_eq!(context.analysis_root, plain_path(&nested));
     assert_eq!(
         paths(&worktree),
         [
@@ -384,10 +394,7 @@ fn explicit_files_bypass_directory_filters() {
     let fixture = snapshot_fixture("explicit");
     let ignored = fixture.root.join("src/ignored.ts");
     let (context, snapshot) = load(&ignored, SnapshotTarget::Worktree).unwrap();
-    assert_eq!(
-        context.analysis_root,
-        std::fs::canonicalize(fixture.root.join("src")).unwrap()
-    );
+    assert_eq!(context.analysis_root, plain_path(&fixture.root.join("src")));
     assert_eq!(context.scope_prefix, "src/");
     assert_eq!(paths(&snapshot), ["ignored.ts"]);
     assert_eq!(snapshot.entries[0].bytes, b"export const ignored = 1;\n");
@@ -538,6 +545,7 @@ fn non_utf8_git_paths_are_input_errors() {
     assert!(load(&root, SnapshotTarget::Index).is_err());
 }
 
+#[cfg(unix)]
 #[test]
 fn control_character_paths_are_input_errors() {
     let root = temporary_directory("control-path");

@@ -78,7 +78,9 @@ pub fn load(path: &Path, target: SnapshotTarget) -> Result<(SnapshotContext, Sou
         path
     };
     let repo_root = git::repo_root(anchor)?;
-    let analysis_root = std::fs::canonicalize(anchor)?;
+    // `std::fs::canonicalize` returns verbatim (`\\?\`) paths on Windows;
+    // git prints plain paths, so both sides strip before comparing.
+    let analysis_root = crate::strip_verbatim_prefix(&std::fs::canonicalize(anchor)?);
     let scope_prefix = scope_prefix_for(&analysis_root, repo_root.as_deref())?;
     let explicit = if explicit_file {
         if crate::parser::detect_language(&path.to_string_lossy()).is_none() {

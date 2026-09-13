@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -36,7 +37,7 @@ fn adapter_and_existing_consumers_disable_fetch_locks_and_stdin() {
         assert!(leadline::git::run_optional(&root, &["arbitrary-failure"]).is_err());
         assert_eq!(
             leadline::git::repo_root(&root).unwrap(),
-            Some(std::fs::canonicalize(&root).unwrap())
+            Some(plain_path(&root))
         );
 
         let changed = leadline::diff::analyze_changed(&root, "HEAD").unwrap();
@@ -159,9 +160,22 @@ fn repo_root_finds_the_canonical_repository_root() {
     std::fs::create_dir_all(&nested).unwrap();
     assert_eq!(
         leadline::git::repo_root(&nested).unwrap(),
-        Some(std::fs::canonicalize(&root).unwrap())
+        Some(plain_path(&root))
     );
     std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Canonicalizes like Git prints on Windows (without the `\\?\` prefix).
+fn plain_path(path: &Path) -> PathBuf {
+    let canonical = std::fs::canonicalize(path).unwrap();
+    #[cfg(windows)]
+    {
+        let text = canonical.to_string_lossy();
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    canonical
 }
 
 #[test]
