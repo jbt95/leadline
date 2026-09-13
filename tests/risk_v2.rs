@@ -213,7 +213,7 @@ fn v2_treats_missing_ownership_and_history_as_unknown() {
     assert_eq!(row.components.churn, None);
     assert_eq!(row.components.ownership, None);
     assert_eq!(row.components.policy, Some(0.0));
-    assert_eq!(report.git_available, false);
+    assert!(!report.git_available);
     assert_eq!(report.head_commit, None);
     // Known weights: complexity 20 + impact 20 + policy 15 = 55.
     let expected = (20.0 * 100.0 + 20.0 * 100.0 + 15.0 * 0.0) / 55.0;
