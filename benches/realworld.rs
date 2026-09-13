@@ -63,8 +63,8 @@ fn analyze_smoke(name: &str, root: &std::path::Path) -> (usize, usize) {
 /// (no revision walk here), so churn/ownership stay unknown by design.
 fn join_smoke(path: &std::path::Path) {
     let analysis = analyze_path(path, None).expect("realworld join analysis succeeds");
-    let graph = leadline::graph::analyze_dependencies(path, &[])
-        .expect("realworld join graph succeeds");
+    let graph =
+        leadline::graph::analyze_dependencies(path, &[]).expect("realworld join graph succeeds");
     let history = leadline::history::HistoryReport {
         schema_version: leadline::history::HISTORY_SCHEMA_VERSION,
         analyzer_version: env!("CARGO_PKG_VERSION"),

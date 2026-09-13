@@ -4,29 +4,25 @@ name = "tanstack-query"
 url = "https://github.com/TanStack/query"
 branch = "main"
 subpath = "packages"
-# TODO(Task 5): calibrate
-floor_files_per_sec = 0.0
+floor_files_per_sec = 2400.0
 
 [[fixture]]
 name = "nest"
 url = "https://github.com/nestjs/nest"
 branch = "master"
 subpath = "packages"
-# TODO(Task 5): calibrate
-floor_files_per_sec = 0.0
+floor_files_per_sec = 5400.0
 
 [[fixture]]
 name = "react"
 url = "https://github.com/facebook/react"
 branch = "main"
 subpath = "packages"
-# TODO(Task 5): calibrate
-floor_files_per_sec = 0.0
+floor_files_per_sec = 1900.0
 
 [[fixture]]
 name = "spring-boot"
 url = "https://github.com/spring-projects/spring-boot"
 branch = "main"
 subpath = "."
-# TODO(Task 5): calibrate
-floor_files_per_sec = 0.0
+floor_files_per_sec = 4600.0

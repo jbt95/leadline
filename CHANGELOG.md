@@ -2,6 +2,18 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## Unreleased
+
+### Added
+
+- Real-world smoke + benchmark suite (`scripts/realworld.sh`, `cargo bench --bench realworld`): shallow floating-main clones of TanStack Query, Nest, React, and Spring Boot with determinism smoke asserts, a `risk`/`project` join smoke, and per-fixture throughput floors in `benches/realworld.toml`. Local-only; see `docs/realworld-benchmarks.md`.
+
+### Changed (breaking)
+
+- Risk is a single model again: `leadline::risk_v2` is merged into `leadline::risk` as `change-risk-v2` (weights complexity 20, CRAP 15, churn 20, impact 20, ownership concentration 10, policy 15) and the `change-risk-v1` fallback is removed. `ownership` is now touch concentration instead of `100 / contributors`, and `policy` carries the highest unresolved source severity (error 100, warning 60, info 30; `0.0` when no rule fires) instead of always-`null`.
+- `leadline risk --json` always emits the full ranking (no `truncated` field); `--limit` caps terminal and agent-JSON rows only. The `truncated` field is also gone from risk agent-JSON.
+- `Project.risk` and `DebtReport` risk entries always use the single model; `ProjectInputs` takes `risk: &RiskReport` and `policy: &PolicyReport` instead of the v1/v2 option pair.
+
 ## 0.3.2 - 2026-09-13
 
 ### Fixed
