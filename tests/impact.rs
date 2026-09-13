@@ -1,5 +1,33 @@
 use leadline::graph::{DependencyCycle, DependencyEdge, DependencyFile, DependencyReport};
 use leadline::impact::analyze_impact;
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+fn temporary_directory() -> PathBuf {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("leadline-impact-{}-{id}", std::process::id()));
+    std::fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn write_file(root: &std::path::Path, path: &str, source: &str) {
+    let path = root.join(path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(path, source).unwrap();
+}
+
+fn cli_chain_fixture() -> PathBuf {
+    let root = temporary_directory();
+    write_file(&root, "src/b.ts", "export const b = 1;\n");
+    write_file(&root, "src/a.ts", "import './b';\nexport const a = 1;\n");
+    write_file(&root, "src/c.ts", "import './a';\nexport const c = 1;\n");
+    write_file(&root, "src/d.ts", "import './c';\nexport const d = 1;\n");
+    root
+}
 
 fn fixture_chain() -> DependencyReport {
     DependencyReport {
@@ -246,4 +274,199 @@ fn impact_report_serialization_is_byte_stable() {
         serde_json::to_vec(&first).unwrap(),
         serde_json::to_vec(&second).unwrap()
     );
+}
+
+#[test]
+fn cli_impact_terminal_reports_target_and_dependents() {
+    let root = cli_chain_fixture();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["impact", "src/b.ts"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("src/b.ts"), "missing target in:\n{stdout}");
+    assert!(
+        stdout.contains("src/a.ts"),
+        "missing dependent in:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("distance 1"),
+        "missing distance in:\n{stdout}"
+    );
+    assert!(
+        stdout.to_lowercase().contains("blast radius"),
+        "missing blast radius in:\n{stdout}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_impact_json_reports_dependents_in_order() {
+    let root = cli_chain_fixture();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["impact", "src/b.ts", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["target"], "src/b.ts");
+    assert_eq!(value["blast_radius"], 3);
+    assert_eq!(value["direct_dependents"], 1);
+    let dependents: Vec<(&str, u64)> = value["dependents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["path"].as_str().unwrap(),
+                row["distance"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        dependents,
+        [("src/a.ts", 1), ("src/c.ts", 2), ("src/d.ts", 3)]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_impact_agent_json_is_compact() {
+    let root = cli_chain_fixture();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["impact", "src/b.ts", "--format", "agent-json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["target"], "src/b.ts");
+    assert_eq!(value["blast_radius"], 3);
+    assert_eq!(value["truncated"], false);
+    assert_eq!(value["dependents"].as_array().unwrap().len(), 3);
+    assert!(
+        value.get("analyzer_version").is_none(),
+        "agent view must stay compact"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_impact_json_is_deterministic() {
+    let root = cli_chain_fixture();
+    let args = ["impact", "src/b.ts", "--json"];
+    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(args)
+        .output()
+        .unwrap();
+    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+    assert!(second.status.success());
+    assert_eq!(first.stdout, second.stdout);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_impact_top_truncates_dependents_but_keeps_blast_radius() {
+    let root = cli_chain_fixture();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["impact", "src/b.ts", "--top", "1", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["blast_radius"], 3);
+    assert_eq!(value["truncated"], true);
+    assert_eq!(value["dependents"].as_array().unwrap().len(), 1);
+    assert_eq!(value["dependents"][0]["path"], "src/a.ts");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_impact_requires_an_existing_target() {
+    let root = cli_chain_fixture();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["impact", "src/missing.ts"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing.ts"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_impact_rejects_targets_outside_the_scope() {
+    let root = cli_chain_fixture();
+    write_file(&root, "outside.ts", "export const outside = 1;\n");
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["impact", "../outside.ts", "--path", "src"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("outside the scope"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_impact_rejects_unknown_format() {
+    let root = cli_chain_fixture();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["impact", "src/b.ts", "--format", "xml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown --format"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_impact_missing_graph_target_is_usage_error() {
+    let root = cli_chain_fixture();
+    write_file(&root, "src/notes.txt", "plain text, not in the graph\n");
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["impact", "src/notes.txt"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("notes.txt"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_impact_help_lists_the_command() {
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["impact", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("leadline impact"));
 }

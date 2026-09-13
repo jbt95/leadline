@@ -1,5 +1,6 @@
 use leadline::graph::{DEPENDENCY_SCHEMA_VERSION, DependencyReport, analyze_dependencies};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn temporary_directory() -> PathBuf {
@@ -405,4 +406,196 @@ fn three_file_cycle_is_sorted_and_import_wins_over_call() {
     assert_eq!(report.cycles[0].files, ["src/a.ts", "src/b.ts", "src/c.ts"]);
 
     std::fs::remove_dir_all(root).unwrap();
+}
+
+fn cli_fixture() -> PathBuf {
+    let root = temporary_directory();
+    write(&root, "src/a.ts", "import './b';\nexport const a = 1;\n");
+    write(&root, "src/b.ts", "import './a';\nexport const b = 1;\n");
+    root
+}
+
+#[test]
+fn cli_dependencies_terminal_reports_counts_and_cycles() {
+    let root = cli_fixture();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["dependencies"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("Dependencies"),
+        "missing header in:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("2 files"),
+        "missing file count in:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("2 edges"),
+        "missing edge count in:\n{stdout}"
+    );
+    assert!(
+        stdout.to_lowercase().contains("cycle"),
+        "missing cycle in:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("src/a.ts"),
+        "missing fan-in/out row in:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("src/b.ts"),
+        "missing fan-in/out row in:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Top fan-in"),
+        "missing top fan-in in:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Top fan-out"),
+        "missing top fan-out in:\n{stdout}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_dependencies_json_reports_canonical_counts() {
+    let root = cli_fixture();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["dependencies", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], DEPENDENCY_SCHEMA_VERSION);
+    assert_eq!(value["files"].as_array().unwrap().len(), 2);
+    assert_eq!(value["edges"].as_array().unwrap().len(), 2);
+    assert_eq!(value["cycles"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        value["cycles"][0]["files"],
+        serde_json::json!(["src/a.ts", "src/b.ts"])
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_dependencies_agent_json_is_compact() {
+    let root = cli_fixture();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["dependencies", "--format", "agent-json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["summary"]["files"], 2);
+    assert_eq!(value["summary"]["edges"], 2);
+    assert_eq!(value["summary"]["cycles"], 1);
+    assert_eq!(value["truncated"], false);
+    assert_eq!(value["files"].as_array().unwrap().len(), 2);
+    assert_eq!(value["edges"].as_array().unwrap().len(), 2);
+    assert!(
+        value["edges"][0].get("confidence").is_none(),
+        "agent edges must drop confidence"
+    );
+    assert!(
+        value.get("analyzer_version").is_none(),
+        "agent view must stay compact"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_dependencies_json_is_deterministic() {
+    let root = cli_fixture();
+    let args = ["dependencies", "--json"];
+    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(args)
+        .output()
+        .unwrap();
+    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+    assert!(second.status.success());
+    assert_eq!(first.stdout, second.stdout);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_dependencies_rejects_unknown_format() {
+    let root = cli_fixture();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["dependencies", "--format", "xml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown --format"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_dependencies_honors_config_excludes() {
+    let root = temporary_directory();
+    write(&root, "src/main.ts", "import './keep';\nimport './skip';\n");
+    write(&root, "src/keep.ts", "export const keep = 1;\n");
+    write(&root, "src/skip.ts", "export const skip = 1;\n");
+    std::fs::write(
+        root.join("leadline.toml"),
+        "[analysis]\nexclude = [\"src/skip.ts\"]\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["dependencies", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let paths: Vec<&str> = value["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["path"].as_str().unwrap())
+        .collect();
+    assert!(paths.contains(&"src/main.ts"));
+    assert!(paths.contains(&"src/keep.ts"));
+    assert!(
+        !paths.contains(&"src/skip.ts"),
+        "excluded file leaked: {paths:?}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_dependencies_help_lists_the_command() {
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["dependencies", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("leadline dependencies"));
 }

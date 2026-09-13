@@ -103,6 +103,8 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
         "baseline" => baseline_command(&args[1..]),
         "hotspots" => hotspots_command(&args[1..]),
         "coupling" => coupling_command(&args[1..]),
+        "dependencies" => dependencies_command(&args[1..]),
+        "impact" => impact_command(&args[1..]),
         "test-targets" => test_targets_command(&args[1..]),
         "doctor" => doctor_command(&args[1..]),
         "mcp" => match leadline::mcp::serve() {
@@ -599,31 +601,7 @@ fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
             root.display()
         )));
     }
-    let requested = Path::new(&target);
-    let absolute_target = if requested.is_absolute() {
-        requested.to_path_buf()
-    } else {
-        root.join(requested)
-    };
-    if !absolute_target.is_file() {
-        return Err(CliError::usage(format!(
-            "coupling target '{target}' was not found under {}",
-            root.display()
-        )));
-    }
-    // History keys are scope-relative; canonicalize both sides so symlinks and
-    // Windows verbatim prefixes cannot split the join.
-    let canonical_root =
-        std::fs::canonicalize(&root).map_err(|error| CliError::incomplete(error.to_string()))?;
-    let canonical_target = std::fs::canonicalize(&absolute_target)
-        .map_err(|error| CliError::incomplete(error.to_string()))?;
-    if !canonical_target.starts_with(&canonical_root) {
-        return Err(CliError::usage(format!(
-            "coupling target '{target}' is outside the scope {}",
-            root.display()
-        )));
-    }
-    let key = leadline::normalized_relative_path(&canonical_target, &canonical_root);
+    let key = resolve_scoped_target(&root, &target, "coupling")?;
     let options = CouplingOptions {
         min_co_changes,
         limit: top,
@@ -644,6 +622,195 @@ fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
         );
     } else {
         print!("{}", leadline::report::terminal_coupling(&report));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Resolve a user-supplied target to a scope-relative normalized path.
+///
+/// Validates the file exists, then canonicalizes both sides so symlinks and
+/// Windows verbatim prefixes cannot split the join. Shared by `coupling` and
+/// `impact` so canonical containment validation is implemented once.
+fn resolve_scoped_target(root: &Path, target: &str, command: &str) -> Result<String, CliError> {
+    let requested = Path::new(target);
+    let absolute_target = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
+    if !absolute_target.is_file() {
+        return Err(CliError::usage(format!(
+            "{command} target '{target}' was not found under {}",
+            root.display()
+        )));
+    }
+    // Join keys are scope-relative; canonicalize both sides so symlinks and
+    // Windows verbatim prefixes cannot split the join.
+    let canonical_root =
+        std::fs::canonicalize(root).map_err(|error| CliError::incomplete(error.to_string()))?;
+    let canonical_target = std::fs::canonicalize(&absolute_target)
+        .map_err(|error| CliError::incomplete(error.to_string()))?;
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err(CliError::usage(format!(
+            "{command} target '{target}' is outside the scope {}",
+            root.display()
+        )));
+    }
+    Ok(leadline::normalized_relative_path(
+        &canonical_target,
+        &canonical_root,
+    ))
+}
+
+/// Static dependency graph with fan-in/fan-out and cycles.
+fn dependencies_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut path = PathBuf::from(".");
+    let mut has_path = false;
+    let mut json = false;
+    let mut agent_json = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => json = true,
+            "--format" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
+                if value != "agent-json" {
+                    return Err(CliError::usage(format!(
+                        "unknown --format '{value}': expected 'agent-json'"
+                    )));
+                }
+                agent_json = true;
+            }
+            value if !value.starts_with('-') && !has_path => {
+                path = PathBuf::from(value);
+                has_path = true;
+            }
+            value => {
+                return Err(CliError::usage(format!(
+                    "unknown dependencies option '{value}'"
+                )));
+            }
+        }
+        index += 1;
+    }
+    if json && agent_json {
+        return Err(CliError::usage(
+            "--json and --format agent-json are exclusive",
+        ));
+    }
+    let config = load_config_for(&path)?;
+    let excludes: &[String] = config
+        .as_ref()
+        .map(|selected| selected.analysis_excludes.as_slice())
+        .unwrap_or(&[]);
+    let report = leadline::graph::analyze_dependencies(&path, excludes)
+        .map_err(|error| CliError::incomplete(error.to_string()))?;
+    if agent_json {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::agent::dependencies_agent_json(&report))
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else {
+        print!("{}", leadline::report::terminal_dependencies(&report));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Transitive dependents and blast radius for one target file.
+fn impact_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut target: Option<String> = None;
+    let mut root = PathBuf::from(".");
+    let mut top = 20_usize;
+    let mut json = false;
+    let mut agent_json = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => json = true,
+            "--format" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
+                if value != "agent-json" {
+                    return Err(CliError::usage(format!(
+                        "unknown --format '{value}': expected 'agent-json'"
+                    )));
+                }
+                agent_json = true;
+            }
+            "--top" => {
+                index += 1;
+                top = parse_top(args.get(index), "--top")?;
+            }
+            "--path" => {
+                index += 1;
+                root = PathBuf::from(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--path requires a directory"))?,
+                );
+            }
+            value if !value.starts_with('-') && target.is_none() => {
+                target = Some(value.to_owned());
+            }
+            value => {
+                return Err(CliError::usage(format!("unknown impact option '{value}'")));
+            }
+        }
+        index += 1;
+    }
+    if json && agent_json {
+        return Err(CliError::usage(
+            "--json and --format agent-json are exclusive",
+        ));
+    }
+    let Some(target) = target else {
+        return Err(CliError::usage("impact requires a TARGET file"));
+    };
+    if !root.is_dir() {
+        return Err(CliError::usage(format!(
+            "impact scope '{}' is not a directory",
+            root.display()
+        )));
+    }
+    let key = resolve_scoped_target(&root, &target, "impact")?;
+    let config = load_config_for(&root)?;
+    let excludes: &[String] = config
+        .as_ref()
+        .map(|selected| selected.analysis_excludes.as_slice())
+        .unwrap_or(&[]);
+    let graph = leadline::graph::analyze_dependencies(&root, excludes)
+        .map_err(|error| CliError::incomplete(error.to_string()))?;
+    let Some(report) = leadline::impact::analyze_impact(&graph, &key, top) else {
+        return Err(CliError::usage(format!(
+            "impact target '{target}' was not found in the dependency graph under {}",
+            root.display()
+        )));
+    };
+    if agent_json {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::agent::impact_agent_json(&report))
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else {
+        print!("{}", leadline::report::terminal_impact(&report));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -1703,5 +1870,7 @@ fn load_coverage(path: &str, format: CoverageFormat) -> Result<CoverageMap, CliE
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp\n  leadline skill\n  leadline version\n  leadline --version"
+    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]
+  leadline dependencies [PATH] [--json] [--format agent-json]
+  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp\n  leadline skill\n  leadline version\n  leadline --version"
 }

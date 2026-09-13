@@ -1,7 +1,9 @@
 use crate::core::{AnalysisReport, FunctionAnalysis};
 use crate::coupling::CouplingReport;
 use crate::diff::ChangedReport;
+use crate::graph::DependencyReport;
 use crate::hotspots::HotspotReport;
+use crate::impact::ImpactReport;
 use std::fmt::Write;
 
 pub fn terminal(report: &AnalysisReport) -> String {
@@ -122,6 +124,112 @@ pub fn terminal_coupling(report: &CouplingReport) -> String {
             "\nShowing the top {} related files (raise --top for more).",
             report.related.len()
         );
+    }
+    output
+}
+
+pub fn terminal_dependencies(report: &DependencyReport) -> String {
+    let mut output = String::new();
+    let cycle_word = if report.cycles.len() == 1 {
+        "cycle"
+    } else {
+        "cycles"
+    };
+    let _ = writeln!(
+        output,
+        "Dependencies ({} files, {} edges, {} {cycle_word})\n",
+        report.files.len(),
+        report.edges.len(),
+        report.cycles.len()
+    );
+    let mut by_fan_in: Vec<&crate::graph::DependencyFile> = report.files.iter().collect();
+    by_fan_in.sort_by(|left, right| {
+        right
+            .fan_in
+            .cmp(&left.fan_in)
+            .then(left.path.cmp(&right.path))
+    });
+    let mut by_fan_out: Vec<&crate::graph::DependencyFile> = report.files.iter().collect();
+    by_fan_out.sort_by(|left, right| {
+        right
+            .fan_out
+            .cmp(&left.fan_out)
+            .then(left.path.cmp(&right.path))
+    });
+    let _ = writeln!(output, "Top fan-in");
+    for file in by_fan_in.iter().take(5) {
+        let _ = writeln!(
+            output,
+            "  {:<40} fan-in {} fan-out {}",
+            file.path, file.fan_in, file.fan_out
+        );
+    }
+    output.push('\n');
+    let _ = writeln!(output, "Top fan-out");
+    for file in by_fan_out.iter().take(5) {
+        let _ = writeln!(
+            output,
+            "  {:<40} fan-in {} fan-out {}",
+            file.path, file.fan_in, file.fan_out
+        );
+    }
+    output.push('\n');
+    if report.cycles.is_empty() {
+        output.push_str("No cycles found.\n");
+    } else {
+        let _ = writeln!(output, "Cycles ({})", report.cycles.len());
+        for (index, cycle) in report.cycles.iter().enumerate() {
+            let _ = writeln!(output, "  {}. {}", index + 1, cycle.files.join(" -> "));
+        }
+    }
+    output
+}
+
+pub fn terminal_impact(report: &ImpactReport) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "Impact (target: {})\n", report.target);
+    let _ = writeln!(output, "Target: {}", report.target);
+    let _ = writeln!(output, "  Fan-in: {}", report.fan_in);
+    let _ = writeln!(output, "  Fan-out: {}", report.fan_out);
+    let _ = writeln!(output, "  Direct dependents: {}", report.direct_dependents);
+    let _ = writeln!(
+        output,
+        "  Blast radius: {} of {} files ({:.1}%)",
+        report.blast_radius, report.files_analyzed, report.blast_radius_percent
+    );
+    if report.dependents.is_empty() {
+        let _ = writeln!(output, "\nNo dependents found.");
+    } else {
+        let _ = writeln!(
+            output,
+            "\nDependents ({} shown, {} total)",
+            report.dependents.len(),
+            report.blast_radius
+        );
+        for dependent in &report.dependents {
+            let _ = writeln!(
+                output,
+                "  {} (distance {})",
+                dependent.path, dependent.distance
+            );
+        }
+    }
+    if report.truncated {
+        let _ = writeln!(
+            output,
+            "\nShowing the top {} dependents (raise --top for more).",
+            report.dependents.len()
+        );
+    }
+    if !report.cycles.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nCycles involving target ({})",
+            report.cycles.len()
+        );
+        for cycle in &report.cycles {
+            let _ = writeln!(output, "  {}", cycle.join(" -> "));
+        }
     }
     output
 }

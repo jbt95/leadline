@@ -1,7 +1,9 @@
 use crate::core::{AnalysisReport, FunctionAnalysis, FunctionMetrics, MetricContribution};
 use crate::coupling::CouplingReport;
 use crate::diff::ChangedReport;
+use crate::graph::DependencyReport;
 use crate::hotspots::HotspotReport;
+use crate::impact::ImpactReport;
 use serde_json::{Value, json};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -253,6 +255,87 @@ pub fn coupling_agent_json(report: &CouplingReport) -> Value {
         "git_available": report.git_available,
         "target_commits": report.target_commits,
         "related": related,
+        "truncated": report.truncated,
+    })
+}
+
+/// Compact agent-oriented view of a dependency graph report.
+///
+/// Drops per-edge confidence (always high by construction) and report
+/// identity fields; keeps the fan metrics an agent needs to rank files.
+pub fn dependencies_agent_json(report: &DependencyReport) -> Value {
+    let files: Vec<Value> = report
+        .files
+        .iter()
+        .map(|file| {
+            json!({
+                "path": file.path,
+                "fan_in": file.fan_in,
+                "fan_out": file.fan_out,
+            })
+        })
+        .collect();
+    let edges: Vec<Value> = report
+        .edges
+        .iter()
+        .map(|edge| {
+            json!({
+                "source": edge.source,
+                "target": edge.target,
+                "kind": edge.kind,
+            })
+        })
+        .collect();
+    let cycles: Vec<Value> = report
+        .cycles
+        .iter()
+        .map(|cycle| {
+            json!({
+                "files": cycle.files,
+            })
+        })
+        .collect();
+    json!({
+        "schema_version": report.schema_version,
+        "summary": {
+            "files": report.files.len(),
+            "edges": report.edges.len(),
+            "cycles": report.cycles.len(),
+        },
+        "files": files,
+        "edges": edges,
+        "cycles": cycles,
+        "truncated": false,
+    })
+}
+
+/// Compact agent-oriented view of a blast-radius report.
+///
+/// Keeps target metrics and the ordered dependent list; drops report
+/// identity fields the full JSON carries.
+pub fn impact_agent_json(report: &ImpactReport) -> Value {
+    let dependents: Vec<Value> = report
+        .dependents
+        .iter()
+        .map(|dependent| {
+            json!({
+                "path": dependent.path,
+                "distance": dependent.distance,
+            })
+        })
+        .collect();
+    json!({
+        "schema_version": report.schema_version,
+        "model": report.model,
+        "target": report.target,
+        "files_analyzed": report.files_analyzed,
+        "fan_in": report.fan_in,
+        "fan_out": report.fan_out,
+        "direct_dependents": report.direct_dependents,
+        "blast_radius": report.blast_radius,
+        "blast_radius_percent": report.blast_radius_percent,
+        "dependents": dependents,
+        "cycles": report.cycles,
         "truncated": report.truncated,
     })
 }
