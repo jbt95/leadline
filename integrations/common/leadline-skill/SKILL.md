@@ -30,6 +30,7 @@ Shortest post-edit commands (all deterministic, JSON with `--format agent-json`)
 - Gate deltas: `leadline check . --base <rev> --regressions` (zero-tolerance unless `leadline.toml` sets `[regressions]` allowances).
 - Target tests: `leadline test-targets . --coverage <file>` (line coverage only; unknown lines are reported, never called uncovered).
 - Snapshot without Git history: `leadline baseline . --output <file>`, then `leadline check . --baseline <file> --regressions`.
+- Full project report: `leadline analyze . --format agent-json --top 30 --sort-by cognitive` for the hotspot list, `leadline risk . --format agent-json` for file risk ranking, then `leadline impact <file> --format agent-json` on the riskiest files. `leadline check` is a gate, not a report: it needs at least one threshold flag (e.g. `--cognitive 15`) or `--regressions` with `--base`/`--baseline`, and errors without them.
 
 ## Rules
 

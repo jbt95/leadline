@@ -1712,7 +1712,7 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
     }
     if thresholds.is_empty() && !regressions {
         return Err(CliError::usage(
-            "check requires at least one metric threshold",
+            "check requires at least one metric threshold (e.g. --cognitive 15 --cyclomatic 10 --crap 30 --max-nesting 5), or --regressions with --base/--baseline",
         ));
     }
 
