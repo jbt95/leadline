@@ -42,6 +42,10 @@ harness = false
 name = "source_snapshot"
 harness = false
 
+[[bench]]
+name = "realworld"
+harness = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
