@@ -261,8 +261,9 @@ pub fn coupling_agent_json(report: &CouplingReport) -> Value {
 
 /// Compact agent-oriented view of a dependency graph report.
 ///
-/// Drops per-edge confidence (always high by construction) and report
-/// identity fields; keeps the fan metrics an agent needs to rank files.
+/// Drops per-edge confidence (always high by construction); keeps the fan
+/// metrics an agent needs to rank files plus every unresolved reference so
+/// agents never mistake "unresolved" for "no dependency".
 pub fn dependencies_agent_json(report: &DependencyReport) -> Value {
     let files: Vec<Value> = report
         .files
@@ -295,16 +296,30 @@ pub fn dependencies_agent_json(report: &DependencyReport) -> Value {
             })
         })
         .collect();
+    let unresolved: Vec<Value> = report
+        .unresolved
+        .iter()
+        .map(|item| {
+            json!({
+                "source": item.source,
+                "specifier": item.specifier,
+                "line": item.line,
+                "reason": item.reason,
+            })
+        })
+        .collect();
     json!({
         "schema_version": report.schema_version,
         "summary": {
             "files": report.files.len(),
             "edges": report.edges.len(),
             "cycles": report.cycles.len(),
+            "unresolved": report.unresolved.len(),
         },
         "files": files,
         "edges": edges,
         "cycles": cycles,
+        "unresolved": unresolved,
         "truncated": false,
     })
 }

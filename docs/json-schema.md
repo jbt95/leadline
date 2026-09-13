@@ -215,9 +215,10 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
   The same repository, configuration, and analyzer version produce
   byte-identical JSON across runs.
 - `--format agent-json` emits `schema_version`,
-  `summary.{files,edges,cycles}`, one row per file (`path`, `fan_in`,
+  `summary.{files,edges,cycles,unresolved}`, one row per file (`path`, `fan_in`,
   `fan_out`), one row per edge (`source`, `target`, `kind`; `confidence`
-  dropped), one row per cycle (`files`), and `truncated: false`.
+  dropped), one row per cycle (`files`), one row per unresolved reference
+  (`source`, `specifier`, `line`, `reason`), and `truncated: false`.
 
 ## Impact envelope
 

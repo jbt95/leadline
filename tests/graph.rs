@@ -599,3 +599,48 @@ fn cli_dependencies_help_lists_the_command() {
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("leadline dependencies"));
 }
+
+#[test]
+fn cli_dependencies_empty_scope_is_incomplete() {
+    let root = temporary_directory();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["dependencies", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("no supported files found"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_dependencies_agent_json_reports_unresolved() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "src/main.ts",
+        "import './present';\nimport './missing';\n",
+    );
+    write(&root, "src/present.ts", "export const present = 1;\n");
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["dependencies", "--format", "agent-json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["summary"]["unresolved"], 1);
+    assert_eq!(value["unresolved"].as_array().unwrap().len(), 1);
+    assert_eq!(value["unresolved"][0]["source"], "src/main.ts");
+    assert_eq!(value["unresolved"][0]["specifier"], "./missing");
+    assert_eq!(value["unresolved"][0]["reason"], "not_found");
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -1,13 +1,13 @@
 //! Deterministic internal source dependency graph extraction.
 
-use crate::core::{METRIC_PROFILE, OUTPUT_SCHEMA_VERSION};
+use crate::core::METRIC_PROFILE;
 use crate::parser::{ParsedDependencies, RawDependency, RawDependencyKind, extract_dependencies};
 use crate::{Result, normalized_relative_path};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub const DEPENDENCY_SCHEMA_VERSION: u32 = OUTPUT_SCHEMA_VERSION;
+pub const DEPENDENCY_SCHEMA_VERSION: u32 = 1;
 
 const SOURCE_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "cts", "mjs", "cjs"];
 const TYPESCRIPT_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts"];
@@ -197,7 +197,9 @@ fn resolve_javascript(specifier: &str, source: &str, paths: &BTreeSet<String>) -
         return Resolution::Unresolved("outside_scope");
     };
     // Exact matches win before the extension gate: discovered files are
-    // supported by definition, and discovery is case-insensitive.
+    // supported by definition, so an explicit case-variant specifier still
+    // resolves. Extension probing below stays lowercase-only, so an
+    // extensionless specifier only matches lowercase candidate extensions.
     if paths.contains(&base) {
         return Resolution::Resolved(base);
     }

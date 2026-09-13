@@ -708,6 +708,12 @@ fn dependencies_command(args: &[String]) -> Result<ExitCode, CliError> {
         .unwrap_or(&[]);
     let report = leadline::graph::analyze_dependencies(&path, excludes)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
+    if report.files.is_empty() {
+        return Err(CliError::incomplete(format!(
+            "no supported files found under {}",
+            path.display()
+        )));
+    }
     if agent_json {
         println!(
             "{}",

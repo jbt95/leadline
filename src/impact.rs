@@ -1,11 +1,10 @@
 //! Transitive impact analysis over a resolved dependency graph.
 
-use crate::core::OUTPUT_SCHEMA_VERSION;
 use crate::graph::DependencyReport;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub const IMPACT_SCHEMA_VERSION: u32 = OUTPUT_SCHEMA_VERSION;
+pub const IMPACT_SCHEMA_VERSION: u32 = 1;
 pub const IMPACT_MODEL: &str = "impact-v1";
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

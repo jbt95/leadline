@@ -84,7 +84,8 @@ Java (`.java`):
   explicit imports are evidence.
 
 Every edge carries `"confidence": "high"` by construction; the agent-json
-projection drops it.
+projection drops it but keeps every `unresolved` reference, so agents never
+mistake "unresolved" for "no dependency".
 
 ## Definitions
 
@@ -136,6 +137,9 @@ across runs.
 - No generated-code special treatment beyond normal discovery excludes:
   generated and vendor directories are skipped by path-component names, and
   `leadline.toml` `[analysis] exclude` removes the rest from scope.
+- Case-sensitive extension probing: an explicit specifier matching a
+  discovered file resolves regardless of case, but extensionless and
+  `index` probing only tries lowercase extensions.
 
 Resolved imports are static evidence: they show what the source text names,
 and they are incomplete wherever language or runtime configuration (aliases,
