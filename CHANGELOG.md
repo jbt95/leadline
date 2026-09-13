@@ -2,7 +2,7 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
-## Unreleased
+## 0.4.0 - 2026-09-13
 
 ### Added
 
