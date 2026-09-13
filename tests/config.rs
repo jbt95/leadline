@@ -139,6 +139,22 @@ fn architecture_rejects_unknown_keys_in_section() {
 }
 
 #[test]
+fn rejects_config_size_and_depth_limits() {
+    let root = temporary_directory();
+    let oversized = format!("# {}\n", "x".repeat(1 << 20));
+    std::fs::write(root.join("leadline.toml"), oversized).unwrap();
+    assert!(load_from(&root).is_err());
+
+    let mut nested = String::from("1");
+    for _ in 0..20 {
+        nested = format!("{{ inner = {nested} }}");
+    }
+    assert!(parse_str(&format!("value = {nested}\n")).is_err());
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn parses_minimal_and_empty_configs() {
     let empty = parse_str("").unwrap();
     assert!(empty.analysis_excludes.is_empty());

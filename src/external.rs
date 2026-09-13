@@ -8,8 +8,6 @@
 use crate::Result;
 use std::path::Path;
 
-/// `leadline.toml` size limit.
-pub const CONFIG_BYTES_LIMIT: u64 = 1 << 20;
 /// Per-file external report limit.
 pub const INPUT_BYTES_LIMIT: u64 = 64 << 20;
 /// Aggregate external input limit across one run.

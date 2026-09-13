@@ -31,6 +31,10 @@ use toml::Value;
 pub const DEFAULT_PROFILE: &str = "default-v1";
 
 const CONFIG_FILE: &str = "leadline.toml";
+/// `leadline.toml` size limit, enforced before parsing.
+pub const CONFIG_BYTES_LIMIT: u64 = 1 << 20;
+/// Maximum accepted TOML nesting depth.
+const CONFIG_DEPTH_LIMIT: usize = 16;
 
 /// Project configuration loaded from `leadline.toml`.
 #[derive(Clone, Debug, PartialEq)]
@@ -218,6 +222,36 @@ impl Config {
     }
 }
 
+fn validate_toml_depth(table: &toml::Table, limit: usize) -> Result<(), ConfigError> {
+    fn walk(value: &Value, limit: usize) -> Result<(), ConfigError> {
+        if limit == 0 {
+            return Err(ConfigError::new(format!(
+                "leadline.toml nesting exceeds {CONFIG_DEPTH_LIMIT} levels"
+            )));
+        }
+        match value {
+            Value::Table(table) => {
+                for value in table.values() {
+                    walk(value, limit - 1)?;
+                }
+            }
+            Value::Array(items) => {
+                for value in items {
+                    if value.is_table() || value.is_array() {
+                        walk(value, limit - 1)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    for value in table.values() {
+        walk(value, limit)?;
+    }
+    Ok(())
+}
+
 fn validate_analysis_pattern(kind: &str, pattern: &str) -> Result<(), ConfigError> {
     if pattern.trim().is_empty() {
         return Err(ConfigError::new(format!("{kind} must not be empty")));
@@ -274,6 +308,23 @@ fn validate_rule_pattern(rule: &str, pattern: &str) -> Result<(), ConfigError> {
 /// Loads `leadline.toml` from `dir`. `Ok(None)` when the file is absent.
 pub fn load_from(dir: &Path) -> Result<Option<Config>, ConfigError> {
     let path = dir.join(CONFIG_FILE);
+    let metadata = match std::fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(ConfigError::new(format!(
+                "cannot read {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    if metadata.len() > CONFIG_BYTES_LIMIT {
+        return Err(ConfigError::new(format!(
+            "{} exceeds the {} byte limit",
+            path.display(),
+            CONFIG_BYTES_LIMIT
+        )));
+    }
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -292,6 +343,7 @@ pub fn parse_str(text: &str) -> Result<Config, ConfigError> {
     let table: toml::Table = text
         .parse()
         .map_err(|error| ConfigError::new(format!("invalid TOML: {error}")))?;
+    validate_toml_depth(&table, CONFIG_DEPTH_LIMIT)?;
     let mut config = Config::default();
     for (section, value) in &table {
         match section.as_str() {
