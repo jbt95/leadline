@@ -356,6 +356,7 @@ pub fn risk_agent_json(report: &RiskReport) -> Value {
         "git_available": report.git_available,
         "summary": {
             "files_analyzed": report.files_analyzed,
+            "scope_files": report.scope_files,
             "risks": report.risks.len(),
         },
         "risks": risks,

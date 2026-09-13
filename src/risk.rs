@@ -6,10 +6,11 @@
 //! components instead of zeroing them.
 
 use crate::core::AnalysisReport;
-use crate::graph::DependencyReport;
-use crate::history::{HistoryReport, HistoryWindow};
-use crate::impact::analyze_impact;
+use crate::graph::{DependencyFile, DependencyReport};
+use crate::history::{FileHistory, HistoryReport, HistoryWindow};
+use crate::impact::impact_counts;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 pub const RISK_SCHEMA_VERSION: u32 = 1;
 pub const RISK_MODEL: &str = "change-risk-v1";
@@ -22,12 +23,6 @@ pub const COMPONENT_WEIGHTS: [(&str, f64); 6] = [
     ("ownership", 15.0),
     ("policy", 0.0),
 ];
-
-const WEIGHT_COMPLEXITY: f64 = 25.0;
-const WEIGHT_CRAP: f64 = 20.0;
-const WEIGHT_CHURN: f64 = 20.0;
-const WEIGHT_IMPACT: f64 = 20.0;
-const WEIGHT_OWNERSHIP: f64 = 15.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RiskComponents {
@@ -68,7 +63,11 @@ pub struct RiskReport {
     pub model: &'static str,
     pub window: &'static str,
     pub git_available: bool,
+    pub head_commit: Option<String>,
     pub files_analyzed: usize,
+    /// Graph files the blast percents range over; equals `files_analyzed`
+    /// except when analysis covers a sub-scope (e.g. a single file).
+    pub scope_files: usize,
     pub risks: Vec<RiskRow>,
     pub truncated: bool,
 }
@@ -85,7 +84,20 @@ pub fn build(
     window: HistoryWindow,
     limit: usize,
 ) -> RiskReport {
-    // ponytail: per-file BFS over the shared graph is O(files x (V+E)); a counts-only whole-scope pass if this dominates profiles
+    // ponytail: one BFS per file over a single shared reverse map plus
+    // one BTreeMap lookup per join; the per-file BFS work is inherent to
+    // reachability
+    let history_rows: BTreeMap<&str, &FileHistory> = history
+        .files
+        .iter()
+        .map(|row| (row.path.as_str(), row))
+        .collect();
+    let graph_rows: BTreeMap<&str, &DependencyFile> = graph
+        .files
+        .iter()
+        .map(|row| (row.path.as_str(), row))
+        .collect();
+    let counts = impact_counts(graph);
     let mut risks: Vec<RiskRow> = analysis
         .files
         .iter()
@@ -101,21 +113,19 @@ pub fn build(
                 }
             }
 
-            let history_row = history.file(file.path.as_str());
+            let history_row = history_rows.get(file.path.as_str()).copied();
             let changes = history_row.map(|row| window.changes(row));
             let contributors = history_row.map(|row| row.contributors);
 
-            let (fan_in, fan_out) = graph
-                .files
-                .iter()
-                .find(|row| row.path == file.path)
+            let (fan_in, fan_out) = graph_rows
+                .get(file.path.as_str())
                 .map(|row| (row.fan_in, row.fan_out))
                 .unwrap_or((0, 0));
 
-            let (blast_radius, blast_radius_percent) =
-                analyze_impact(graph, file.path.as_str(), usize::MAX)
-                    .map(|impact| (impact.blast_radius, impact.blast_radius_percent))
-                    .unwrap_or((0, 0.0));
+            let (blast_radius, blast_radius_percent) = counts
+                .get(file.path.as_str())
+                .map(|counts| (counts.blast_radius, counts.blast_radius_percent))
+                .unwrap_or((0, 0.0));
 
             let complexity = Some(
                 100.0
@@ -171,7 +181,9 @@ pub fn build(
         model: RISK_MODEL,
         window: window.label(),
         git_available: history.available,
+        head_commit: history.head_commit.clone(),
         files_analyzed: analysis.files.len(),
+        scope_files: graph.files.len(),
         risks,
         truncated,
     }
@@ -180,25 +192,20 @@ pub fn build(
 fn weighted_score(components: &RiskComponents) -> f64 {
     let mut weighted = 0.0_f64;
     let mut weights = 0.0_f64;
-    if let Some(value) = components.complexity {
-        weighted += WEIGHT_COMPLEXITY * value;
-        weights += WEIGHT_COMPLEXITY;
-    }
-    if let Some(value) = components.crap {
-        weighted += WEIGHT_CRAP * value;
-        weights += WEIGHT_CRAP;
-    }
-    if let Some(value) = components.churn {
-        weighted += WEIGHT_CHURN * value;
-        weights += WEIGHT_CHURN;
-    }
-    if let Some(value) = components.impact {
-        weighted += WEIGHT_IMPACT * value;
-        weights += WEIGHT_IMPACT;
-    }
-    if let Some(value) = components.ownership {
-        weighted += WEIGHT_OWNERSHIP * value;
-        weights += WEIGHT_OWNERSHIP;
+    for &(name, weight) in COMPONENT_WEIGHTS.iter() {
+        let value = match name {
+            "complexity" => components.complexity,
+            "crap" => components.crap,
+            "churn" => components.churn,
+            "impact" => components.impact,
+            "ownership" => components.ownership,
+            "policy" => components.policy,
+            _ => None,
+        };
+        if let Some(value) = value {
+            weighted += weight * value;
+            weights += weight;
+        }
     }
     if weights == 0.0 {
         0.0

@@ -269,7 +269,9 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
   "model": "change-risk-v1",
   "window": "90d",
   "git_available": true,
+  "head_commit": "0c2d7309cd3c84d33e4ea8fec01a581cf5246b37",
   "files_analyzed": 2,
+  "scope_files": 2,
   "risks": [
     {
       "path": "src/risky.ts",
@@ -304,7 +306,11 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
   per-component formulas, weights (complexity 25, CRAP 20, churn 20, impact
   20, ownership 15, policy 0), and caps.
 - `window`: `30d`, `90d`, or `365d`; `changes` and the `churn` component use
-  it. Windows are relative to the HEAD commit time, mirroring `hotspots`.
+  it. Windows are relative to the HEAD commit time, mirroring `hotspots`;
+  `head_commit` pins which snapshot the window is relative to.
+  `scope_files` is the graph size the blast percents range over; it equals
+  `files_analyzed` except when analysis covers a sub-scope (e.g. a single
+  file), and the terminal blast line pairs the percent with `scope_files`.
 - `null` means unknown, never zero: `crap` is `null` without coverage,
   `churn`/`ownership` (and `raw.changes`/`raw.contributors`) are `null` when
   the file has no history row, and `policy` is always `null` in v1. The score
@@ -316,6 +322,6 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
   (default 10, `N >= 1`) caps the shown rows; `truncated` signals the cap.
   The command is informational and exits `0`.
 - `--format agent-json` emits `schema_version`, `model`, `window`,
-  `git_available`, `summary.{files_analyzed,risks}`, one row per file
+  `git_available`, `summary.{files_analyzed,scope_files,risks}`, one row per file
   (`path`, `score`, `components` with the same six keys), and `truncated`;
-  it drops `metric_profile`, `analyzer_version`, and `raw`.
+  it drops `metric_profile`, `analyzer_version`, `head_commit`, and `raw`.

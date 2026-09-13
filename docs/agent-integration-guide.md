@@ -87,7 +87,7 @@ an agent can pick the riskiest files to inspect before editing:
   "model": "change-risk-v1",
   "window": "90d",
   "git_available": true,
-  "summary": { "files_analyzed": 128, "risks": 10 },
+  "summary": { "files_analyzed": 128, "scope_files": 128, "risks": 10 },
   "risks": [
     { "path": "src/payment.ts", "score": 82.5,
       "components": { "complexity": 100.0, "crap": 100.0, "churn": 100.0, "impact": 50.0, "ownership": 50.0, "policy": null } }

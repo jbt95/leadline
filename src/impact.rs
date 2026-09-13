@@ -31,17 +31,48 @@ pub struct ImpactReport {
     pub truncated: bool,
 }
 
-/// Reports the transitive dependents of `target` by following reverse edges.
+/// Counts-only whole-scope impact over one shared reverse map.
 ///
-/// Returns `None` when `target` is not a file in `graph`.
-pub fn analyze_impact(
-    graph: &DependencyReport,
-    target: &str,
-    limit: usize,
-) -> Option<ImpactReport> {
-    let target_file = graph.files.iter().find(|file| file.path == target)?;
+/// `analyze_impact` rebuilds this map on every call; prefer this helper when
+/// scoring every file in a scope so the map is built once.
+pub fn impact_counts(graph: &DependencyReport) -> BTreeMap<String, ImpactCounts> {
+    let reverse = reverse_adjacency(graph);
     let files_analyzed = graph.files.len();
+    graph
+        .files
+        .iter()
+        .map(|file| {
+            let distances = reachable_distances(&reverse, file.path.as_str());
+            let blast_radius = distances.len();
+            let direct_dependents = distances
+                .values()
+                .filter(|&&distance| distance == 1)
+                .count();
+            let blast_radius_percent = if files_analyzed <= 1 {
+                0.0
+            } else {
+                blast_radius as f64 / (files_analyzed - 1) as f64 * 100.0
+            };
+            (
+                file.path.clone(),
+                ImpactCounts {
+                    direct_dependents,
+                    blast_radius,
+                    blast_radius_percent,
+                },
+            )
+        })
+        .collect()
+}
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImpactCounts {
+    pub direct_dependents: usize,
+    pub blast_radius: usize,
+    pub blast_radius_percent: f64,
+}
+
+fn reverse_adjacency(graph: &DependencyReport) -> BTreeMap<&str, Vec<&str>> {
     let mut reverse: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for edge in &graph.edges {
         reverse
@@ -53,7 +84,13 @@ pub fn analyze_impact(
         dependents.sort_unstable();
         dependents.dedup();
     }
+    reverse
+}
 
+fn reachable_distances<'graph>(
+    reverse: &BTreeMap<&'graph str, Vec<&'graph str>>,
+    target: &'graph str,
+) -> BTreeMap<&'graph str, usize> {
     let mut visited: BTreeSet<&str> = BTreeSet::new();
     visited.insert(target);
     let mut distances: BTreeMap<&str, usize> = BTreeMap::new();
@@ -68,6 +105,21 @@ pub fn analyze_impact(
             }
         }
     }
+    distances
+}
+
+/// Reports the transitive dependents of `target` by following reverse edges.
+///
+/// Returns `None` when `target` is not a file in `graph`.
+pub fn analyze_impact(
+    graph: &DependencyReport,
+    target: &str,
+    limit: usize,
+) -> Option<ImpactReport> {
+    let target_file = graph.files.iter().find(|file| file.path == target)?;
+    let files_analyzed = graph.files.len();
+    let reverse = reverse_adjacency(graph);
+    let distances = reachable_distances(&reverse, target);
 
     let mut dependents: Vec<ImpactedFile> = distances
         .into_iter()

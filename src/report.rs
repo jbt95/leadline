@@ -403,7 +403,7 @@ pub fn terminal_risk(report: &RiskReport) -> String {
             output,
             "   Blast radius     {:>8} of {} files ({:.1}%)",
             risk.raw.blast_radius,
-            report.files_analyzed.max(1),
+            report.scope_files.max(1),
             risk.raw.blast_radius_percent
         );
         let _ = writeln!(

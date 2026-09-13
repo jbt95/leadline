@@ -40,9 +40,10 @@ components; `policy` carries weight 0 and does not redistribute.
 - `max_crap` is the worst (highest) function CRAP in the file.
 - `changes_in_window` is the file's `changes_30d`, `changes_90d`, or
   `changes_365d` matching `--since`.
-- `blast_radius_percent` is the `impact-v1` value:
-  `blast_radius / (files_analyzed - 1) * 100` (`0.0` when
-  `files_analyzed <= 1`). Caps: complexity ratios saturate at cognitive 30 /
+- `blast_radius_percent` is the `impact-v1` value over the graph scope:
+  `blast_radius / (scope_files - 1) * 100` (`0.0` when
+  `scope_files <= 1`). `scope_files` equals `files_analyzed` except when
+  analysis covers a sub-scope such as a single file. Caps: complexity ratios saturate at cognitive 30 /
   cyclomatic 20, CRAP at 30, churn at 20 changes, impact at 100.
 - The fixed caps are heuristics, not thresholds: they stop one extreme
   dimension from dominating, and they saturate rather than fail.
@@ -113,8 +114,8 @@ an empty scope exits `3`, and unreadable coverage exits `4`.
   20 changes saturate by design; two saturated files can hide very different
   extremes.
 - **Impact cost on huge scopes.** Risk runs one reverse-BFS per file over a
-  shared graph (`O(files x (V+E))`); prefer a scoped path on very large
-  repositories until the counts-only pass lands.
+  single shared reverse map (`O(files x (V+E))` reachability work, with map
+  lookups hoisted); prefer a scoped path on very large repositories.
 - **No coupling input.** Co-change evidence (`coupling`) is not a component;
   inspect it separately before editing.
 - **Static graph limits apply.** Relative JS/TS imports and exact Java type

@@ -664,3 +664,75 @@ fn cli_risk_rejects_unknown_flags() {
     assert_eq!(output.status.code(), Some(2));
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn scope_files_names_the_impact_universe() {
+    // Analysis covers one file of a three-file graph: one analyzed row,
+    // while blast percents range over the three-file scope.
+    let report = build(
+        &analysis(vec![file_with_metrics("src/a.ts", 30, 10, Some(30.0))]),
+        &history(vec![history_file("src/a.ts", 20, 20, 20, 2)]),
+        &graph_for_a(),
+        HistoryWindow::Days90,
+        10,
+    );
+    assert_eq!(report.files_analyzed, 1);
+    assert_eq!(report.scope_files, 3);
+}
+
+#[test]
+fn head_commit_pins_the_window() {
+    let report = build(
+        &analysis(vec![file_with_metrics("src/a.ts", 30, 10, Some(30.0))]),
+        &history(vec![history_file("src/a.ts", 20, 20, 20, 2)]),
+        &graph_for_a(),
+        HistoryWindow::Days90,
+        10,
+    );
+    assert_eq!(report.head_commit.as_deref(), Some("abc123"));
+}
+
+#[test]
+fn weight_table_lists_exactly_the_six_components() {
+    let names: Vec<&str> = leadline::risk::COMPONENT_WEIGHTS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "complexity",
+            "crap",
+            "churn",
+            "impact",
+            "ownership",
+            "policy"
+        ]
+    );
+}
+
+#[test]
+fn cli_risk_single_file_uses_scope_denominator() {
+    let root = risk_fixture();
+    let json = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["risk", "src/risky.ts", "--json"])
+        .output()
+        .unwrap();
+    assert!(json.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(value["files_analyzed"], 1);
+    assert_eq!(value["scope_files"], 2);
+    let terminal = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["risk", "src/risky.ts"])
+        .output()
+        .unwrap();
+    assert!(terminal.status.success());
+    let stdout = String::from_utf8(terminal.stdout).unwrap();
+    assert!(
+        stdout.contains("of 2 files"),
+        "terminal pairs the percent with the scope size, got:\n{stdout}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

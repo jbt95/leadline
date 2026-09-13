@@ -1,5 +1,5 @@
 use leadline::graph::{DependencyCycle, DependencyEdge, DependencyFile, DependencyReport};
-use leadline::impact::analyze_impact;
+use leadline::impact::{analyze_impact, impact_counts};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -469,4 +469,60 @@ fn cli_impact_help_lists_the_command() {
         .unwrap();
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("leadline impact"));
+}
+
+fn fixture_cyclic() -> DependencyReport {
+    let file = |path: &str, fan_in: usize, fan_out: usize| DependencyFile {
+        path: path.to_owned(),
+        fan_in,
+        fan_out,
+    };
+    let edge = |source: &str, target: &str| DependencyEdge {
+        source: source.to_owned(),
+        target: target.to_owned(),
+        kind: "import",
+        confidence: "high",
+    };
+    DependencyReport {
+        schema_version: 1,
+        metric_profile: "default-v1",
+        analyzer_version: "0.2.0",
+        files: vec![
+            file("a.ts", 2, 1),
+            file("b.ts", 1, 1),
+            file("c.ts", 1, 1),
+            file("d.ts", 0, 1),
+        ],
+        edges: vec![
+            edge("a.ts", "b.ts"),
+            edge("b.ts", "c.ts"),
+            edge("c.ts", "a.ts"),
+            edge("d.ts", "c.ts"),
+        ],
+        unresolved: vec![],
+        cycles: vec![],
+    }
+}
+
+#[test]
+fn impact_counts_matches_per_target_reports() {
+    for graph in [fixture_chain(), fixture_cyclic()] {
+        let counts = impact_counts(&graph);
+        assert_eq!(counts.len(), graph.files.len());
+        for file in &graph.files {
+            let report = analyze_impact(&graph, &file.path, usize::MAX).unwrap();
+            let count = &counts[file.path.as_str()];
+            assert_eq!(count.blast_radius, report.blast_radius, "{}", file.path);
+            assert_eq!(
+                count.direct_dependents, report.direct_dependents,
+                "{}",
+                file.path
+            );
+            assert!(
+                (count.blast_radius_percent - report.blast_radius_percent).abs() < 1e-9,
+                "{}",
+                file.path
+            );
+        }
+    }
 }
