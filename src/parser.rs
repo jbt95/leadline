@@ -4,7 +4,30 @@ use crate::core::{
     ParseDiagnostic, Span, analyze_function,
 };
 use std::path::Path;
-use tree_sitter::{Language as TsLanguage, Node, Parser};
+use tree_sitter::{Language as TsLanguage, Node, Parser, Tree};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RawDependencyKind {
+    JavaScriptImport,
+    JavaScriptCall,
+    Java,
+    JavaStatic,
+    JavaWildcard,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RawDependency {
+    pub(crate) kind: RawDependencyKind,
+    pub(crate) specifier: String,
+    pub(crate) line: u32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ParsedDependencies {
+    pub(crate) references: Vec<RawDependency>,
+    pub(crate) java_package: Option<String>,
+    pub(crate) java_top_level_types: Vec<String>,
+}
 
 pub trait ParserBackend: Sync {
     fn analyze(&self, path: &str, source: &[u8]) -> Result<FileAnalysis>;
@@ -14,21 +37,7 @@ pub struct TreeSitterBackend;
 
 impl ParserBackend for TreeSitterBackend {
     fn analyze(&self, path: &str, source: &[u8]) -> Result<FileAnalysis> {
-        let language = detect_language(path).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "unsupported source extension",
-            )
-        })?;
-        let mut parser = Parser::new();
-        let grammar = grammar(language);
-        parser.set_language(&grammar)?;
-        let tree = parser.parse(source, None).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Tree-sitter returned no tree",
-            )
-        })?;
+        let (language, tree) = parse_tree(path, source)?;
         let mut nodes = Vec::new();
         let mut parse_errors = Vec::new();
         discover_tree(tree.root_node(), language, &mut nodes, &mut parse_errors);
@@ -44,6 +53,227 @@ impl ParserBackend for TreeSitterBackend {
             parse_errors,
         })
     }
+}
+
+fn parse_tree(path: &str, source: &[u8]) -> Result<(Language, Tree)> {
+    let language = detect_language(path).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "unsupported source extension",
+        )
+    })?;
+    let mut parser = Parser::new();
+    let grammar = grammar(language);
+    parser.set_language(&grammar)?;
+    let tree = parser.parse(source, None).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Tree-sitter returned no tree",
+        )
+    })?;
+    Ok((language, tree))
+}
+
+pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDependencies> {
+    let (language, tree) = parse_tree(path, source)?;
+    let root = tree.root_node();
+    Ok(match language {
+        Language::Java => extract_java_dependencies(root, source),
+        Language::JavaScript | Language::TypeScript | Language::Tsx => {
+            extract_javascript_dependencies(root, source)
+        }
+    })
+}
+
+fn extract_javascript_dependencies(root: Node<'_>, source: &[u8]) -> ParsedDependencies {
+    let mut references = Vec::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        let found = match node.kind() {
+            "import_statement" | "export_statement" => node
+                .child_by_field_name("source")
+                .map(|literal| (RawDependencyKind::JavaScriptImport, literal)),
+            "call_expression" if is_dependency_call(node, source) => node
+                .child_by_field_name("arguments")
+                .and_then(single_string_argument)
+                .map(|literal| (RawDependencyKind::JavaScriptCall, literal)),
+            _ => None,
+        };
+        if let Some((kind, literal)) = found
+            && let Some(specifier) = decode_javascript_string(literal, source)
+        {
+            references.push(RawDependency {
+                kind,
+                specifier,
+                line: node.start_position().row as u32 + 1,
+            });
+        }
+        for index in (0..node.child_count()).rev() {
+            stack.push(node.child(index).expect("child index is in bounds"));
+        }
+    }
+    ParsedDependencies {
+        references,
+        ..ParsedDependencies::default()
+    }
+}
+
+fn is_dependency_call(node: Node<'_>, source: &[u8]) -> bool {
+    node.child_by_field_name("function")
+        .is_some_and(|function| {
+            function.kind() == "import"
+                || (function.kind() == "identifier" && node_text(function, source) == "require")
+        })
+}
+
+fn single_string_argument(arguments: Node<'_>) -> Option<Node<'_>> {
+    let mut cursor = arguments.walk();
+    let mut named = arguments.named_children(&mut cursor);
+    let argument = named.next()?;
+    (argument.kind() == "string" && named.next().is_none()).then_some(argument)
+}
+
+fn decode_javascript_string(node: Node<'_>, source: &[u8]) -> Option<String> {
+    if node.kind() != "string" {
+        return None;
+    }
+    let text = node_text(node, source);
+    let quote = text.chars().next()?;
+    if !matches!(quote, '\'' | '"') || !text.ends_with(quote) || text.len() < 2 {
+        return None;
+    }
+    decode_javascript_escapes(&text[1..text.len() - 1])
+}
+
+fn decode_javascript_escapes(text: &str) -> Option<String> {
+    let mut decoded = String::new();
+    let mut chars = text.chars();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            decoded.push(character);
+            continue;
+        }
+        let escaped = chars.next()?;
+        match escaped {
+            '\n' | '\r' => {
+                if escaped == '\r' && chars.clone().next() == Some('\n') {
+                    chars.next();
+                }
+            }
+            'b' => decoded.push('\u{0008}'),
+            'f' => decoded.push('\u{000c}'),
+            'n' => decoded.push('\n'),
+            'r' => decoded.push('\r'),
+            't' => decoded.push('\t'),
+            'v' => decoded.push('\u{000b}'),
+            '0' => decoded.push('\0'),
+            'x' => decoded.push(char::from_u32(decode_hex(&mut chars, 2)?)?),
+            'u' if chars.clone().next() == Some('{') => {
+                chars.next();
+                let mut value = String::new();
+                let mut closed = false;
+                for digit in chars.by_ref() {
+                    if digit == '}' {
+                        closed = true;
+                        break;
+                    }
+                    value.push(digit);
+                }
+                if !closed {
+                    return None;
+                }
+                decoded.push(char::from_u32(u32::from_str_radix(&value, 16).ok()?)?);
+            }
+            'u' => {
+                let first = decode_hex(&mut chars, 4)?;
+                let value = if (0xd800..=0xdbff).contains(&first) {
+                    if chars.next()? != '\\' || chars.next()? != 'u' {
+                        return None;
+                    }
+                    let second = decode_hex(&mut chars, 4)?;
+                    if !(0xdc00..=0xdfff).contains(&second) {
+                        return None;
+                    }
+                    0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00)
+                } else {
+                    first
+                };
+                decoded.push(char::from_u32(value)?);
+            }
+            other => decoded.push(other),
+        }
+    }
+    Some(decoded)
+}
+
+fn decode_hex(chars: &mut impl Iterator<Item = char>, digits: usize) -> Option<u32> {
+    let mut value = 0_u32;
+    for _ in 0..digits {
+        value = value.checked_mul(16)? + chars.next()?.to_digit(16)?;
+    }
+    Some(value)
+}
+
+fn extract_java_dependencies(root: Node<'_>, source: &[u8]) -> ParsedDependencies {
+    let mut parsed = ParsedDependencies::default();
+    let mut cursor = root.walk();
+    for node in root.named_children(&mut cursor) {
+        match node.kind() {
+            "package_declaration" => parsed.java_package = java_qualified_name(node, source),
+            "import_declaration" => {
+                if let Some(reference) = java_import(node, source) {
+                    parsed.references.push(reference);
+                }
+            }
+            "class_declaration"
+            | "interface_declaration"
+            | "enum_declaration"
+            | "record_declaration"
+            | "annotation_type_declaration" => {
+                if let Some(name) = node.child_by_field_name("name") {
+                    parsed
+                        .java_top_level_types
+                        .push(node_text(name, source).to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    parsed
+}
+
+fn java_qualified_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .find(|child| matches!(child.kind(), "identifier" | "scoped_identifier"))
+        .map(|name| node_text(name, source).to_owned())
+}
+
+fn java_import(node: Node<'_>, source: &[u8]) -> Option<RawDependency> {
+    let specifier = java_qualified_name(node, source)?;
+    let mut cursor = node.walk();
+    let wildcard = node
+        .named_children(&mut cursor)
+        .any(|child| child.kind() == "asterisk");
+    let mut cursor = node.walk();
+    let is_static = node
+        .children(&mut cursor)
+        .any(|child| child.kind() == "static");
+    Some(RawDependency {
+        kind: if wildcard {
+            RawDependencyKind::JavaWildcard
+        } else if is_static {
+            RawDependencyKind::JavaStatic
+        } else {
+            RawDependencyKind::Java
+        },
+        specifier: if wildcard {
+            format!("{specifier}.*")
+        } else {
+            specifier
+        },
+        line: node.start_position().row as u32 + 1,
+    })
 }
 
 pub fn detect_language(path: &str) -> Option<Language> {
