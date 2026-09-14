@@ -63,6 +63,8 @@ fn tiny_fixtures_define_default_v1() {
     assert_complexity("javascript/throw.js", "fail", 3, 1, 1, 1);
     assert_complexity("java/arrow.java", "twice", 2, 0, 0, 1);
     assert_complexity("java/arrow.java", "op", 1, 0, 0, 1);
+    assert_complexity("javascript/recursion.js", "fact", 2, 2, 1, 1);
+    assert_complexity("java/recursion.java", "fact", 2, 2, 1, 1);
 }
 
 #[test]

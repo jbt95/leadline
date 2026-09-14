@@ -489,12 +489,15 @@ fn analyze_node(
     let kind = function_kind(node);
     let start_byte = node.start_byte() as u64;
     let end_byte = node.end_byte() as u64;
+    let name = function_name(node, source);
+    let recursive = !name.starts_with('<') && calls_self(node, language, &name, source);
     analyze_function(
         FunctionInput {
-            name: function_name(node, source),
+            name,
             id: crate::core::function_id(display_path, kind, start_byte, end_byte),
             kind,
             language,
+            recursive,
             start_line,
             end_line,
             start_byte,
@@ -752,6 +755,65 @@ fn function_name(node: Node<'_>, source: &[u8]) -> String {
     }
     let point = node.start_position();
     format!("<anonymous@{}:{}>", point.row + 1, point.column + 1)
+}
+
+/// True when the function body calls itself by name (direct recursion).
+///
+/// Nested function bodies are skipped, mirroring `walk_function`: a call
+/// inside a nested function is never attributed to the outer one.
+/// `super`-qualified calls are excluded (parent-class dispatch, not a cycle).
+fn calls_self(root: Node<'_>, language: Language, name: &str, source: &[u8]) -> bool {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.id() != root.id() && is_function(node.kind(), language) {
+            continue;
+        }
+        let callee = match language {
+            Language::Java => {
+                if node.kind() == "method_invocation" {
+                    let is_super = node
+                        .child_by_field_name("object")
+                        .is_some_and(|object| node_text(object, source) == "super");
+                    if is_super {
+                        None
+                    } else {
+                        node.child_by_field_name("name")
+                    }
+                } else {
+                    None
+                }
+            }
+            Language::JavaScript | Language::TypeScript | Language::Tsx => {
+                if node.kind() == "call_expression" {
+                    node.child_by_field_name("function").and_then(|function| {
+                        match function.kind() {
+                            "identifier" => Some(function),
+                            "member_expression" => {
+                                let is_super = function
+                                    .child_by_field_name("object")
+                                    .is_some_and(|object| node_text(object, source) == "super");
+                                if is_super {
+                                    None
+                                } else {
+                                    function.child_by_field_name("property")
+                                }
+                            }
+                            _ => None,
+                        }
+                    })
+                } else {
+                    None
+                }
+            }
+        };
+        if callee.is_some_and(|callee| node_text(callee, source) == name) {
+            return true;
+        }
+        for index in (0..node.child_count()).rev() {
+            stack.push(node.child(index).expect("child index is in bounds"));
+        }
+    }
+    false
 }
 
 fn parameter_count(node: Node<'_>) -> u32 {
