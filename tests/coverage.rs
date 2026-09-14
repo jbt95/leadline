@@ -219,3 +219,53 @@ fn targets_sort_by_crap_then_path_function_line() {
         assert!(targets[0].path <= targets[1].path);
     }
 }
+
+#[test]
+fn brda_mixes_branch_and_line_coverage() {
+    let mut file = leadline::analyze_source(
+        "src/payment.ts",
+        b"function pay(ok: boolean) {\n  if (ok) {\n    return 1;\n  }\n  return 0;\n}\n",
+    )
+    .unwrap();
+    let coverage = CoverageMap::from_lcov(
+        "TN:\nSF:src/payment.ts\nDA:1,1\nDA:2,1\nDA:3,0\nDA:5,0\nBRDA:2,0,0,1\nBRDA:2,0,1,-\nend_of_record\n",
+    )
+    .unwrap();
+    coverage.apply(&mut file);
+    // lines 2/4, branches 1/2 -> (2 + 1) / (4 + 2) = 0.5
+    assert_eq!(file.functions[0].metrics.coverage, Some(0.5));
+}
+
+#[test]
+fn brda_shifts_an_otherwise_full_line_ratio() {
+    let mut file = leadline::analyze_source(
+        "src/payment.ts",
+        b"function pay(ok: boolean) {\n  if (ok) {\n    return 1;\n  }\n  return 0;\n}\n",
+    )
+    .unwrap();
+    let coverage = CoverageMap::from_lcov(
+        "TN:\nSF:src/payment.ts\nDA:1,1\nDA:2,1\nDA:3,1\nDA:5,1\nBRDA:2,0,0,3\nBRDA:2,0,1,0\nend_of_record\n",
+    )
+    .unwrap();
+    coverage.apply(&mut file);
+    // lines 4/4, branches 1/2 -> 5/6
+    let value = file.functions[0].metrics.coverage.unwrap();
+    assert!((value - 5.0 / 6.0).abs() < f64::EPSILON, "{value}");
+}
+
+#[test]
+fn branches_without_line_data_still_score() {
+    let mut file =
+        leadline::analyze_source("branch.js", b"function branch(x) { return x; }\n").unwrap();
+    let coverage =
+        CoverageMap::from_lcov("SF:branch.js\nBRDA:1,0,0,5\nBRDA:1,0,1,0\nend_of_record\n")
+            .unwrap();
+    coverage.apply(&mut file);
+    assert_eq!(file.functions[0].metrics.coverage, Some(0.5));
+}
+
+#[test]
+fn malformed_brda_is_rejected() {
+    assert!(CoverageMap::from_lcov("SF:f.js\nBRDA:1,0\nend_of_record\n").is_err());
+    assert!(CoverageMap::from_lcov("SF:f.js\nBRDA:x,0,0,1\nend_of_record\n").is_err());
+}

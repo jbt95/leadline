@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CoverageMap {
     files: BTreeMap<String, BTreeMap<u32, u64>>,
+    branches: BTreeMap<String, BTreeMap<u32, (u64, u64)>>,
 }
 
 impl CoverageMap {
@@ -31,6 +32,25 @@ impl CoverageMap {
                     .ok_or("LCOV DA record has no execution count")?
                     .parse()?;
                 coverage.insert(path.clone(), number, count);
+            } else if let Some(data) = line.strip_prefix("BRDA:") {
+                let Some(path) = current_file.as_ref() else {
+                    continue;
+                };
+                let mut fields = data.split(',');
+                let number: u32 = fields
+                    .next()
+                    .ok_or("LCOV BRDA record has no line number")?
+                    .parse()?;
+                fields
+                    .next()
+                    .ok_or("LCOV BRDA record has no block number")?;
+                fields
+                    .next()
+                    .ok_or("LCOV BRDA record has no branch number")?;
+                let taken = fields.next().ok_or("LCOV BRDA record has no taken count")?;
+                let covered =
+                    u64::from(taken != "-" && taken.parse::<u64>().is_ok_and(|count| count > 0));
+                coverage.insert_branch(path.clone(), number, covered);
             } else if line == "end_of_record" {
                 current_file = None;
             }
@@ -95,6 +115,18 @@ impl CoverageMap {
                     .or_insert(count);
             }
         }
+        for (path, lines) in other.branches {
+            let target = self.branches.entry(path).or_default();
+            for (line, counts) in lines {
+                target
+                    .entry(line)
+                    .and_modify(|existing| {
+                        existing.0 = existing.0.saturating_add(counts.0);
+                        existing.1 = existing.1.saturating_add(counts.1);
+                    })
+                    .or_insert(counts);
+            }
+        }
     }
 
     pub fn apply(&self, file: &mut FileAnalysis) {
@@ -147,12 +179,36 @@ impl CoverageMap {
             .or_insert(count);
     }
 
+    fn insert_branch(&mut self, path: String, line: u32, covered: u64) {
+        self.branches
+            .entry(path)
+            .or_default()
+            .entry(line)
+            .and_modify(|counts| {
+                counts.0 = counts.0.saturating_add(1);
+                counts.1 = counts.1.saturating_add(covered);
+            })
+            .or_insert((1, covered));
+    }
+
     fn lines_for_path(&self, path: &str) -> Option<&BTreeMap<u32, u64>> {
         if let Some(lines) = self.files.get(path) {
             return Some(lines);
         }
         let candidate_suffix = format!("/{path}");
         let mut matches = self.files.iter().filter(|(candidate, _)| {
+            candidate.ends_with(&candidate_suffix) || path.ends_with(&format!("/{candidate}"))
+        });
+        let (_, lines) = matches.next()?;
+        matches.next().is_none().then_some(lines)
+    }
+
+    fn branch_lines_for_path(&self, path: &str) -> Option<&BTreeMap<u32, (u64, u64)>> {
+        if let Some(lines) = self.branches.get(path) {
+            return Some(lines);
+        }
+        let candidate_suffix = format!("/{path}");
+        let mut matches = self.branches.iter().filter(|(candidate, _)| {
             candidate.ends_with(&candidate_suffix) || path.ends_with(&format!("/{candidate}"))
         });
         let (_, lines) = matches.next()?;
