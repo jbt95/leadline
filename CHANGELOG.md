@@ -7,6 +7,7 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 ### Changed (breaking)
 
 - Cyclomatic complexity now follows SonarQube per-language rules: Java no longer counts `catch` and counts each `->` (lambda/switch arrow) in the enclosing function; JavaScript/TypeScript count `throw` and no longer count `??`. Fixture baselines in `tests/fixtures.rs` updated; see `docs/metrics.md`.
+- Cognitive complexity counts direct self-recursion (+1 `recursion` contribution); mutual cycles stay unscored. Indirect recursion, `else`-body depth, and lambda-through nesting remain documented Sonar deltas; see `docs/metrics.md`.
 
 ## 0.5.3 - 2026-09-14
 

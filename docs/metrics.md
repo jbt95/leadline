@@ -56,9 +56,26 @@ remaining deltas are bookkeeping, not scoring:
 
 Add `1 + current nesting` for `if`, loops, `catch`, `switch`, and ternary expressions. An `else if` adds 1 and continues the original chain. A final `else` adds 1. A labeled `break` or `continue` adds 1. Structural constructs increase nesting for structural descendants.
 
-For each logical expression, the first `&&` or `||` adds 1. A change to the other operator adds 1. Repeated adjacent operators add nothing. Parentheses do not start a new sequence. Recursion is not scored in `default` because syntax alone cannot resolve calls safely.
+For each logical expression, the first `&&` or `||` adds 1. A change to the other operator adds 1. Repeated adjacent operators add nothing. Parentheses do not start a new sequence.
+
+A directly self-recursive function adds 1 (a `recursion` contribution on the function's first line). Mutual/indirect cycles are not scored: syntax alone cannot resolve them.
 
 Lambdas, arrows, and nested functions receive independent scores. Their bodies do not increase the enclosing function score.
+
+### Known SonarQube deltas (cognitive)
+
+The recursion rule above matches SonarQube for direct self-recursion. The
+remaining deltas are intentional:
+
+- Indirect (mutual) recursion is not scored: detecting call cycles needs
+  whole-program analysis, while each function is scored from its own syntax
+  alone.
+- `else` and `else if` bodies add no nesting depth: the shared `nesting`
+  value also drives the leadline-only `max_nesting` metric, so raising it
+  would change both scores at once.
+- Nesting never passes through lambdas, arrows, or nested functions: each
+  function is scored independently (independent-functions architecture,
+  `docs/architecture.md:30`).
 
 ## Halstead
 
