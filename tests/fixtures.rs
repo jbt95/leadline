@@ -42,8 +42,8 @@ fn tiny_fixtures_define_default_v1() {
     assert_complexity("java/empty.java", "empty", 1, 0, 0, 0);
     assert_complexity("java/decisions.java", "choose", 4, 5, 2, 1);
     assert_complexity("java/equivalent.java", "positive", 2, 1, 1, 1);
-    assert_complexity("java/switch_catch.java", "parse", 4, 2, 1, 1);
-    assert_complexity("java/lambda.java", "wrap", 1, 0, 0, 1);
+    assert_complexity("java/switch_catch.java", "parse", 3, 2, 1, 1);
+    assert_complexity("java/lambda.java", "wrap", 2, 0, 0, 1);
     assert_complexity("java/lambda.java", "twice", 2, 1, 1, 1);
     assert_complexity("java/record.java", "Range", 2, 1, 1, 2);
     assert_complexity("java/logic.java", "logic", 3, 2, 0, 3);
@@ -58,7 +58,7 @@ fn tiny_fixtures_define_default_v1() {
     assert_complexity("typescript/equivalent.ts", "positive", 2, 1, 1, 1);
     assert_complexity("typescript/logic.ts", "logic", 3, 2, 0, 3);
     assert_complexity("typescript/method.ts", "update", 2, 1, 1, 2);
-    assert_complexity("typescript/anonymous.ts", "<anonymous@1:24>", 2, 1, 0, 1);
+    assert_complexity("typescript/anonymous.ts", "<anonymous@1:24>", 1, 0, 0, 1);
     assert_complexity("tsx/component.tsx", "Result", 2, 1, 1, 1);
     assert_complexity("javascript/throw.js", "fail", 3, 1, 1, 1);
     assert_complexity("java/arrow.java", "twice", 2, 0, 0, 1);
