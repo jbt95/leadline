@@ -1,7 +1,8 @@
 use crate::Result;
 use crate::parser::detect_language;
-use ignore::{DirEntry, WalkBuilder};
+use ignore::{DirEntry, WalkBuilder, WalkState};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 const IGNORED_DIRECTORIES: &[&str] = &[
     ".git",
@@ -52,19 +53,38 @@ fn discover_directory(path: &Path, excludes: &[String]) -> Result<Vec<PathBuf>> 
         .into());
     }
     let filter = SourceFilter::new(path, excludes)?;
-    let mut files = Vec::new();
+    let files = Mutex::new(Vec::new());
+    let error = Mutex::new(None::<ignore::Error>);
     let walker = WalkBuilder::new(path)
         .standard_filters(true)
         .require_git(false)
         .follow_links(false)
         .filter_entry(move |entry| filter.accepts_entry(entry))
-        .build();
-    for entry in walker {
-        let entry = entry?;
-        if entry.file_type().is_some_and(|kind| kind.is_file()) {
-            files.push(entry.into_path());
-        }
+        .build_parallel();
+    walker.run(|| {
+        let files = &files;
+        let error = &error;
+        Box::new(move |entry| {
+            match entry {
+                Ok(entry) if entry.file_type().is_some_and(|kind| kind.is_file()) => {
+                    files.lock().unwrap().push(entry.into_path());
+                }
+                Ok(_) => {}
+                Err(walk_error) => {
+                    let mut first_error = error.lock().unwrap();
+                    if first_error.is_none() {
+                        *first_error = Some(walk_error);
+                    }
+                    return WalkState::Quit;
+                }
+            }
+            WalkState::Continue
+        })
+    });
+    if let Some(error) = error.into_inner().unwrap() {
+        return Err(error.into());
     }
+    let mut files = files.into_inner().unwrap();
     files.sort();
     Ok(files)
 }

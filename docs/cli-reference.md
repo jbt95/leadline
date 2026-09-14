@@ -64,7 +64,7 @@ leadline skill
 | `--min-crap X` | analyze, function, check, changed, diff | Drop entries below CRAP `X`. Only with `--format agent-json`. |
 | `--min-delta D` | changed, diff | Drop entries whose max before/after delta is below `D`. Only with `--format agent-json`. |
 | `--explain` | function, changed, diff | Add contribution details to function agent JSON, or multiset-added causes to changed regression rows. |
-| `--cache-dir DIR` | analyze, check | Reuse per-file analysis from `DIR/file-cache.json` across runs; saved at end. Bypassed when any coverage flag is passed (cached functions are pre-coverage, so CRAP would go stale). Cache I/O failures warn on stderr, never fail. |
+| `--cache-dir DIR` | analyze, check | Reuse per-file analysis from `DIR/file-cache.json` across runs; saved at end only when its contents change. Bypassed when any coverage flag is passed (cached functions are pre-coverage, so CRAP would go stale). Cache I/O failures warn on stderr, never fail. |
 | `--limit N` | hotspots, risk | Keep at most `N` ranked files (`N >= 1`, default 10). On `hotspots` caps terminal, JSON, and agent JSON (`truncated` signals the cap); on `risk` caps terminal and agent JSON only — `--json` is always the full ranking with no `truncated` field. |
 | `--since WINDOW` | hotspots, risk | Rank changes over `30d`, `90d`, or `365d` (default `90d`). |
 | `--lcov FILE` | analyze, function, check, hotspots, risk, test-targets | Merge LCOV line coverage. Repeatable. Required on `test-targets` (one coverage flag at minimum). |

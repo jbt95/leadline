@@ -23,14 +23,14 @@ fixture dir skips gracefully with a pointer to the fetch script.
 - Criterion throughput (`realworld/<name>`) plus a post-group floor check
   printing `measured vs floor` in files/sec.
 
-## Baseline (Apple M2 Pro, 32 GiB, macOS 26.6.2, Rust 1.90.0, 2026-09-13, floating main)
+## Baseline (Apple M2 Pro, 32 GiB, macOS 26.6.2, Rust 1.90.0, 2026-09-14, floating main)
 
 | Fixture | Files | Functions | Mean analyze | Throughput | Floor |
 | --- | --- | --- | --- | --- | --- |
-| tanstack-query (`packages`) | 692 | 20,748 | 141 ms | ~4,900/s | 2,400 |
-| nest (`packages`) | 902 | 9,706 | 83 ms | ~10,800/s | 5,400 |
-| react (`packages`) | 1,838 | 39,299 | 480 ms | ~3,800/s | 1,900 |
-| spring-boot (root) | 8,392 | 65,832 | 907 ms | ~9,200/s | 4,600 |
+| tanstack-query (`packages`) | 692 | 20,748 | 146 ms | ~4,800/s | 2,400 |
+| nest (`packages`) | 902 | 9,706 | 79 ms | ~11,500/s | 5,400 |
+| react (`packages`) | 1,838 | 39,299 | 484 ms | ~3,800/s | 1,900 |
+| spring-boot (root) | 8,392 | 65,832 | 702 ms | ~12,000/s | 4,600 |
 
 Your numbers will differ; floors carry ~50% headroom so they catch real
 regressions (algorithmic blowups), not noise.

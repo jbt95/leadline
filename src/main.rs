@@ -10,6 +10,7 @@ use leadline::history::HistoryWindow;
 use leadline::mutation::MutationInput;
 use leadline::ownership::OwnershipMode;
 use leadline::source_snapshot::SnapshotTarget;
+use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -2333,24 +2334,32 @@ fn analyze_with_cache(
     } else {
         let discovered = leadline::discovery::discover_with_excludes(path, excludes)
             .map_err(|error| CliError::incomplete(error.to_string()))?;
-        for file in &discovered {
-            let bytes =
-                std::fs::read(file).map_err(|error| CliError::incomplete(error.to_string()))?;
-            let key = leadline::normalized_relative_path(file, path);
-            match cache
-                .get(&key, &bytes)
-                .and_then(|hit| cached_file(&key, hit))
-            {
-                Some(hit) => files.push(hit),
-                None => {
-                    let analyzed = leadline::analyze_file(file, path, None)
-                        .map_err(|error| CliError::incomplete(error.to_string()))?;
-                    if analyzed.parse_errors.is_empty() {
-                        cache.put(&key, &bytes, analyzed.functions.clone());
-                    }
-                    files.push(analyzed);
+        let analyzed: Result<Vec<_>, CliError> = discovered
+            .par_iter()
+            .map(|file| {
+                let bytes =
+                    std::fs::read(file).map_err(|error| CliError::incomplete(error.to_string()))?;
+                let key = leadline::normalized_relative_path(file, path);
+                if let Some(hit) = cache
+                    .get(&key, &bytes)
+                    .and_then(|functions| cached_file(&key, functions))
+                {
+                    return Ok((hit, None));
                 }
+                let analyzed = leadline::analyze_source(&key, &bytes)
+                    .map_err(|error| CliError::incomplete(error.to_string()))?;
+                let update = analyzed
+                    .parse_errors
+                    .is_empty()
+                    .then(|| (key, bytes, analyzed.functions.clone()));
+                Ok((analyzed, update))
+            })
+            .collect();
+        for (analyzed, update) in analyzed? {
+            if let Some((key, bytes, functions)) = update {
+                cache.put(&key, &bytes, functions);
             }
+            files.push(analyzed);
         }
         files.sort_by(|left, right| left.path.cmp(&right.path));
     }

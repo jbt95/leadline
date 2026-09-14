@@ -19,14 +19,17 @@ pub struct CachedFile {
 
 pub struct FileCache {
     entries: BTreeMap<String, CachedFile>,
+    dirty: bool,
 }
 
 impl FileCache {
     pub fn open(dir: &Path) -> FileCache {
-        let bytes = std::fs::read(dir.join(CACHE_FILE_NAME)).unwrap_or_default();
-        let stored: BTreeMap<String, StoredFile> =
-            serde_json::from_slice(&bytes).unwrap_or_default();
+        let stored: Option<BTreeMap<String, StoredFile>> = std::fs::read(dir.join(CACHE_FILE_NAME))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let dirty = stored.is_none();
         let entries = stored
+            .unwrap_or_default()
             .into_iter()
             .map(|(path, file)| {
                 let functions = file
@@ -43,7 +46,7 @@ impl FileCache {
                 )
             })
             .collect();
-        FileCache { entries }
+        FileCache { entries, dirty }
     }
 
     pub fn get(&self, path: &str, content: &[u8]) -> Option<Vec<FunctionAnalysis>> {
@@ -56,6 +59,7 @@ impl FileCache {
     }
 
     pub fn put(&mut self, path: &str, content: &[u8], functions: Vec<FunctionAnalysis>) {
+        self.dirty = true;
         self.entries.insert(
             path.to_owned(),
             CachedFile {
@@ -65,7 +69,10 @@ impl FileCache {
         );
     }
 
-    pub fn save(&self, dir: &Path) -> std::io::Result<()> {
+    pub fn save(&mut self, dir: &Path) -> std::io::Result<()> {
+        if !self.dirty {
+            return Ok(());
+        }
         std::fs::create_dir_all(dir)?;
         // BTreeMap iterates in key order, so the JSON is deterministic.
         let stored: BTreeMap<String, StoredFile> = self
@@ -83,7 +90,9 @@ impl FileCache {
             })
             .collect();
         let json = serde_json::to_string(&stored).map_err(std::io::Error::other)?;
-        std::fs::write(dir.join(CACHE_FILE_NAME), json)
+        std::fs::write(dir.join(CACHE_FILE_NAME), json)?;
+        self.dirty = false;
+        Ok(())
     }
 }
 
@@ -412,6 +421,39 @@ mod tests {
         let cache = FileCache::open(&dir);
         assert_eq!(cache.get("foo.ts", b"function foo() {}"), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unchanged_loaded_cache_is_not_rewritten() {
+        let dir = test_dir("unchanged");
+        let content = b"function foo() {}";
+        let mut cache = FileCache::open(&dir);
+        cache.put("foo.ts", content, vec![sample_function("foo")]);
+        cache.save(&dir).unwrap();
+
+        let mut loaded = FileCache::open(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        loaded.save(&dir).unwrap();
+
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn put_marks_loaded_cache_dirty() {
+        let dir = test_dir("dirty");
+        let mut cache = FileCache::open(&dir);
+        cache.put("foo.ts", b"foo", vec![sample_function("foo")]);
+        cache.save(&dir).unwrap();
+
+        let mut loaded = FileCache::open(&dir);
+        loaded.put("bar.ts", b"bar", vec![sample_function("bar")]);
+        loaded.save(&dir).unwrap();
+
+        assert_eq!(
+            FileCache::open(&dir).get("bar.ts", b"bar"),
+            Some(vec![sample_function("bar")])
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
