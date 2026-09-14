@@ -101,7 +101,7 @@ Volume and LOC use a floor of 1. The result is capped at 100. Comment weighting 
 
 ## Coverage and CRAP
 
-Function coverage is the ratio of covered known executable lines to all known executable lines within its inclusive range. When branch records are present the ratio mixes line and branch data Sonar-style: (covered lines + covered branches) / (known lines + known branches); reports without branch records (`BRDA`/`mb`+`cb`) keep exact line-only ratios. Coverage is unavailable when no coverage line overlaps.
+Function coverage is the ratio of covered known executable lines to all known executable lines within its inclusive range. When branch records are present the ratio mixes line and branch data Sonar-style: (covered lines + covered branches) / (known lines + known branches); reports without branch records (`BRDA`/`mb`+`cb`) keep exact line-only ratios. Coverage is unavailable when no known line or branch record overlaps.
 
 CRAP uses cyclomatic complexity `c` and normalized coverage `p` (the mixed line-and-branch ratio):
 

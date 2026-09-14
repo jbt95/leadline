@@ -22,7 +22,7 @@ All report paths use `/`. Coverage paths are normalized the same way (`\` become
 
 ## Coverage stays `null`
 
-`coverage` and `crap` are `null` (not zero) when no coverage line overlaps the function range. Two common causes:
+`coverage` and `crap` are `null` (not zero) when no known line or branch record overlaps the function range. Two common causes:
 
 - The coverage file uses paths that do not suffix-match the report path. Fix the `SF:` / package path or run from the same root.
 - Ambiguous suffix matches: two coverage entries match one file (or vice versa). `leadline` attaches nothing rather than wrong data. Disambiguate by running from the repository root with full relative paths.

@@ -178,7 +178,7 @@ impl CoverageMap {
     }
     /// Execution hits for one exact source line: `Some(count)` when the line
     /// is known, `None` when no coverage record covers the path/line.
-    /// Execution hits for one exact source line ... Branch data feeds `apply()` only; per-line hits stay line-based (test-targets ranks line gaps).
+    /// Branch data feeds `apply()` only; per-line hits stay line-based (test-targets ranks line gaps).
     pub fn hits(&self, path: &str, line: u32) -> Option<u64> {
         self.lines_for_path(path)?.get(&line).copied()
     }

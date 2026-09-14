@@ -861,10 +861,10 @@ fn tool_explain_metric(params: &serde_json::Value) -> Result<serde_json::Value, 
     let name = metric.to_ascii_lowercase();
     let definition = match name.as_str() {
         "cyclomatic" => {
-            "Cyclomatic complexity (default): every function starts at 1. Add 1 for each `if`, loop, `catch`, non-default switch case, ternary expression, `&&`, `||`, and JavaScript/TypeScript `??`. `else`, `finally`, default cases, functions, and lambdas add nothing. Nested functions are scored independently."
+            "Cyclomatic complexity (default): every function starts at 1. Java: add 1 for each `if`, loop, non-default switch case, ternary expression, `&&`, `||`, and each `->` (lambda/switch arrow, counted in the enclosing function); `catch` adds nothing. JavaScript/TypeScript: add 1 for each `if`, loop, `catch`, non-default switch case, ternary expression, `throw`, `&&`, and `||` (`??` adds nothing). `else`, `finally`, and default cases add nothing. Nested functions are scored independently."
         }
         "cognitive" => {
-            "Cognitive complexity (default): add `1 + current nesting` for `if`, loops, `catch`, `switch`, and ternary expressions. An `else if` adds 1 and continues the chain; a final `else` adds 1; a labeled `break`/`continue` adds 1. For logical expressions the first `&&`/`||`/`??` adds 1 and each operator change adds 1. Lambdas, arrows, and nested functions are scored independently and do not raise the enclosing score. Recursion is not scored."
+            "Cognitive complexity (default): add `1 + current nesting` for `if`, loops, `catch`, `switch`, and ternary expressions. An `else if` adds 1 and continues the chain; a final `else` adds 1; a labeled `break`/`continue` adds 1. For logical expressions the first `&&`/`||` adds 1 and each operator change adds 1. Lambdas, arrows, and nested functions are scored independently and do not raise the enclosing score. Direct self-recursion adds 1; mutual cycles are not scored."
         }
         "halstead" => {
             "Halstead metrics (default): leaf operator tokens and control keywords are operators; identifiers, literals, `this`, `super`, `true`, `false`, and `null` are operands. Distinct values are source byte slices within one function. Vocabulary is n1 + n2, length is N1 + N2, volume is length * log2(vocabulary), difficulty is (n1 / 2) * (N2 / n2), effort is difficulty * volume. Zero denominators produce zero, never NaN."
@@ -873,7 +873,7 @@ fn tool_explain_metric(params: &serde_json::Value) -> Result<serde_json::Value, 
             "Maintainability index (default): max(0, (171 - 5.2 ln(volume) - 0.23 cyclomatic - 16.2 ln(LOC)) * 100 / 171). Volume and LOC use a floor of 1, the result is capped at 100, and comment weighting is not used. Higher is better."
         }
         "crap" => {
-            "CRAP (default): c^2 * (1 - p)^3 + c, where c is cyclomatic complexity and p is normalized function coverage (0.0..1.0). CRAP is null when no coverage line overlaps the function range, never a fake 0%. Lower is better."
+            "CRAP (default): c^2 * (1 - p)^3 + c, where c is cyclomatic complexity and p is normalized function coverage (0.0..1.0). CRAP is null when no known line or branch record overlaps the function range, never a fake 0%. Lower is better."
         }
         _ => {
             return Err((
