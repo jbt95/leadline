@@ -56,6 +56,8 @@ pub enum DecisionKind {
     Switch,
     Case,
     Ternary,
+    Throw,
+    Arrow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -97,6 +99,7 @@ pub struct FunctionInput {
     pub name: String,
     pub id: String,
     pub kind: FunctionKind,
+    pub language: Language,
     pub start_line: u32,
     pub end_line: u32,
     pub start_byte: u64,
@@ -249,6 +252,8 @@ fn decision_rule(kind: DecisionKind, else_if: bool) -> &'static str {
         DecisionKind::Switch => "switch",
         DecisionKind::Case => "case",
         DecisionKind::Ternary => "ternary",
+        DecisionKind::Throw => "throw",
+        DecisionKind::Arrow => "->",
     }
 }
 
@@ -274,17 +279,22 @@ pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis
                 if !matches!(kind, DecisionKind::Case) {
                     max_nesting = max_nesting.max(if else_if { nesting } else { nesting + 1 });
                 }
-                let cyclomatic_increment = u32::from(matches!(
-                    kind,
+                let cyclomatic_increment = match kind {
                     DecisionKind::If
-                        | DecisionKind::Loop
-                        | DecisionKind::Catch
-                        | DecisionKind::Case
-                        | DecisionKind::Ternary
-                ));
+                    | DecisionKind::Loop
+                    | DecisionKind::Case
+                    | DecisionKind::Ternary
+                    | DecisionKind::Throw
+                    | DecisionKind::Arrow => 1,
+                    DecisionKind::Catch if input.language != Language::Java => 1,
+                    DecisionKind::Catch | DecisionKind::Switch => 0,
+                };
                 let cognitive_increment = if else_if {
                     1
-                } else if matches!(kind, DecisionKind::Case) {
+                } else if matches!(
+                    kind,
+                    DecisionKind::Case | DecisionKind::Throw | DecisionKind::Arrow
+                ) {
                     0
                 } else {
                     1 + nesting
@@ -433,6 +443,7 @@ mod tests {
             name: "f".to_owned(),
             id: "f".to_owned(),
             kind: FunctionKind::Function,
+            language: Language::TypeScript,
             start_line: 1,
             end_line: 10,
             start_byte: 0,
@@ -501,5 +512,43 @@ mod tests {
         assert!(analysis.contributions.is_empty());
         assert_eq!(analysis.metrics.cyclomatic, 1);
         assert_eq!(analysis.metrics.cognitive, 0);
+    }
+
+    #[test]
+    fn java_catch_costs_no_cyclomatic_but_keeps_cognitive() {
+        let analysis = analyze_function(
+            {
+                let mut base = input(vec![Event::Decision {
+                    kind: DecisionKind::Catch,
+                    nesting: 0,
+                    else_if: false,
+                    line: 5,
+                }]);
+                base.language = Language::Java;
+                base
+            },
+            b"",
+        );
+        assert_eq!(analysis.metrics.cyclomatic, 1);
+        assert_eq!(analysis.metrics.cognitive, 1);
+        assert_eq!(analysis.contributions[0].rule, "catch");
+        assert_eq!(analysis.contributions[0].cyclomatic, 0);
+    }
+
+    #[test]
+    fn throw_and_arrow_cost_cyclomatic_only() {
+        for kind in [DecisionKind::Throw, DecisionKind::Arrow] {
+            let analysis = analyze_function(
+                input(vec![Event::Decision {
+                    kind,
+                    nesting: 0,
+                    else_if: false,
+                    line: 5,
+                }]),
+                b"",
+            );
+            assert_eq!(analysis.metrics.cyclomatic, 2);
+            assert_eq!(analysis.metrics.cognitive, 0);
+        }
     }
 }
