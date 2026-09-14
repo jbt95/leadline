@@ -3,8 +3,13 @@ use crate::core::{
     DecisionKind, Event, FileAnalysis, FunctionInput, FunctionKind, Language, LogicalOperator,
     ParseDiagnostic, Span, analyze_function,
 };
+use std::cell::RefCell;
 use std::path::Path;
 use tree_sitter::{Language as TsLanguage, Node, Parser, Tree};
+
+thread_local! {
+    static THREAD_PARSER: RefCell<Parser> = RefCell::new(Parser::new());
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RawDependencyKind {
@@ -42,7 +47,12 @@ impl ParserBackend for TreeSitterBackend {
         let mut nodes = Vec::new();
         let mut parse_errors = Vec::new();
         discover_tree(tree.root_node(), language, &mut nodes, &mut parse_errors);
-        nodes.sort_by_key(Node::start_byte);
+        debug_assert!(
+            nodes
+                .windows(2)
+                .all(|pair| pair[0].start_byte() <= pair[1].start_byte()),
+            "discover_tree must visit functions in source order"
+        );
         let functions = nodes
             .into_iter()
             .map(|node| analyze_node(path, node, language, source))
@@ -63,14 +73,16 @@ fn parse_tree(path: &str, source: &[u8]) -> Result<(Language, Tree)> {
             "unsupported source extension",
         )
     })?;
-    let mut parser = Parser::new();
-    let grammar = grammar(language);
-    parser.set_language(&grammar)?;
-    let tree = parser.parse(source, None).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Tree-sitter returned no tree",
-        )
+    let tree = THREAD_PARSER.with(|cell| -> Result<Tree> {
+        let mut parser = cell.borrow_mut();
+        parser.set_language(&grammar(language))?;
+        parser.parse(source, None).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Tree-sitter returned no tree",
+            )
+            .into()
+        })
     })?;
     Ok((language, tree))
 }
@@ -111,11 +123,15 @@ pub(crate) fn normalized_tokens(path: &str, source: &[u8]) -> Result<TokenizedSo
                 });
             }
         } else {
-            let mut cursor = node.walk();
-            stack.extend(node.children(&mut cursor));
+            for index in (0..node.child_count()).rev() {
+                stack.push(node.child(index).expect("child index is in bounds"));
+            }
         }
     }
-    tokens.sort_by_key(|token| token.line);
+    debug_assert!(
+        tokens.windows(2).all(|pair| pair[0].line <= pair[1].line),
+        "token walk must visit leaves in line order"
+    );
     Ok(TokenizedSource {
         language,
         tokens,

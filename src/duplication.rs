@@ -157,27 +157,38 @@ pub fn detect_with_limits(
     let mut tokens = Vec::new();
     for (path, tokenized) in files {
         let mut ids = Vec::with_capacity(tokenized.tokens.len());
-        for token in &tokenized.tokens {
-            let next = token_ids.len() as u32;
-            ids.push(*token_ids.entry(token.text.clone()).or_insert(next));
+        let mut texts = Vec::with_capacity(tokenized.tokens.len());
+        let mut lines = Vec::with_capacity(tokenized.tokens.len());
+        for token in tokenized.tokens {
+            let id = match token_ids.get(&token.text) {
+                Some(&id) => id,
+                None => {
+                    let id = token_ids.len() as u32;
+                    token_ids.insert(token.text.clone(), id);
+                    id
+                }
+            };
+            ids.push(id);
+            texts.push(token.text);
+            lines.push(token.line);
         }
         tokens.push(TokenFile {
             path,
             language: tokenized.language,
-            texts: tokenized.tokens.iter().map(|t| t.text.clone()).collect(),
-            lines: tokenized.tokens.iter().map(|t| t.line).collect(),
+            texts,
+            lines,
             ids,
         });
     }
 
     let min_tokens = config.min_tokens;
+    let power = power_base(min_tokens);
     let mut buckets: BTreeMap<u64, Vec<(usize, usize)>> = BTreeMap::new();
     for (file_index, file) in tokens.iter().enumerate() {
         if file.ids.len() < min_tokens {
             continue;
         }
         let mut hash = 0u64;
-        let power = power_base(min_tokens);
         for id in &file.ids[..min_tokens] {
             hash = hash.wrapping_mul(BASE).wrapping_add(u64::from(*id));
         }

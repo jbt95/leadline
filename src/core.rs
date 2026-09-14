@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub const METRIC_PROFILE: &str = "default";
 pub const OUTPUT_SCHEMA_VERSION: u32 = 1;
@@ -257,8 +257,8 @@ pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis
     let mut cognitive = 0;
     let mut max_nesting = 0;
     let mut contributions = Vec::new();
-    let mut distinct_operators = HashSet::new();
-    let mut distinct_operands = HashSet::new();
+    let mut distinct_operators = Vec::new();
+    let mut distinct_operands = Vec::new();
     let mut total_operators = 0;
     let mut total_operands = 0;
     let mut logical_sequences = HashMap::new();
@@ -345,15 +345,19 @@ pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis
             Event::NestingDepth(depth) => max_nesting = max_nesting.max(depth),
             Event::Operator(span) => {
                 total_operators += 1;
-                distinct_operators.insert(&source[span.start..span.end]);
+                distinct_operators.push(&source[span.start..span.end]);
             }
             Event::Operand(span) => {
                 total_operands += 1;
-                distinct_operands.insert(&source[span.start..span.end]);
+                distinct_operands.push(&source[span.start..span.end]);
             }
         }
     }
 
+    distinct_operators.sort_unstable();
+    distinct_operators.dedup();
+    distinct_operands.sort_unstable();
+    distinct_operands.dedup();
     let n1 = distinct_operators.len() as u32;
     let n2 = distinct_operands.len() as u32;
     let vocabulary = n1 + n2;

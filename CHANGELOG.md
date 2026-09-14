@@ -2,6 +2,12 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## Unreleased
+
+### Changed
+
+- Reduced analyzer overhead with no output change: tree-sitter parsers are reused per thread, function/token walks no longer re-sort already-ordered traversals, Halstead distinct-operator/operand counting uses sort+dedup instead of hash sets, and the duplication tokenizer interns each distinct token once while moving (not cloning) token text into per-file tables.
+
 ## 0.5.1 - 2026-09-13
 
 ### Fixed
