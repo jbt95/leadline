@@ -60,6 +60,9 @@ fn tiny_fixtures_define_default_v1() {
     assert_complexity("typescript/method.ts", "update", 2, 1, 1, 2);
     assert_complexity("typescript/anonymous.ts", "<anonymous@1:24>", 2, 1, 0, 1);
     assert_complexity("tsx/component.tsx", "Result", 2, 1, 1, 1);
+    assert_complexity("javascript/throw.js", "fail", 3, 1, 1, 1);
+    assert_complexity("java/arrow.java", "twice", 2, 0, 0, 1);
+    assert_complexity("java/arrow.java", "op", 1, 0, 0, 1);
 }
 
 #[test]

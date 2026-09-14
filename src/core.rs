@@ -64,7 +64,6 @@ pub enum DecisionKind {
 pub enum LogicalOperator {
     And,
     Or,
-    Nullish,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -276,7 +275,13 @@ pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis
                 else_if,
                 line,
             } => {
-                if !matches!(kind, DecisionKind::Case) {
+                // Case/Throw/Arrow add no nesting level: Case is a label, and
+                // Throw/Arrow are non-structural leaves, so none of them raise
+                // the enclosing depth the way If/Loop/Switch/Ternary do.
+                if !matches!(
+                    kind,
+                    DecisionKind::Case | DecisionKind::Throw | DecisionKind::Arrow
+                ) {
                     max_nesting = max_nesting.max(if else_if { nesting } else { nesting + 1 });
                 }
                 let cyclomatic_increment = match kind {
@@ -343,7 +348,6 @@ pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis
                     rule: match operator {
                         LogicalOperator::And => "&&-sequence",
                         LogicalOperator::Or => "||-sequence",
-                        LogicalOperator::Nullish => "??-sequence",
                     }
                     .to_owned(),
                     line,

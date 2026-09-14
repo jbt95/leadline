@@ -494,6 +494,7 @@ fn analyze_node(
             name: function_name(node, source),
             id: crate::core::function_id(display_path, kind, start_byte, end_byte),
             kind,
+            language,
             start_line,
             end_line,
             start_byte,
@@ -531,6 +532,14 @@ fn walk_function(
     let mut stack = vec![(root, 0, false)];
     while let Some((node, nesting, inside_logical)) = stack.pop() {
         if node.id() != root.id() && is_function(node.kind(), language) {
+            if language == Language::Java && node.kind() == "lambda_expression" {
+                events.push(Event::Decision {
+                    kind: DecisionKind::Arrow,
+                    nesting,
+                    else_if: false,
+                    line: node.start_position().row as u32 + 1,
+                });
+            }
             continue;
         }
 
@@ -539,7 +548,7 @@ fn walk_function(
         }
 
         let else_if = is_else_if(node);
-        let decision = decision_kind(node, source);
+        let decision = decision_kind(node, language, source);
         if let Some(kind) = decision {
             events.push(Event::Decision {
                 kind,
@@ -580,6 +589,24 @@ fn walk_function(
         }
 
         if node.child_count() == 0 {
+            // NOTE(Task 3): no childless `->` leaf observed in this grammar
+            // revision (arrow-switch arms surface without one); kept so a
+            // future grammar bump that emits one activates Arrow automatically.
+            // A lambda's own header `->` is excluded: Arrow counts in the
+            // enclosing function (skip branch above), never in itself.
+            let own_lambda_header = node.kind() == "->"
+                && node.parent().is_some_and(|parent| {
+                    parent.id() == root.id() && parent.kind() == "lambda_expression"
+                });
+            if node.kind() == "->" && language == Language::Java && !own_lambda_header {
+                events.push(Event::Decision {
+                    kind: DecisionKind::Arrow,
+                    nesting,
+                    else_if: false,
+                    line: node.start_position().row as u32 + 1,
+                });
+                continue;
+            }
             let span = Span {
                 start: node.start_byte(),
                 end: node.end_byte(),
@@ -621,7 +648,7 @@ fn walk_function(
     }
 }
 
-fn decision_kind(node: Node<'_>, source: &[u8]) -> Option<DecisionKind> {
+fn decision_kind(node: Node<'_>, language: Language, source: &[u8]) -> Option<DecisionKind> {
     match node.kind() {
         "if_statement" => Some(DecisionKind::If),
         "for_statement"
@@ -636,6 +663,7 @@ fn decision_kind(node: Node<'_>, source: &[u8]) -> Option<DecisionKind> {
             Some(DecisionKind::Case)
         }
         "ternary_expression" => Some(DecisionKind::Ternary),
+        "throw_statement" if language != Language::Java => Some(DecisionKind::Throw),
         _ => None,
     }
 }
@@ -667,7 +695,6 @@ fn logical_operator(node: Node<'_>, source: &[u8]) -> Option<LogicalOperator> {
         .find_map(|child| match node_text(child, source) {
             "&&" => Some(LogicalOperator::And),
             "||" => Some(LogicalOperator::Or),
-            "??" => Some(LogicalOperator::Nullish),
             _ => None,
         })
 }
@@ -685,7 +712,6 @@ fn collect_logical(
             let operator = match node_text(current, source) {
                 "&&" => Some(LogicalOperator::And),
                 "||" => Some(LogicalOperator::Or),
-                "??" => Some(LogicalOperator::Nullish),
                 _ => None,
             };
             if let Some(operator) = operator {
