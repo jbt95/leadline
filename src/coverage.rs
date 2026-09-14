@@ -94,6 +94,22 @@ impl CoverageMap {
                         .ok_or("JaCoCo line has no ci attribute")?
                         .parse()?;
                     coverage.insert(path.clone(), number, covered);
+                    let missed: u64 = attribute(&element, "mb")?
+                        .map(|value| value.parse())
+                        .transpose()?
+                        .unwrap_or(0);
+                    let covered_branches: u64 = attribute(&element, "cb")?
+                        .map(|value| value.parse())
+                        .transpose()?
+                        .unwrap_or(0);
+                    if missed + covered_branches > 0 {
+                        coverage.insert_branch_bulk(
+                            path.clone(),
+                            number,
+                            missed + covered_branches,
+                            covered_branches,
+                        );
+                    }
                 }
                 Event::End(element) if element.name().as_ref() == "sourcefile" => {
                     source_file = None;
@@ -131,23 +147,38 @@ impl CoverageMap {
 
     pub fn apply(&self, file: &mut FileAnalysis) {
         let lines = self.lines_for_path(&file.path);
+        let branches = self.branch_lines_for_path(&file.path);
         for function in &mut file.functions {
-            let ratio = lines.and_then(|lines| {
-                let relevant = lines.range(function.start_line..=function.end_line);
-                let mut total = 0_u32;
-                let mut covered = 0_u32;
-                for (_, count) in relevant {
-                    total += 1;
-                    covered += u32::from(*count > 0);
+            let mut total_lines = 0_u32;
+            let mut covered_lines = 0_u32;
+            if let Some(known) = lines {
+                for (_, count) in known.range(function.start_line..=function.end_line) {
+                    total_lines += 1;
+                    covered_lines += u32::from(*count > 0);
                 }
-                (total > 0).then(|| f64::from(covered) / f64::from(total))
-            });
+            }
+            let mut total_branches = 0_u64;
+            let mut covered_branches = 0_u64;
+            if let Some(known) = branches {
+                for (_, counts) in known.range(function.start_line..=function.end_line) {
+                    total_branches += counts.0;
+                    covered_branches += counts.1;
+                }
+            }
+            let ratio = if total_lines == 0 && total_branches == 0 {
+                None
+            } else {
+                Some(
+                    (f64::from(covered_lines) + covered_branches as f64)
+                        / (f64::from(total_lines) + total_branches as f64),
+                )
+            };
             apply_coverage(function, ratio);
         }
     }
     /// Execution hits for one exact source line: `Some(count)` when the line
     /// is known, `None` when no coverage record covers the path/line.
-    /// Line coverage only; branch data is never consulted.
+    /// Execution hits for one exact source line ... Branch data feeds `apply()` only; per-line hits stay line-based (test-targets ranks line gaps).
     pub fn hits(&self, path: &str, line: u32) -> Option<u64> {
         self.lines_for_path(path)?.get(&line).copied()
     }
@@ -189,6 +220,18 @@ impl CoverageMap {
                 counts.1 = counts.1.saturating_add(covered);
             })
             .or_insert((1, covered));
+    }
+
+    fn insert_branch_bulk(&mut self, path: String, line: u32, total: u64, covered: u64) {
+        self.branches
+            .entry(path)
+            .or_default()
+            .entry(line)
+            .and_modify(|counts| {
+                counts.0 = counts.0.saturating_add(total);
+                counts.1 = counts.1.saturating_add(covered);
+            })
+            .or_insert((total, covered));
     }
 
     fn lines_for_path(&self, path: &str) -> Option<&BTreeMap<u32, u64>> {

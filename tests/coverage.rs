@@ -269,3 +269,35 @@ fn malformed_brda_is_rejected() {
     assert!(CoverageMap::from_lcov("SF:f.js\nBRDA:1,0\nend_of_record\n").is_err());
     assert!(CoverageMap::from_lcov("SF:f.js\nBRDA:x,0,0,1\nend_of_record\n").is_err());
 }
+
+#[test]
+fn jacoco_mb_cb_mix_with_line_hits() {
+    let mut file = leadline::analyze_source(
+        "sample/Value.java",
+        b"class Value {\n  int value() {\n    return 1;\n  }\n}\n",
+    )
+    .unwrap();
+    let coverage = CoverageMap::from_jacoco_xml(
+        r#"<report name="test"><package name="sample"><sourcefile name="Value.java"><line nr="2" mi="0" ci="1" mb="0" cb="2"/><line nr="3" mi="1" ci="0" mb="1" cb="1"/></sourcefile></package></report>"#,
+    )
+    .unwrap();
+    coverage.apply(&mut file);
+    // lines 1/2, branches 3/4 -> (1 + 3) / (2 + 4) = 2/3
+    let value = file.functions[0].metrics.coverage.unwrap();
+    assert!((value - 2.0 / 3.0).abs() < f64::EPSILON, "{value}");
+}
+
+#[test]
+fn jacoco_without_branch_attributes_stays_line_only() {
+    let mut file = leadline::analyze_source(
+        "sample/Value.java",
+        b"class Value {\n  int value() {\n    return 1;\n  }\n}\n",
+    )
+    .unwrap();
+    let coverage = CoverageMap::from_jacoco_xml(
+        r#"<report name="test"><package name="sample"><sourcefile name="Value.java"><line nr="2" mi="0" ci="1"/><line nr="3" mi="1" ci="0"/></sourcefile></package></report>"#,
+    )
+    .unwrap();
+    coverage.apply(&mut file);
+    assert_eq!(file.functions[0].metrics.coverage, Some(0.5));
+}
