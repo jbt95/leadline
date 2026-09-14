@@ -75,7 +75,7 @@ remaining deltas are intentional:
   would change both scores at once.
 - Nesting never passes through lambdas, arrows, or nested functions: each
   function is scored independently (independent-functions architecture,
-  `docs/architecture.md:30`).
+  `docs/architecture.md:31`).
 
 ## Halstead
 
