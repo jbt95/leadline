@@ -1162,7 +1162,7 @@ fn tools_list_result() -> serde_json::Value {
                     "type": "object",
                     "properties": {
                         "path": { "type": "string", "default": "." },
-                        "coverage": { "type": "string", "description": "Required coverage file path (.info for LCOV, .xml for JaCoCo). Line coverage only." },
+                        "coverage": { "type": "string", "description": "Required coverage file path (.info for LCOV, .xml for JaCoCo). Line coverage required; branch records (BRDA, mb/cb) improve ratios when present." },
                         "top": { "type": "integer", "minimum": 1, "description": "Keep at most this many targets." },
                     },
                     "required": ["coverage"],

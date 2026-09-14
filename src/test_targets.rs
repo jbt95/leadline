@@ -4,7 +4,7 @@
 //! a contribution line is uncovered only with known zero hits, covered with
 //! any positive hit count, and unknown when no record names the line.
 //! Unknown lines are reported separately and never count as uncovered.
-//! Coverage is line coverage only, never branch coverage.
+//! Test-targets ranks line-coverage gaps only; branch data feeds function coverage/CRAP.
 
 use crate::core::{AnalysisReport, MetricContribution};
 use crate::coverage::CoverageMap;

@@ -247,9 +247,11 @@ use it to rank developers.
 
 LCOV and JaCoCo line coverage are supported, with Windows and Unix report paths normalized.
 
-Coverage is line coverage, never branch coverage: a decision line counts as
-covered with any positive hit count, uncovered with a known zero, and unknown
-when the record names no such line. `leadline test-targets PATH --coverage
+Coverage mixes line and branch data Sonar-style: a function ratio is
+(covered lines + covered branches) / (known lines + known branches) over its
+range; reports without branch records (`BRDA`/`mb`+`cb`) keep exact line-only
+ratios. A decision line counts as covered with any positive hit count,
+uncovered with a known zero, and unknown when the record names no such line. `leadline test-targets PATH --coverage
 FILE` (or the read-only MCP `test_targets` tool, which requires `coverage`)
 ranks functions holding known-zero-hit decision lines by CRAP; unknown lines
 are reported separately, never as uncovered:
