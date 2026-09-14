@@ -59,8 +59,8 @@ pub struct DuplicationConfig {
 impl Default for DuplicationConfig {
     fn default() -> Self {
         Self {
-            min_tokens: 50,
-            min_lines: 5,
+            min_tokens: 100,
+            min_lines: 10,
             excludes: Vec::new(),
         }
     }

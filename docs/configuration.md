@@ -23,8 +23,8 @@ max_nesting = 0
 crap = 0.0
 
 [duplication]
-min_tokens = 50
-min_lines = 5
+min_tokens = 100
+min_lines = 10
 exclude = ["generated/**"]
 
 [[architecture.rules]]
@@ -58,9 +58,11 @@ Allowed positive deltas for `check --base REV --regressions` and `check --baseli
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `min_tokens` | integer >= 1 | `50` | Minimum normalized token sequence for a clone. |
-| `min_lines` | integer >= 1 | `5` | Minimum line span of every occurrence. |
+| `min_tokens` | integer >= 1 | `100` | Minimum normalized token sequence for a clone. |
+| `min_lines` | integer >= 1 | `10` | Minimum line span of every occurrence. |
 | `exclude` | list of glob strings | none | Extra paths skipped in addition to `[analysis].exclude`. |
+
+Defaults match SonarQube's non-Java clone gate (100 tokens, 10 lines); lower them to catch smaller clones. Java keeps token-based detection (Sonar Java counts 10 statements instead — a different unit, intentionally not matched).
 
 ## `[[architecture.rules]]`
 

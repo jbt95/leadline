@@ -66,8 +66,8 @@ severity = "warning"
 #[test]
 fn duplication_defaults_and_parsing() {
     let default = config::DuplicationConfig::default();
-    assert_eq!(default.min_tokens, 50);
-    assert_eq!(default.min_lines, 5);
+    assert_eq!(default.min_tokens, 100);
+    assert_eq!(default.min_lines, 10);
     assert!(default.excludes.is_empty());
 
     let parsed = parse_str(DUPLICATION).unwrap();
