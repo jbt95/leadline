@@ -1,0 +1,20 @@
+[{
+  "Plan": {
+    "Node Type": "Sort",
+    "Total Cost": 300.0,
+    "Plan Rows": 500,
+    "Actual Rows": 500,
+    "Actual Loops": 1,
+    "Plans": [{
+      "Node Type": "Nested Loop",
+      "Total Cost": 250.0,
+      "Plan Rows": 500,
+      "Actual Rows": 500,
+      "Actual Loops": 1,
+      "Plans": [
+        {"Node Type": "Seq Scan", "Relation Name": "users", "Total Cost": 120.0, "Plan Rows": 10, "Actual Rows": 1000, "Actual Loops": 1},
+        {"Node Type": "Seq Scan", "Relation Name": "orders", "Total Cost": 100.0, "Plan Rows": 490, "Actual Rows": 490, "Actual Loops": 1}
+      ]
+    }]
+  }
+}]

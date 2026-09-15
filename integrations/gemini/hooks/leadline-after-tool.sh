@@ -4,12 +4,13 @@
 # logs ONLY to stderr. Non-blocking: always exits 0, never blocks.
 # ponytail: single script serves both events; python3 used when present.
 set -u
-input=$(cat)
+# Drain the hook event (prompts, responses, tool payloads) without logging
+# any of it; only fixed diagnostics may reach stderr.
+cat >/dev/null
 if ! command -v leadline >/dev/null 2>&1; then
   printf '{"decision":"continue"}\n'
   exit 0
 fi
-echo "$input" >&2
 out=$(leadline changed --format agent-json 2>/dev/null) || out=""
 if [ -z "$out" ]; then
   printf '{"decision":"continue"}\n'

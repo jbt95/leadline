@@ -27,10 +27,14 @@ Shortest post-edit commands (all deterministic, JSON with `--format agent-json`)
 - Check what usually changes with a file: `leadline coupling <file> --format agent-json` (historically related files to inspect; co-change is a hint, not a dependency).
 - Check what depends on a file before editing it: `leadline impact <file> --format agent-json` (transitive dependents with distances and blast radius; static import evidence only).
 - Rank change risk before editing: `leadline risk <path> --format agent-json` (files scored by `change-risk` components; informational only, never a developer ranking).
+- Check plan regressions: `leadline sql-plan --current <dir> --baseline <dir> --max-cost-increase-percent 25 --format agent-json` (checked-in `EXPLAIN (FORMAT JSON)` files only; never connects to a database).
+- Prioritize vulnerable dependencies: `leadline vulnerabilities . --osv <file> --format agent-json` (scanner reports only; descriptions never included, no registry access). Gate with `--fail-on-severity high` or `[vulnerabilities] minimum_severity`; reachability is changed direct imports, never transitive.
+- Flag SQL risks: `leadline sql . --format agent-json` (PostgreSQL-oriented text and host call sites; never executes SQL, findings never contain SQL text). Gate with `--fail-on-severity high`; unknown tables need `[sql] migration_roots`.
+- Triage scanner findings: `leadline security . --sarif <file> --format agent-json` (checked-in SARIF only; scanner messages and source text are never included in output). Gate new findings with `--baseline-sarif <file> --fail-on-severity high --new-only`; limit to touched code with `--changed-only`. The same inputs work via `check --sarif` and the `security_findings` MCP tool.
 - Gate deltas: `leadline check . --base <rev> --regressions` (zero-tolerance unless `leadline.toml` sets `[regressions]` allowances).
 - Target tests: `leadline test-targets . --coverage <file>` (line coverage only; unknown lines are reported, never called uncovered).
 - Snapshot without Git history: `leadline baseline . --output <file>`, then `leadline check . --baseline <file> --regressions`.
-- Full project report: `leadline analyze . --format agent-json --top 30 --sort-by cognitive` for the hotspot list, `leadline risk . --format agent-json` for file risk ranking, then `leadline impact <file> --format agent-json` on the riskiest files. `leadline check` is a gate, not a report: it needs at least one threshold flag (e.g. `--cognitive 15`) or `--regressions` with `--base`/`--baseline`, and errors without them.
+- Full project report: `leadline analyze . --format agent-json --top 30 --sort-by cognitive` for the hotspot list, `leadline risk . --format agent-json` for file risk ranking, then `leadline impact <file> --format agent-json` on the riskiest files. `leadline check` is a gate, not a report: it needs at least one threshold flag (e.g. `--cognitive 15`), `--regressions` with `--base`/`--baseline`, or a scanner/SQL input (`--sarif`, `--osv`/`--trivy`, `--sql`), and errors without them.
 
 ## Rules
 

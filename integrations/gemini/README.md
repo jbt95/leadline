@@ -1,11 +1,15 @@
 # leadline for Gemini CLI
 
 Extension packaging the `leadline` MCP server, skill, `/leadline`
-command, and non-blocking hooks. No metrics are reimplemented.
+command, post-edit feedback hooks, and a blocking secret gate. No metrics
+are reimplemented.
 
 ## Requires
 
-`leadline` on `PATH` (`leadline --version` must work).
+`leadline` on `PATH` (`leadline --version` must work). The secret gate also
+needs `gitleaks`, and resolves its shared runner from the checkout
+(`integrations/common/leadline-secret-check.sh`), from the host project
+directory for a copied extension, or from `LEADLINE_SECRET_RUNNER` when set.
 
 ## Install
 
@@ -30,12 +34,17 @@ files are touched, so removal leaves config clean.
 ## Permissions
 
 - MCP server is read-only: no edits, no shell, no network.
-- Hooks are non-blocking: they always exit 0, return
-  `{"decision":"continue"}`, and attach regressions as context only.
+- AfterTool hooks are non-blocking: they always exit 0, return
+  `{"decision":"continue"}`, and attach regressions as context only. They
+  drain the hook event without logging it.
+- The AfterAgent secret gate exits `2` on findings, scanner failures, or a
+  missing tool, with the runner's redacted diagnostics on stderr; Gemini
+  treats exit `2` as a blocked turn (see `docs/agent-integration-guide.md`).
 - Grant `leadline` subprocess execution; nothing else needed.
 
 ## Hook protocol
 
 The hook reads Gemini hook JSON on stdin and writes hook JSON on
 stdout. Diagnostic logs go to stderr only — never stdout, which
-would corrupt the protocol.
+would corrupt the protocol. The manifests resolve both scripts from
+`${extensionPath}`, and hook timeouts are milliseconds (60000).

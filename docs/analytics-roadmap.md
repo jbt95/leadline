@@ -5,13 +5,12 @@ function-level metric analyzer into a local engineering-intelligence engine.
 It records the module boundaries, the normalized analytics model, the static
 report data contract, and the planned milestones. Milestones A (Git history and
 hotspots), B (temporal coupling), C (dependencies and impact), and D
-(change risk) are implemented. The E-I engines are partially implemented on the
-`feature/complete-analytics-roadmap` branch: full-state debt comparison with
-`project`/`debt`/`snapshot` commands, deterministic source snapshots and Git
-analytics, ownership, duplication, policy with `change-risk`, mutation/test
-adapters, the canonical `Project` model, and the trend store. The static web
-report, focused mutation/duplication/policy CLI surfaces, MCP parity, and
-Project coverage wiring remain open.
+(change risk) are implemented, as are the E-I engines: full-state debt
+comparison with `project`/`debt`/`snapshot` commands, deterministic source
+snapshots and Git analytics, ownership, duplication, policy with `change-risk`,
+mutation/test adapters, the canonical `Project` model, and the trend store.
+The static web report and MCP parity for `project`/`debt`/`mutation`/`duplication`/`policy`
+remain open.
 
 The product question is not "how many metrics do we have" but "where is
 engineering risk concentrated, why does it matter, and what does changed code
@@ -200,11 +199,11 @@ invalidate parsed source metrics.
 | B | temporal coupling: co-change counts, directional coupling, Jaccard, `coupling` command | **implemented** |
 | C | dependency extraction, fan-in/out, transitive dependents, blast radius, cycles | **implemented** |
 | D | explainable `change-risk` model (complexity, CRAP, churn, impact, ownership concentration, policy) | **implemented** |
-| E | diff intelligence: new vs existing vs resolved debt, risk regressions | engine + `debt` CLI done; full-state comparison |
+| E | diff intelligence: new vs existing vs resolved debt, risk regressions | engine + `debt` CLI done; MCP pending |
 | F | static web report MVP: overview, distributions, hotspots, explorers, dependencies | not started; canonical `Project` model ready |
 | G | historical snapshots and trends, treemap, coupling and cycle views | store + `snapshot` CLI done; report views pending |
-| H | mutation ingestion (PIT, Stryker) and test-to-code relationships | adapters done; focused CLI + MCP pending |
-| I | duplication detection and architecture policies with drift detection | engines done; focused CLI + MCP pending |
+| H | mutation ingestion (PIT, Stryker) and test-to-code relationships | adapters + `mutation` CLI done; MCP pending |
+| I | duplication detection and architecture policies with drift detection | engines + `duplication` / `policy` CLIs done; MCP pending |
 
 Deferred on purpose: additional OO metrics (NPath, LCOM, RFC, DIT, CBO, WMC)
 are only added when a concrete question needs them.

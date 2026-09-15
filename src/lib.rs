@@ -20,15 +20,20 @@ pub mod mcp;
 pub mod mutation;
 pub mod ownership;
 pub mod parser;
+pub mod pg_plan;
 pub mod policy;
 pub mod project;
 pub mod report;
 pub mod risk;
 pub mod sarif;
+pub mod security;
 pub mod snapshots;
 pub mod source_snapshot;
+pub mod sql;
 pub mod test_relationships;
 pub mod test_targets;
+pub mod update;
+pub mod vulnerabilities;
 
 use crate::core::{
     AnalysisReport, FileAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION,

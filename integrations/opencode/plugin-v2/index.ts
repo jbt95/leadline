@@ -6,9 +6,9 @@
 //
 // Thin wrapper over the shared adapter core: the `leadline` binary owns all
 // metrics and formatting. Tool names stay stable:
-// leadline_changed, leadline_function, leadline_check.
+// leadline_changed, leadline_function, leadline_check, leadline_secret_check.
 import { Plugin } from "@opencode/plugin";
-import { runChanged, runCheck, runFunction } from "../../agent-adapter-ts/core/index.js";
+import { runChanged, runCheck, runFunction, runSecretGate, secretGateMessage } from "../../agent-adapter-ts/core/index.js";
 
 interface ChangedInput {
   base?: string;
@@ -92,6 +92,29 @@ export default Plugin.define({
         execute: async (_input, context) => {
           const directory = await directoryFor(context.sessionID);
           return textResult(() => runCheck({}, directory));
+        },
+      });
+      editor.add({
+        name: "leadline_secret_check",
+        description: "Scan worktree or staged files for secrets via the shared gate (warn mode, never blocks).",
+        input: {
+          type: "object",
+          properties: {
+            mode: { type: "string", description: "scan scope: worktree or staged, default worktree" },
+          },
+          additionalProperties: false,
+        },
+        output: { type: "string" },
+        execute: async (input, context) => {
+          const { mode } = input as { mode?: string };
+          const directory = await directoryFor(context.sessionID);
+          return textResult(async () => {
+            const result = await runSecretGate(
+              directory ?? ".",
+              mode === "staged" ? "staged" : "worktree",
+            );
+            return secretGateMessage(result);
+          });
         },
       });
     });

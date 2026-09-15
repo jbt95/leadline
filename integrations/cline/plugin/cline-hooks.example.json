@@ -3,6 +3,10 @@
     "postEdit": {
       "command": "integrations/cline/plugin/leadline-post-edit.sh",
       "timeoutMs": 30000
+    },
+    "secretGate": {
+      "command": "integrations/cline/plugin/leadline-secret-check.sh",
+      "timeoutMs": 30000
     }
   }
 }

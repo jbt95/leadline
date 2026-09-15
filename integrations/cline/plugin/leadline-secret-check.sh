@@ -1,0 +1,1 @@
+../../claude-code/hooks/leadline-secret-check.sh

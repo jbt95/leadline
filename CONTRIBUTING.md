@@ -8,8 +8,8 @@ Before submission, run:
 
 ```console
 cargo fmt --check
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
+cargo clippy --offline --all-targets --locked -- -D warnings
+cargo test --offline --locked
 ```
 
 Performance changes must include Criterion results from the same machine before and after the change.

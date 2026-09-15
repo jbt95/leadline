@@ -2,7 +2,70 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
-## Unreleased
+## 0.6.0 - 2026-09-15
+
+### Added
+
+- Self-update: `leadline update` reads the latest release `VERSION`, downloads the platform archive, verifies it against the release `SHA256SUMS`, and replaces the running binary (atomic rename on Unix, rename-swap on Windows) with no automatic checks and no new dependencies. See `docs/installation.md`.
+- Secret detection gates: a hardened `integrations/common/leadline-secret-check.sh` runner delegates to installed `gitleaks` (the only detector, always `--redact`) with a versioned pre-commit hook, Claude/Gemini/Cline worktree wrappers, and `runSecretGate` TypeScript adapters with Pi/OpenCode `leadline_secret_check` registration. See `docs/agent-integration-guide.md` and `integrations/COMPATIBILITY.md`.
+- Static PostgreSQL risk analysis: `leadline sql [PATH]` flags seven fixed rules (unbounded updates, leading wildcards, nonsargable predicates, large offsets, unknown tables, dynamic concatenation, queries in loops) with config, gates, `check` parity, and a read-only `sql_risks` MCP tool. See `docs/postgresql-risks.md`.
+- Vulnerable dependency prioritization: `leadline vulnerabilities [PATH] --osv/--trivy FILE` normalizes OSV-Scanner and Trivy advisories, marks changed direct-import evidence (Node builtins such as `node:fs` stay out of the npm mapping), and gates new findings with `reachable_from_changed: false` suppression, plus `check` parity and a read-only `vulnerabilities` MCP tool. See `docs/vulnerabilities.md`.
+- Security finding enrichment: `leadline security [PATH] --sarif FILE` ingests SARIF 2.1.0 results and enriches them with innermost-function, risk, and changed-code context, with `--fail-on-severity`/`--new-only`/`--changed-only` gates, terminal/JSON/agent-JSON/SARIF output, `check --sarif` parity, and a read-only `security_findings` MCP tool. See `docs/security-findings.md`.
+- PostgreSQL plan regression checks: `leadline sql-plan --current DIR --baseline DIR` compares checked-in `EXPLAIN (FORMAT JSON)` artifacts per query ID, with cost/row/estimate gates, index-to-sequential detection, terminal/JSON/agent-JSON/SARIF output, and a read-only `sql_plan` MCP tool. See `docs/postgresql-plans.md`.
+- MCP HTTP transport: `leadline mcp --port [N] [--host ADDR]` serves the same eleven read-only tools over HTTP (`POST /mcp`, `GET /health`) with no new dependencies; stdio stays the default. A bare `--port` means 3000, `0` asks the OS for a free port, and a taken port falls back to a free one with the actual address printed to stderr. See `docs/cli-reference.md`.
+- Smoke suite (`scripts/smoke.sh`, `docs/smoke.md`): end-to-end CLI proof on full clones of babel, elasticsearch, and timescaledb — disjoint from the bench fixtures — covering scale, gates, history, joins, sql, sql-plan, scanners (optional), and MCP transports. Local-only.
+- Git history analytics (`leadline::history`): per-file commit counts, 30/90/365-day change windows, lines added/deleted, code age, days since last change, and contributor counts. One streamed `git log --relative` walk with rename resolution; recency windows are relative to the HEAD commit time for deterministic reports; snapshots without Git degrade to `git_available: false` instead of failing.
+- `leadline hotspots` with `--limit N`, `--since 30d|90d|365d`, `--json`, `--format agent-json`, and LCOV/JaCoCo coverage flags. Ranks files by `max cognitive complexity x changes in window` (`complexity-x-churn`) and exposes every dimension: complexity, CRAP, coverage, churn, contributors, and age.
+- `docs/analytics-roadmap.md`: architecture proposal, normalized Project analytics schema, static report data contract, Git ingestion trade-offs, and milestones B-I. `docs/hotspots.md`: formulas, calculation rules, limitations, and the no-developer-ranking guardrail.
+- Git history benchmark target (`cargo bench --bench history`) measuring the raw log walk, end-to-end history analysis, and hotspot scoring separately; CI compiles it alongside the analyzer bench.
+- Temporal (change) coupling: `leadline coupling TARGET` lists files that repeatedly change in the same commits, with co-change counts, directional coupling, and Jaccard similarity. One shared streamed history walk; commits wider than 50 files do not create pairs; `--min-cochanges`, `--top`, `--json`, and `--format agent-json` supported. See `docs/coupling.md`.
+- Static dependency intelligence (`leadline::graph`, `leadline::impact`): `leadline dependencies [PATH]` reports file-level edges (source imports target), per-file fan-in/fan-out, unresolved imports with reasons, and import cycles; `leadline impact TARGET` reports transitive dependents with shortest distances, direct dependents, blast radius (`blast_radius_percent` on a 0-100 scale), and the cycles containing the target. Resolution covers relative JS/TS imports (including `require()` / `import()` forms, extensionless and emitted-JS mapping) and exact Java type imports (including static-member stripping); bare package imports are ignored and ambiguity stays unresolved with a reason. Both commands support `--json` and `--format agent-json` (with `--top` truncation on `impact`); reports are deterministically ordered and byte-identical across runs. See `docs/dependencies.md`.
+
+### Changed
+
+- Output `schema_version` is now `2`: `check` JSON may carry `security_violations`, `vulnerability_violations`, or `sql_violations` when scanner inputs are passed.
+- `--format agent-json` for function-shaped views (`analyze`, `function`, `check`) now carries per-file `parse_errors`, and `changed`/`diff` carry per-file before/after `parse_errors`; consumers must surface them rather than treat an empty function list as clean.
+- Parallelized directory discovery and cache-enabled directory analysis. Cache misses reuse the bytes already read for lookup, and unchanged caches are no longer rewritten.
+- The OpenCode V1 plugin now delegates to the shared TypeScript adapter (`runChanged`/`runFunction`/`runCheck`/`runSecretGate`), so V1 tools take the same `path` scope, threshold fallback, and output shape as V2/Pi.
+
+### Fixed
+
+- Secret gating saw only supported source files: changed-path enumeration for security attribution now returns every Git path, so a secret in `.env`, YAML, JSON, or a shell script can no longer pass `--changed-only`. Source filtering stays in the parsers. Attribution paths are analysis-root-relative, so a run scoped to `src/` matches `app.py` from a scanner rooted there instead of silently reporting `changed: false`.
+- The explicit `leadline_secret_check` tools on Pi, OpenCode V1, and OpenCode V2 no longer report `unavailable` (missing runner or `gitleaks`) as `clean`; the shared formatter surfaces it.
+- `--changed-only` without a comparison is a usage error (exit `2`) on `security`, `check`, and the `security_findings` MCP tool instead of a silent gate pass.
+- Regression-only `check --format sarif` reports the real before/after deltas and allowed limits, and only for dimensions that regressed: the synthetic zero-threshold projection that fabricated unrelated results is gone.
+- `check --format sarif` merges scanner gate violations only, so results never contradict the exit code; standalone scanner commands still emit their full report.
+- PostgreSQL plan estimate-error gates compare per-execution `Actual Rows` against `Plan Rows`: multiplying by `Actual Loops` fabricated violations on nested-loop nodes.
+- MCP tools read `leadline.toml` like the CLI: `[analysis].exclude` applies to `analyze`, `check`, `repo_summary`, `test_targets`, `sql_risks`, and the host-source walk, `[sql]` supplies `large_offset`/`migration_roots` defaults, and `[vulnerabilities] minimum_severity` gates `vulnerabilities` when the argument is absent.
+- HTTP MCP: bounded request lines and header blocks (431 past the limit), socket read/write deadlines, a fixed worker ceiling that answers 503 when saturated, and `Origin` validation (403 for non-loopback browser origins) per the MCP Streamable HTTP transport spec; a dual-stack listener also treats IPv4-mapped loopback peers as loopback for the `Host` rule.
+- HTTP MCP read deadlines now cover the whole request: every read is re-armed against one five-second deadline, so a client cannot trickle a declared body forever. Requests must also carry exactly one `Host` and one `Content-Length` (400 otherwise), and loopback-bound listeners only accept loopback `Host` authorities.
+- JSON-RPC: empty batches, objects without a `method`, and object/array/boolean ids now answer `-32600` instead of passing silently; batches are capped at 64 requests and every response (batch included) at 32 MiB.
+- MCP response bounds are complete: `top` is capped at 200 entries on `analyze`, `analyze_changed`, and `test_targets`, and `security_findings`, `vulnerabilities`, `sql_risks`, and `sql_plan` cap gate `violations` at `top` alongside findings, setting `truncated` when either was cut.
+- MCP artifact arguments (`sarif`, `osv`, `trivy`, `sql_plan`'s `current`/`baseline`) reject parent-directory escapes and symlinks that resolve outside the working directory, including a symlinked parent of a missing artifact, not just absolute paths.
+- MCP `check` fills missing metrics from `leadline.toml` `[thresholds.function]` and uses configured `[regressions]` limits when `regressions: true`, matching the CLI instead of gating on zero tolerances.
+- Scanner inputs charge the aggregate row budget while parsing: SARIF and OSV/Trivy findings (baselines included) can no longer expand a compact report into millions of retained rows.
+- SQL analysis rejects inputs past 1,000,000 tokens, supports nested block comments, analyzes explicit `.sql` files, recognizes `CREATE [GLOBAL|LOCAL] [TEMP|TEMPORARY|UNLOGGED] TABLE` declarations, and knows every CTE alias in a statement; E-string backslash escapes never end the literal (a leading `\%` still decodes to a wildcard), scalar-function `FROM` (`extract`, `trim`, `substring`) is not a table reference, and comma-separated `FROM` items and `DELETE ... USING` sources are all checked.
+- PostgreSQL plan comparison keys scans by `schema.relation` when EXPLAIN carries `Schema Name`, so same-named tables in different schemas no longer fabricate or hide index-to-sequential regressions.
+- PostgreSQL plan `violations` sort by the documented keys — query ID, kind, relation, then detail — so same-query changes have one deterministic order.
+- `[sql] migration_roots` rejects Windows drive prefixes (`C:/migrations`) that would become absolute paths.
+- Gemini hooks use the current manifest schema with `${extensionPath}`, millisecond timeouts, and a secret-gate wrapper that maps findings, scanner failures, and missing tools to exit `2` (the only blocking status) with redacted diagnostics on stderr, resolving the shared runner from the checkout or the host project directory so a copied extension still gates; the feedback hook no longer copies hook input (prompts, responses, tool payloads) to stderr.
+- Agent adapters surface analyzer parse errors instead of an empty "No functions reported", `changed` reports before/after `parse_errors`, Pi/OpenCode analyzer failures all return tool text, Pi's explicit `leadline_secret_check` fails the call on findings or an unavailable scanner, and the secret-runner path survives percent-encoded installs (`fileURLToPath`).
+- HTTP MCP buffers at most 64 MiB of request bodies across all connections (further declared bodies get 503) instead of letting 64 clients reserve 32 MiB each.
+- HTTP MCP framing is strict: only HTTP/1.1 is accepted (505 otherwise), malformed request or header lines are 400, `Transfer-Encoding` is 501, and empty POST bodies are 400 rather than 202.
+- MCP responses stay inside the 32 MiB cap in the single-response fallback and batch accounting, even when a giant request id would otherwise be echoed.
+- MCP `migration_roots` keep the CLI's normalizer as the single lexical authority (including its interior-`..` rejection) and are no longer checked against the process working directory, so an unrelated CWD symlink cannot reject a safe analysis-root-relative root.
+- MCP `Origin` validation matches its contract again: scheme-less and non-`http(s)` origins are rejected.
+- JSON-RPC notifications are dispatched for their side effects without a response, scalar `params` are rejected with `-32602`, and an oversized batch of notifications stays silent instead of drawing an error response.
+- HTTP MCP `Content-Length` accepts digits only, header names are validated as RFC 7230 tokens, and a connection closed before the terminating blank line is rejected as truncated instead of read as an empty header line.
+- MCP tools reject mis-typed string arguments instead of treating them as absent, so a numeric `minimum_severity` (or `path`, `coverage`, `base`, `target`) is an invalid-params error rather than a silently disabled gate.
+- An over-limit JSON-RPC batch now answers with a one-element error array, keeping the batch shape clients parse; a batch of notifications still draws no response at all.
+- MCP stdio reads one bounded line per request (32 MiB, matching the HTTP body cap) instead of buffering an unbounded line, and direct tool methods reject array `params` instead of silently falling back to default paths.
+- `leadline mcp --host ADDR` without `--port` is a usage error instead of silently starting the stdio server.
+- HTTP MCP writes share one whole-response deadline, so a slow reader cannot hold a worker past it; response connections half-close and drain the rest of the request, so an early rejection (such as 431 on an oversized header) cannot reset the response away from a peer that is still writing.
+- Security enrichment sets `changed` from the finding's path alone: file-level SARIF results without a region now count for `--changed-only` gating, matching `docs/security-findings.md`.
+- Security SARIF reads object-shaped `fingerprints` (SARIF 2.1.0) as well as arrays, so scanner fingerprints classify moved findings against baselines instead of falling back to spans, and artifact URIs are percent-decoded before path validation, so encoded paths keep their attribution, encoded traversals are still rejected, and `file://` authorities are refused.
+- The published crate drops the tracked `docs/superpowers/**` planning document, which the gitignore already excludes from the working tree.
+- JavaScript/TypeScript logical-operator metrics ignore operators inside nested functions and inside string, template, and JSX text; Java hex/octal/binary integers and floating-point literals normalize to `<num>` for duplication tokens like every other number and count as Halstead operands the same way. Host SQL concatenation checks stop at nested functions, so a callback's arithmetic is never the call's query text.
 
 ### Changed (breaking)
 
@@ -90,22 +153,6 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 ### Notes
 
 - Remaining E-I work: static web report generation (Milestone F UI) and MCP tool parity for the new analytics surfaces.
-
-## Unreleased
-
-### Added
-
-- Git history analytics (`leadline::history`): per-file commit counts, 30/90/365-day change windows, lines added/deleted, code age, days since last change, and contributor counts. One streamed `git log --relative` walk with rename resolution; recency windows are relative to the HEAD commit time for deterministic reports; snapshots without Git degrade to `git_available: false` instead of failing.
-- `leadline hotspots` with `--limit N`, `--since 30d|90d|365d`, `--json`, `--format agent-json`, and LCOV/JaCoCo coverage flags. Ranks files by `max cognitive complexity x changes in window` (`complexity-x-churn-v1`) and exposes every dimension: complexity, CRAP, coverage, churn, contributors, and age.
-- `docs/analytics-roadmap.md`: architecture proposal, normalized Project analytics schema, static report data contract, Git ingestion trade-offs, and milestones B-I. `docs/hotspots.md`: formulas, calculation rules, limitations, and the no-developer-ranking guardrail.
-- Git history benchmark target (`cargo bench --bench history`) measuring the raw log walk, end-to-end history analysis, and hotspot scoring separately; CI compiles it alongside the analyzer bench.
-- Temporal (change) coupling: `leadline coupling TARGET` lists files that repeatedly change in the same commits, with co-change counts, directional coupling, and Jaccard similarity. One shared streamed history walk; commits wider than 50 files do not create pairs; `--min-cochanges`, `--top`, `--json`, and `--format agent-json` supported. See `docs/coupling.md`.
-- Static dependency intelligence (`leadline::graph`, `leadline::impact`): `leadline dependencies [PATH]` reports file-level edges (source imports target), per-file fan-in/fan-out, unresolved imports with reasons, and import cycles; `leadline impact TARGET` reports transitive dependents with shortest distances, direct dependents, blast radius (`blast_radius_percent` on a 0-100 scale), and the cycles containing the target. Resolution covers relative JS/TS imports (including `require()` / `import()` forms, extensionless and emitted-JS mapping) and exact Java type imports (including static-member stripping); bare package imports are ignored and ambiguity stays unresolved with a reason. Both commands support `--json` and `--format agent-json` (with `--top` truncation on `impact`); reports are deterministically ordered and byte-identical across runs. See `docs/dependencies.md`.
-- Explainable change risk (`leadline::risk`): `leadline risk [PATH]` ranks files with the `change-risk-v1` model — complexity (25), CRAP (20), churn (20), impact (20), and ownership (15) components on a 0-100 scale, plus an always-`null` weight-0 `policy` placeholder. Unknown components stay `null` and the score renormalizes over the known weights; rows sort by score desc, path asc. `--limit N` (default 10), `--since 30d|90d|365d` (default `90d`, HEAD-relative like hotspots), `--json`, `--format agent-json`, and LCOV/JaCoCo coverage flags supported. Informational only (exit `0`); gating is deferred to Milestone E. See `docs/risk.md`.
-
-### Changed
-
-- Parallelized directory discovery and cache-enabled directory analysis. Cache misses reuse the bytes already read for lookup, and unchanged caches are no longer rewritten.
 
 ## 0.2.0 - 2026-09-13
 

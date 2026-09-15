@@ -151,6 +151,8 @@ chmod 755 "$INSTALL_DIR/leadline"
 
 "$INSTALL_DIR/leadline" --version
 echo "Installed to $INSTALL_DIR/leadline"
+echo "Self-check with: $INSTALL_DIR/leadline doctor"
+echo "Update later with: $INSTALL_DIR/leadline update"
 case ":${PATH:-}:" in
     *":$INSTALL_DIR:"*) ;;
     *)

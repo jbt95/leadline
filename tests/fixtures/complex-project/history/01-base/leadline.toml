@@ -1,0 +1,4 @@
+[thresholds.function]
+cognitive = 3
+cyclomatic = 3
+max_nesting = 2

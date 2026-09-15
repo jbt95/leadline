@@ -29,6 +29,28 @@ every timed loop:
 
 Criterion reports wall-clock distributions and line, byte, file, or commit throughput. Inputs and outputs are black-boxed, fixture creation is outside the timed loop, and temporary repository fixtures are removed even if a benchmark panics.
 
+Run the in-memory duplication benchmark:
+
+```console
+cargo bench --bench duplication
+```
+
+`duplication_detection` measures clone detection over 500 and 2,000
+in-memory files with `min_tokens = 12` and `min_lines = 5`, for a unique
+corpus and for a corpus where every second file repeats one shared body, so
+both the indexing and the exact-comparison paths are covered.
+
+Run the snapshot-pipeline benchmarks:
+
+```console
+cargo bench --bench source_snapshot
+```
+
+`snapshot_analysis` measures `analyze_sources` over 1,000 and 10,000
+in-memory entries, and `snapshot_dependencies` measures
+`analyze_dependencies_from_sources` over the same entries — the two stages
+a source snapshot runs without touching Git or the filesystem.
+
 Run an end-to-end repository measurement with platform tools:
 
 ```console

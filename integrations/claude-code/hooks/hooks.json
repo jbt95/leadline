@@ -19,6 +19,11 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/leadline-check.sh",
             "timeout": 60
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/leadline-secret-check.sh",
+            "timeout": 60
           }
         ]
       }

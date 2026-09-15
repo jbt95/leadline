@@ -1,26 +1,29 @@
-// leadline native plugin for OpenCode. Thin wrapper: shells out to the
-// `leadline` binary and returns compact JSON. Never reimplements metrics.
-// Tool names are stable: leadline_changed, leadline_function, leadline_check.
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const runFile = promisify(execFile);
+// leadline native plugin for OpenCode V1. Thin wrapper over the shared
+// adapter core: binary discovery, argument building, decoding, and
+// formatting all live in ../../agent-adapter-ts/core/index.js, so the V1 and
+// V2 tools behave identically. The `leadline` binary owns every metric.
+// Tool names are stable: leadline_changed, leadline_function, leadline_check,
+// leadline_secret_check.
+import {
+  runChanged,
+  runCheck,
+  runFunction,
+  runSecretGate,
+  secretGateMessage,
+} from "../../agent-adapter-ts/core/index.js";
 
 interface LeadlineArgs {
   base?: string;
   path?: string;
   name?: string;
+  mode?: string;
 }
 
-interface LeadlineFailure {
-  stdout?: string;
-  message: string;
-}
-
-function runLeadline(args: string[], limit = 4000): Promise<string> {
-  return runFile("leadline", args, { timeout: 60_000, maxBuffer: 4 * 1024 * 1024 }).then(
-    ({ stdout }) => stdout.slice(0, limit),
-    (error: LeadlineFailure) => (error.stdout ?? `leadline failed: ${error.message}`).slice(0, limit),
+/// Failures surface as text so the model sees the analyzer error instead of a
+/// rejected tool call.
+function text(run: () => Promise<string>): Promise<string> {
+  return run().catch((error: unknown) =>
+    error instanceof Error ? error.message : String(error),
   );
 }
 
@@ -28,9 +31,12 @@ export const tools = [
   {
     name: "leadline_changed",
     description: "Analyze changed functions vs git base for complexity regressions.",
-    parameters: { base: "git base revision, default HEAD~1" },
-    execute({ base = "HEAD~1" }: LeadlineArgs) {
-      return runLeadline(["changed", "--base", base, "--format", "agent-json"]);
+    parameters: {
+      base: "git base revision, default HEAD~1",
+      path: "limit analysis to this path",
+    },
+    execute({ base, path }: LeadlineArgs) {
+      return text(() => runChanged({ base, path }));
     },
   },
   {
@@ -38,7 +44,7 @@ export const tools = [
     description: "Show metrics for one function.",
     parameters: { path: "source file", name: "function name" },
     execute({ path, name }: LeadlineArgs) {
-      return runLeadline(["function", path ?? "", name ?? "", "--json"]);
+      return text(() => runFunction({ file: path ?? "", name: name ?? "" }));
     },
   },
   {
@@ -46,7 +52,17 @@ export const tools = [
     description: "Quality-gate check over changed code (warn mode, never blocks).",
     parameters: {},
     execute() {
-      return runLeadline(["check", ".", "--format", "agent-json"]);
+      return text(() => runCheck({}));
+    },
+  },
+  {
+    name: "leadline_secret_check",
+    description: "Scan worktree or staged files for secrets via the shared gate (warn mode, never blocks).",
+    parameters: { mode: "worktree|staged, default worktree" },
+    execute({ mode = "worktree" }: LeadlineArgs) {
+      return text(() =>
+        runSecretGate(".", mode === "staged" ? "staged" : "worktree").then(secretGateMessage),
+      );
     },
   },
 ];

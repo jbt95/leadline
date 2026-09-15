@@ -1,13 +1,23 @@
-// Pi/OMP registration shim: three leadline tools and warn-mode post-edit
+// Pi/OMP registration shim: four leadline tools and warn-mode post-edit
 // feedback. Tool behavior, binary discovery, and formatting live in
 // ../core/index.js; the core never imports harness APIs.
 
 import type { ExtensionAPI, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { DEFAULT_BASE, postEditFeedback, runChanged, runCheck, runFunction } from "../core/index.js";
+import { DEFAULT_BASE, postEditFeedback, runChanged, runCheck, runFunction, runSecretGate, secretGateMessage } from "../core/index.js";
 
 function toolResult(text: string) {
   return { content: [{ type: "text" as const, text }], details: {} };
+}
+
+// Analyzer failures surface as tool text, matching the OpenCode wrappers: the
+// model still sees the error, and no harness-level rejection is raised.
+async function textTool(run: () => Promise<string>) {
+  try {
+    return toolResult(await run());
+  } catch (error) {
+    return toolResult(error instanceof Error ? error.message : String(error));
+  }
 }
 
 export function registerLeadlineExtension(pi: ExtensionAPI): void {
@@ -19,7 +29,7 @@ export function registerLeadlineExtension(pi: ExtensionAPI): void {
       base: Type.Optional(Type.String({ description: "Git revision to compare against (default HEAD~1)" })),
       path: Type.Optional(Type.String({ description: "Only analyze this path" })),
     }),
-    execute: async (_toolCallId, params) => toolResult(await runChanged(params)),
+    execute: async (_toolCallId, params) => textTool(() => runChanged(params)),
   });
 
   pi.registerTool({
@@ -30,7 +40,7 @@ export function registerLeadlineExtension(pi: ExtensionAPI): void {
       file: Type.String({ description: "Source file path" }),
       name: Type.String({ description: "Function name" }),
     }),
-    execute: async (_toolCallId, params) => toolResult(await runFunction(params)),
+    execute: async (_toolCallId, params) => textTool(() => runFunction(params)),
   });
 
   pi.registerTool({
@@ -40,17 +50,57 @@ export function registerLeadlineExtension(pi: ExtensionAPI): void {
     parameters: Type.Object({
       path: Type.Optional(Type.String({ description: "Path to check (default .)" })),
     }),
-    execute: async (_toolCallId, params) => toolResult(await runCheck(params)),
+    execute: async (_toolCallId, params) => textTool(() => runCheck(params)),
+  });
+
+  pi.registerTool({
+    name: "leadline_secret_check",
+    label: "Leadline Secret Check",
+    description: "Scan worktree or staged files for secrets via the shared gate. Fails the call on findings or an unavailable scanner.",
+    parameters: Type.Object({
+      root: Type.Optional(Type.String({ description: "Project root to scan (default .)" })),
+      mode: Type.Optional(Type.Union([Type.Literal("worktree"), Type.Literal("staged")], { description: "Scan scope (default worktree)" })),
+    }),
+    execute: async (_toolCallId, params) => {
+      const result = await runSecretGate(
+        typeof params.root === "string" && params.root.length > 0 ? params.root : ".",
+        params.mode === "staged" ? "staged" : "worktree",
+      );
+      // The explicit gate is the blocking surface: findings and an
+      // unavailable scanner reject the call instead of reading as success.
+      if (result.status !== "clean") {
+        throw new Error(secretGateMessage(result));
+      }
+      return toolResult(secretGateMessage(result));
+    },
   });
 
   pi.on("tool_result", async (event: ToolResultEvent, ctx) => {
     if (event.isError || (event.toolName !== "edit" && event.toolName !== "write")) {
       return;
     }
+    const content = [...event.content];
     const note = await postEditFeedback({ base: DEFAULT_BASE }, "warn", ctx.cwd);
-    if (note === null) {
+    if (note !== null) {
+      content.push({ type: "text" as const, text: `leadline:\n${note}` });
+    }
+    // The edit event cannot veto an already-completed write, so secret
+    // findings surface as a warning here; blocking lives in the
+    // `leadline_secret_check` tool and the pre-commit hook instead.
+    try {
+      const gate = await runSecretGate(ctx.cwd, "worktree");
+      if (gate.status === "findings") {
+        content.push({
+          type: "text" as const,
+          text: `leadline secret gate: possible secrets detected\n${gate.detail}`,
+        });
+      }
+    } catch {
+      // Unavailable scanner or misconfiguration stays silent post-edit.
+    }
+    if (content.length === event.content.length) {
       return;
     }
-    return { content: [...event.content, { type: "text" as const, text: `leadline:\n${note}` }] };
+    return { content };
   });
 }

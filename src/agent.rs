@@ -106,6 +106,7 @@ pub fn analyze_agent_json_budgeted(report: &AnalysisReport, budget: &Budget) -> 
             json!({
                 "path": file.path,
                 "functions": functions,
+                "parse_errors": file.parse_errors,
             })
         })
         .collect();
@@ -193,6 +194,7 @@ pub fn changed_agent_json_budgeted(report: &ChangedReport, budget: &Budget) -> V
         },
         "regressions": regressions.into_iter().map(|entry| entry.value).collect::<Vec<_>>(),
         "improvements": improvements.into_iter().map(|entry| entry.value).collect::<Vec<_>>(),
+        "parse_errors": report.parse_errors,
         "truncated": truncated,
     })
 }

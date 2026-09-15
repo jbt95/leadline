@@ -124,11 +124,11 @@ fn analyze_agent_json_has_compact_sorted_shape() {
             "files": [
                 {"path": "a.ts", "functions": [
                     {"name": "solo", "line": 1, "cognitive": 0, "cyclomatic": 1, "crap": 1.0, "coverage": 0.5},
-                ]},
+                ], "parse_errors": []},
                 {"path": "b.ts", "functions": [
                     {"name": "alpha", "line": 5, "cognitive": 1, "cyclomatic": 1, "crap": 1.0, "coverage": 0.5},
                     {"name": "beta", "line": 20, "cognitive": 3, "cyclomatic": 2, "crap": 1.0, "coverage": 0.5},
-                ]},
+                ], "parse_errors": []},
             ],
         })
     );
@@ -179,6 +179,7 @@ fn changed_agent_json_classifies_and_handles_added_removed() {
             "base": "HEAD",
             "summary": {"changed_functions": 5, "regressions": 1, "improvements": 1},
             "truncated": false,
+            "parse_errors": [],
             "regressions": [
                 {"path": "app.ts", "line": 1, "function": "worse",
                  "before": {"cognitive": 1, "cyclomatic": 2, "crap": 2.0},

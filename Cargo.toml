@@ -1,6 +1,6 @@
 [package]
 name = "leadline"
-version = "0.5.3"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"
@@ -10,7 +10,7 @@ documentation = "https://docs.rs/leadline"
 repository = "https://github.com/jbt95/leadline"
 keywords = ["complexity", "static-analysis", "java", "typescript", "crap"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = [".agents/**", ".github/**", "AGENTS.md", "skills-lock.json"]
+exclude = [".agents/**", ".github/**", "AGENTS.md", "docs/superpowers/**", "skills-lock.json"]
 
 [dependencies]
 blake3 = "1.8.7"

@@ -400,3 +400,88 @@ fn added_and_removed_functions_are_not_delta_regressions() {
     };
     assert!(leadline::diff::changed_regressions(&report, &limits).is_empty());
 }
+
+fn init_change_repo() -> PathBuf {
+    let root = temporary_directory();
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "test@example.invalid"]);
+    git(&root, &["config", "user.name", "Test"]);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/a.ts"), "function a() { return 1; }\n").unwrap();
+    std::fs::write(root.join("src/empty.ts"), "export const ready = true;\n").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-qm", "base"]);
+    root
+}
+
+fn worktree_options() -> leadline::diff::ChangeOptions {
+    leadline::diff::ChangeOptions {
+        base: "HEAD".to_owned(),
+        target: leadline::diff::ComparisonTarget::Worktree,
+        detect_renames: false,
+    }
+}
+
+#[test]
+fn changed_source_entries_and_paths_include_functionless_files() {
+    let root = init_change_repo();
+    std::fs::write(root.join("src/a.ts"), "function a() { return 2; }\n").unwrap();
+    std::fs::remove_file(root.join("src/empty.ts")).unwrap();
+    std::fs::write(root.join("src/c.ts"), "export const fresh = 1;\n").unwrap();
+    let options = worktree_options();
+    let entries = leadline::diff::changed_source_entries(&root, &options).unwrap();
+    let paths: Vec<&str> = entries.iter().map(|entry| entry.path.as_str()).collect();
+    // Modified and untracked files land as after-side entries, even the
+    // functionless one; the deleted file has no after-side bytes.
+    assert_eq!(paths, vec!["src/a.ts", "src/c.ts"]);
+    assert!(entries.iter().all(|entry| !entry.bytes.is_empty()));
+    let paths = leadline::diff::changed_paths(&root, &options).unwrap();
+    // Deleted paths stay in the set, and non-source files are included:
+    // changed attribution is Git state, not analyzable content.
+    assert!(paths.contains("src/a.ts"));
+    assert!(paths.contains("src/c.ts"));
+    assert!(paths.contains("src/empty.ts"));
+    std::fs::write(root.join(".env"), "TOKEN=abc\n").unwrap();
+    let paths = leadline::diff::changed_paths(&root, &options).unwrap();
+    assert!(paths.contains(".env"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn changed_paths_are_relative_to_the_analysis_root() {
+    let root = init_change_repo();
+    std::fs::write(root.join("src/a.ts"), "function a() { return 2; }\n").unwrap();
+    let options = worktree_options();
+    // A directory scope strips its own prefix, matching the paths a scanner
+    // rooted at that directory reports.
+    let paths = leadline::diff::changed_paths(&root.join("src"), &options).unwrap();
+    assert!(paths.contains("a.ts"), "{paths:?}");
+    assert!(!paths.contains("src/a.ts"), "{paths:?}");
+    // A single-file scope strips the file's parent.
+    let paths = leadline::diff::changed_paths(&root.join("src/a.ts"), &options).unwrap();
+    assert!(paths.contains("a.ts"), "{paths:?}");
+    assert!(!paths.contains("src/a.ts"), "{paths:?}");
+    // Repo-root scopes keep Git-relative paths unchanged.
+    let paths = leadline::diff::changed_paths(&root, &options).unwrap();
+    assert!(paths.contains("src/a.ts"), "{paths:?}");
+    assert!(!paths.contains("a.ts"), "{paths:?}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn changed_source_entries_follow_renames_to_new_paths() {
+    let root = init_change_repo();
+    git(&root, &["mv", "src/a.ts", "src/renamed.ts"]);
+    let options = leadline::diff::ChangeOptions {
+        base: "HEAD".to_owned(),
+        target: leadline::diff::ComparisonTarget::Index,
+        detect_renames: true,
+    };
+    let entries = leadline::diff::changed_source_entries(&root, &options).unwrap();
+    let paths: Vec<&str> = entries.iter().map(|entry| entry.path.as_str()).collect();
+    assert_eq!(paths, vec!["src/renamed.ts"]);
+    let paths = leadline::diff::changed_paths(&root, &options).unwrap();
+    assert!(paths.contains("src/renamed.ts"));
+    assert!(!paths.contains("src/a.ts"));
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -5,6 +5,7 @@ use crate::core::{
 };
 use crate::git;
 use crate::parser::detect_language;
+use crate::source_snapshot::SourceEntry;
 use crate::strip_verbatim_prefix;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -149,7 +150,71 @@ pub fn analyze_changed(path: &Path, base: &str) -> Result<ChangedReport> {
     )
 }
 
-pub fn analyze_changes(path: &Path, options: &ChangeOptions) -> Result<ChangedReport> {
+/// After-side source entries for every changed supported file.
+///
+/// Unlike [`analyze_changes`], nothing is parsed: files without functions
+/// still yield entries. Entries sort by path for deterministic output.
+pub fn changed_source_entries(
+    path: &Path,
+    options: &ChangeOptions,
+) -> crate::Result<Vec<SourceEntry>> {
+    let changed = changed_paths_in_scope(path, options)?;
+    let mut entries = Vec::new();
+    for relative in changed.paths {
+        if detect_language(&relative).is_none() {
+            continue;
+        }
+        if let Some(bytes) = read_after(&changed.root, &relative, &options.target)? {
+            entries.push(SourceEntry {
+                path: relative,
+                bytes,
+            });
+        }
+    }
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(entries)
+}
+
+/// Every changed path in scope, supported source or not, relative to the
+/// analysis root (the directory, or the file's parent directory).
+///
+/// Attribution inputs (security, secret gating) must see `.env`, YAML, JSON,
+/// and other non-source changes; source filtering belongs to parsers, not to
+/// Git state. Renames resolve to their new path through the same rename map
+/// as [`analyze_changes`], and deleted paths stay in the set. Paths match the
+/// artifact and project paths of the same root, so a subdirectory run
+/// attributes `src/app.py` as `app.py`.
+pub fn changed_paths(path: &Path, options: &ChangeOptions) -> crate::Result<BTreeSet<String>> {
+    let changed = changed_paths_in_scope(path, options)?;
+    if changed.base.is_empty() {
+        return Ok(changed.paths);
+    }
+    let prefix = format!("{}/", changed.base);
+    Ok(changed
+        .paths
+        .into_iter()
+        .map(|candidate| {
+            candidate
+                .strip_prefix(&prefix)
+                .map_or(candidate.clone(), str::to_owned)
+        })
+        .collect())
+}
+
+/// One enumeration result: the Git root, the analysis-root prefix stripped
+/// from attribution paths, and the in-scope changed paths.
+struct ChangedPaths {
+    root: PathBuf,
+    base: String,
+    paths: BTreeSet<String>,
+    renames: BTreeMap<String, String>,
+}
+
+/// Shared path enumeration with [`analyze_changes`]: same revision
+/// validation, scope filtering, rename handling, and untracked pickup for
+/// worktree targets. Paths stay Git-root-relative here; [`changed_paths`]
+/// rebases them.
+fn changed_paths_in_scope(path: &Path, options: &ChangeOptions) -> crate::Result<ChangedPaths> {
     git::validate_revision(&options.base)?;
     if let ComparisonTarget::Revision(target) = &options.target {
         git::validate_revision(target)?;
@@ -160,6 +225,13 @@ pub fn analyze_changes(path: &Path, options: &ChangeOptions) -> Result<ChangedRe
     let toplevel = String::from_utf8(root_output.stdout)?;
     let root = strip_verbatim_prefix(&std::fs::canonicalize(toplevel.trim())?);
     let scope = crate::normalized_relative_path(&requested, &root);
+    let base = if requested.is_dir() {
+        scope.clone()
+    } else {
+        scope
+            .rsplit_once('/')
+            .map_or_else(String::new, |(parent, _)| parent.to_owned())
+    };
     let (mut paths, renames) = diff_paths(&root, options)?;
     if matches!(options.target, ComparisonTarget::Worktree) {
         paths.extend(untracked_paths(&root)?);
@@ -168,7 +240,21 @@ pub fn analyze_changes(path: &Path, options: &ChangeOptions) -> Result<ChangedRe
         let prefix = format!("{scope}/");
         paths.retain(|candidate| candidate == &scope || candidate.starts_with(&prefix));
     }
+    Ok(ChangedPaths {
+        root,
+        base,
+        paths,
+        renames,
+    })
+}
 
+pub fn analyze_changes(path: &Path, options: &ChangeOptions) -> Result<ChangedReport> {
+    let ChangedPaths {
+        root,
+        paths,
+        renames,
+        ..
+    } = changed_paths_in_scope(path, options)?;
     let mut functions = Vec::new();
     let mut parse_errors = Vec::new();
     for relative in paths {

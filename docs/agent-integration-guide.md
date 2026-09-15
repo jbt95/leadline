@@ -2,20 +2,23 @@
 
 ## agent-json shape
 
-`--format agent-json` returns a compact per-function list for machine consumers:
+`--format agent-json` returns a compact per-file function list for machine consumers:
 
 ```json
 {
-  "schema_version": 1,
-  "analyzer_version": "0.1.0",
+  "schema_version": 2,
   "metric_profile": "default",
-  "functions": [
-    { "id": "src/a.ts:function:0:48", "path": "src/a.ts", "name": "pay", "start_line": 1, "cyclomatic": 2, "cognitive": 1, "crap": 2.5, "coverage": 0.5 }
-  ]
+  "summary": {"files": 1, "functions": 1},
+  "files": [
+    {"path": "src/a.ts", "functions": [
+      {"name": "pay", "line": 1, "cyclomatic": 2, "cognitive": 1, "crap": 2.5, "coverage": 0.5}
+    ], "parse_errors": []}
+  ],
+  "truncated": false
 }
 ```
 
-Only the fields an agent gates on are included. Full detail remains in `--json`. `coverage`/`crap` are `null` when unknown.
+Only the fields an agent gates on are included. Full detail remains in `--json`. `coverage`/`crap` are `null` when unknown. `parse_errors` carries the syntax-error spans per file (empty when the file parsed), and `changed --format agent-json` reports `parse_errors` per file with `before`/`after` spans; consumers must surface them instead of reporting an empty function list as clean.
 
 `leadline hotspots --format agent-json` returns the ranked-file shape instead, so an agent can pick what to inspect before editing:
 
@@ -122,7 +125,9 @@ diff that covers them.
 
 ## MCP tools (read-only)
 
-The MCP server exposes seven read-only tools. It never writes files, runs hooks, or executes project code.
+The MCP server exposes eleven read-only tools. It never writes files, runs hooks, or executes project code. The default transport is stdio (`leadline mcp`), matching every `command: leadline, args: [mcp]` harness config; `leadline mcp --port [N] [--host ADDR]` serves the same tools over HTTP (`POST /mcp`, `GET /health`). A bare `--port` means 3000, `0` asks the OS, and a taken port falls back to a free one with the actual address on stderr.
+
+HTTP limits apply to every request: 32 MiB body, 64 KiB of headers, an 8 KiB line cap, a five-second whole-request read deadline, a ten-second whole-response write deadline, and 64 concurrent connections (excess connections get 503). At most 64 MiB of request bodies may be buffered across all connections; further declared bodies get 503 instead of multiplying memory. Only HTTP/1.1 is spoken (505 otherwise), malformed request lines and header lines are 400, `Transfer-Encoding` is 501, empty POST bodies are 400, and a request must carry exactly one `Host` and one `Content-Length`. Loopback-bound listeners only accept loopback authorities; browser `Origin`s must be loopback `http(s)` origins (scheme-less origins are rejected). JSON-RPC batches are capped at 64 requests and every response (batch included) at 32 MiB. `top` accepts at most 200 entries on every tool, and each scanner tool caps both `findings` and `violations` at `top`, setting `truncated` when either was cut. Artifact arguments (`sarif`, `osv`, `trivy`, and `sql_plan`'s `current`/`baseline`) stay root-relative: absolute paths, parent-directory escapes, and symlinks that resolve outside the working directory are rejected; `migration_roots` are analysis-root-relative and get lexical validation only. `check` fills missing metrics from `leadline.toml` `[thresholds.function]` and uses `[regressions]` limits for `regressions: true`, exactly like the CLI.
 
 | Tool | Mirrors | Input | Output |
 | --- | --- | --- | --- |
@@ -133,6 +138,10 @@ The MCP server exposes seven read-only tools. It never writes files, runs hooks,
 | `explain_metric` | `docs/metrics.md` | `metric` | Definition of one metric. |
 | `repo_summary` | — | `path?`, `top?` | Totals plus top functions per metric. |
 | `test_targets` | `leadline test-targets` | `path?`, `coverage` (required), `top?` | Uncovered decision lines by CRAP. |
+| `sql_plan` | `leadline sql-plan` | `current`, `baseline`, cost/row/estimate limits?, `top?` | Plan regressions in checked-in EXPLAIN artifacts. |
+| `security_findings` | `leadline security` | `sarif`, `baseline_sarif?`, `path?`, `base?`/`staged?`/`target?`, `minimum_severity?`, `new_only?`, `changed_only?`, `top?` | Scanner findings with code context. |
+| `vulnerabilities` | `leadline vulnerabilities` | `osv?`/`trivy?`, `baseline_osv?`/`baseline_trivy?`, `path?`, `base?`/`staged?`/`target?`, `minimum_severity?`, `top?` | Vulnerable deps with changed-import evidence. |
+| `sql_risks` | `leadline sql` | `path?`, `large_offset?`, `migration_roots?`, `minimum_severity?`, `top?` | Static PostgreSQL query risks. |
 
 ## Skill principles
 
@@ -146,3 +155,42 @@ The MCP server exposes seven read-only tools. It never writes files, runs hooks,
 ## Hooks
 
 CI / pre-commit hooks default to warn-not-gate: they post violations as warnings and exit `0`. Switch to gating by passing explicit thresholds with a fail-on-violation flag in your pipeline, not by default.
+
+## Secret gating pre-commit hook
+
+`integrations/git-hooks/pre-commit` delegates to the shared
+`integrations/common/leadline-secret-check.sh` runner in staged mode and
+blocks the commit when findings fail the gate. Install it manually (Leadline
+does not install hooks automatically):
+
+```sh
+cp integrations/git-hooks/pre-commit .git/hooks/pre-commit
+```
+
+or symlink it:
+
+```sh
+ln -s ../../integrations/git-hooks/pre-commit .git/hooks/pre-commit
+```
+
+## Secret gating operational limits
+
+Leadline itself never detects secrets: the shared runner delegates detection
+to an installed `gitleaks` binary (a prerequisite; a missing binary fails
+visibly, never silently). The pre-commit hook scans staged content and blocks
+the commit on findings; agent adapters scan the worktree at the earliest
+supported lifecycle event. Warn/block capability by host: the Git hook,
+Claude/Gemini checkpoints, and Pi's explicit `leadline_secret_check` tool
+block; Cline's `secretGate` runs the same shared wrapper (whether Cline
+honors exit `2` as blocking is unverified); Pi's and Cline's post-edit hooks
+only warn; and the OpenCode `leadline_secret_check` tool runs on demand in
+warn mode. Claude and Gemini only block on exit `2`, so the shared wrapper
+maps findings, scanner failures, and missing tools to exit `2` with the
+runner's redacted diagnostics on stderr. The wrapper resolves
+`integrations/common/leadline-secret-check.sh` from the checkout, from the
+host project directory (`GEMINI_PROJECT_DIR`/`CLAUDE_PROJECT_DIR`), or from
+`LEADLINE_SECRET_RUNNER`. Every invocation passes
+`--redact`, prints only fixed diagnostics (never SARIF, diffs, or secret
+values), and cleans its private temporary files via trap. To bypass,
+intentionally disable the installed hook or integration — there is no
+pass-through flag.

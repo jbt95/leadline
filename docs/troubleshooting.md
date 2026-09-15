@@ -9,9 +9,9 @@ A syntax error never aborts analysis. The file keeps its valid functions and lis
 | Code | Cause | Fix |
 | --- | --- | --- |
 | `1` | Gate failed: violations or parse errors. | Fix the flagged functions or raise the threshold. |
-| `2` | Usage/config: unknown flag, `check` without a threshold, bad `leadline.toml`, missing `--base`/`--path` value. | Read stderr; it names the option. |
-| `3` | Analysis incomplete: missing path, unsupported extension, `git` failure, base revision rejected. | Check the path; `changed` needs a git repo and a safe revision. |
-| `4` | Coverage input unreadable or unparsable. | Validate the LCOV / JaCoCo path and format. |
+| `2` | Usage/config: unknown flag, `check` without a threshold, `--regressions`, or a scanner/SQL input, bad `leadline.toml`, missing `--base`/`--path` value. | Read stderr; it names the option. |
+| `3` | Analysis incomplete: missing path, unsupported extension, `git` failure, base revision rejected; `leadline update` failed (download, verification, extraction, or replacement). | Check the path; `changed` needs a git repo and a safe revision. For updates, read the error; download, verification, and extraction failures leave the installed binary untouched. |
+| `4` | Report input unreadable or unparsable: coverage (LCOV / JaCoCo), SARIF, OSV / Trivy, SQL, or EXPLAIN plan files. | Validate the input path and format; `sql-plan` also exits `4` on malformed plans. |
 | `5` | Internal error. | Report with version and input. |
 
 Base revisions starting with `-`, containing `:`, or containing control characters are rejected (exit `3`).

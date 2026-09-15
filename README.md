@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/jbt95/leadline/main/install.sh | sh
 leadline analyze .
 ```
 
-Pin a version with `LEADLINE_VERSION=v0.1.0`, or choose a destination with
+Pin a version with `LEADLINE_VERSION=v0.6.0`, or choose a destination with
 `LEADLINE_INSTALL_DIR`. Windows users can download the `.zip` from
 [GitHub Releases](https://github.com/jbt95/leadline/releases). Or build from
 source with Rust 1.90 or later:
@@ -47,7 +47,7 @@ source with Rust 1.90 or later:
 cargo install --path .
 ```
 
-Release artifacts support macOS ARM64, macOS x86-64, Linux ARM64, Linux x86-64, and Windows x86-64.
+Release artifacts support macOS ARM64, macOS x86-64, Linux ARM64, Linux x86-64, and Windows x86-64. Update an installed binary in place with `leadline update`. See [docs/installation.md](docs/installation.md) for per-OS install blocks, verification, updating, and uninstall.
 
 ## AI-agent integration
 
@@ -65,11 +65,14 @@ leadline changed --base origin/main --format agent-json
    "before": {"cognitive": 12}, "after": {"cognitive": 24}}]}
 ```
 
-**MCP server** (read-only, stdio, seven tools: `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `test_targets`):
+**MCP server** (read-only: stdio by default, HTTP with `--port`; eleven tools: `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `test_targets`, `sql_plan`, `security_findings`, `vulnerabilities`, `sql_risks`):
 
 ```console
 leadline mcp
+leadline mcp --port 3000
 ```
+
+A bare `--port` means 3000 (`0` asks the OS for a free port); when the requested port is taken the server picks a free one and prints the actual address to stderr. `GET /health` reports status in HTTP mode.
 
 **Skill and hooks.** Point your harness at the canonical skill in `integrations/common/leadline-skill/SKILL.md`, and run post-edit hooks in warn mode — surface regressions, never fail silently:
 
@@ -87,9 +90,9 @@ leadline check . --cognitive 15 --cyclomatic 10 --max-nesting 4
 
 ```mermaid
 flowchart TD
-    CLI["CLI: analyze, function, changed, diff, check, baseline, hotspots, coupling, dependencies, impact, risk, test-targets, doctor, version, skill"]
+    CLI["CLI: analyze, function, changed, check, hotspots, risk, project, security, vulnerabilities, sql, sql-plan, ..."]
     CLI --> Human["Humans and CI: terminal, JSON, SARIF, exit codes 0-5"]
-    CLI --> MCP["MCP server, read-only stdio: analyze, analyze_changed, analyze_function, check, explain_metric, test_targets"]
+    CLI --> MCP["MCP server, read-only stdio or HTTP: eleven tools"]
     MCP --> Harnesses["Claude Code, Pi, OMP, OpenCode, Codex, Gemini, Cursor, Cline, Windsurf, Copilot"]
     CLI --> Skill["Skill and hooks: SKILL.md, changed agent-json, check warn mode"]
     Skill --> Harnesses
@@ -123,6 +126,36 @@ leadline check . --crap 30 --lcov coverage/lcov.info --json
 
 Thresholds fail only when a value exceeds its limit. A CRAP threshold also fails when coverage is unavailable. Thresholds can live in `leadline.toml` instead of flags; CLI flags win.
 
+Gate PostgreSQL plan regressions from checked-in `EXPLAIN` artifacts (never a database connection):
+
+```console
+leadline sql-plan --current plans/current --baseline plans/baseline --max-cost-increase-percent 25
+```
+Gate vulnerable dependencies with changed-import evidence (never queries registries):
+
+```console
+leadline vulnerabilities . --osv osv.json --fail-on-severity high
+```
+
+Flag static PostgreSQL risks without executing SQL:
+
+```console
+leadline sql . --fail-on-severity high
+```
+
+Gate scanner findings with code context (never runs scanners):
+
+```console
+leadline security . --sarif findings.sarif --fail-on-severity high --new-only
+```
+
+Stop staged or agent-produced secrets before they leave the loop (delegates to
+installed `gitleaks`, always redacted):
+
+```console
+cp integrations/git-hooks/pre-commit .git/hooks/pre-commit
+```
+
 For refactors without useful Git history, pin a snapshot and gate against it:
 
 ```console
@@ -146,7 +179,7 @@ Exit codes are stable:
 - `1`: a quality gate found metric violations or source parse errors.
 - `2`: usage or config error (unknown flag, missing threshold, bad path, invalid `leadline.toml`).
 - `3`: incomplete analysis (no supported files, Git failure, unreadable input).
-- `4`: coverage input error (unreadable or unparsable LCOV / JaCoCo file).
+- `4`: report input error (unreadable or unparsable LCOV / JaCoCo, SARIF, OSV / Trivy, SQL, or `EXPLAIN` JSON).
 - `5`: internal error.
 
 See the [CLI reference](docs/cli-reference.md), [JSON schema](docs/json-schema.md),
@@ -163,7 +196,7 @@ Functions are paired by name and same-name source order. By default a rename sur
 
 `--format agent-json` emits the compact agent-oriented shape on `analyze`, `function`,
 `check`, `changed`, `diff`, `hotspots`, `risk`, `coupling`, `dependencies`, `impact`,
-and `test-targets`. `leadline doctor` self-checks the parsers, coverage
+`test-targets`, `project`, `debt`, `sql-plan`, `security`, `vulnerabilities`, and `sql`. `leadline doctor` self-checks the parsers, coverage
 readers, `git`, and `leadline.toml`. `leadline version` prints the release version.
 
 ## Git history and hotspots
@@ -238,7 +271,7 @@ leadline risk --format agent-json
 ```
 
 `risk` scores each file with the explainable `change-risk` model
-(complexity, CRAP, churn, impact, ownership — weights and formulas in
+(complexity, CRAP, churn, impact, ownership, policy — weights and formulas in
 [docs/risk.md](docs/risk.md)). Unknown components stay `null` and the score
 renormalizes over what is known. It is informational only (exit `0`); never
 use it to rank developers.
@@ -268,10 +301,14 @@ Source maps and Cobertura are not supported.
 
 ```console
 cargo fmt --check
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
+cargo clippy --offline --all-targets --locked -- -D warnings
+cargo test --offline --locked
 cargo bench --bench analyzer
 cargo bench --bench history
 ```
 
-See [architecture](docs/architecture.md), [`default` metric rules](docs/metrics.md), and [benchmark instructions](docs/benchmark.md).
+See [architecture](docs/architecture.md), [`default` metric rules](docs/metrics.md),
+[benchmark instructions](docs/benchmark.md), [changed-code semantics](docs/changed-code.md),
+[benchmark methodology](docs/performance-methodology.md), [troubleshooting](docs/troubleshooting.md),
+the [security model](docs/security-model.md), [versioning](docs/versioning.md),
+[releasing](docs/releasing.md), and the [smoke suite](docs/smoke.md).

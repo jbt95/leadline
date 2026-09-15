@@ -1,0 +1,1 @@
+{"SchemaVersion": 2, "Results": [{"Target": "package-lock.json", "Type": "npm", "Vulnerabilities": [{"VulnerabilityID": "CVE-2021-9999", "PkgName": "minimist", "InstalledVersion": "1.2.5", "FixedVersion": "1.2.6", "Severity": "MEDIUM", "Title": "t", "Description": "DESCRIPTION_SENTINEL pollution"}]}]}

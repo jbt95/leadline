@@ -35,6 +35,11 @@ the enclosing function; it is scored as its own function. The only
 addition to the enclosing score is +1 per Java `->`
 (`src/parser.rs:537,603`, `src/core.rs:287-296`).
 
+Only real operator tokens count: `&&`/`||` written inside string,
+template, or JSX text are text, not branches, and operators inside a
+nested function add to that function's score, never the enclosing
+function's.
+
 ### Known SonarQube deltas
 
 The table above matches SonarQube per-language keyword rules. The
@@ -110,3 +115,22 @@ c² * (1 - p)³ + c
 ```
 
 CRAP is unavailable when coverage is unavailable.
+
+## Duplication
+
+Duplication detection uses normalized token sequences (profile `tokens`).
+Comments are dropped; identifiers collapse to `<id>`, string and template
+text to `<str>`, and every numeric literal syntax — decimal, hex, octal,
+binary, and floating-point, including Java `0x1F`, `017`, `0b1010`, and
+`0x1.8p3` — to `<num>`. Keywords and punctuation stay exact, and each
+language is a separate partition, so a Java clone never matches a
+TypeScript clone.
+
+A clone group is a repeated sequence of at least `min_tokens` normalized
+tokens (default `100`) whose every occurrence spans at least `min_lines`
+lines (default `10`); both are configurable under `[duplication]`.
+Detection is bounded (10,000,000 tokens and 10,000,000 exact comparisons
+per run); a report that hits a ceiling is marked `complete: false` rather
+than dropping candidates silently. `duplication --base REV` compares
+occurrence groups between two states, with group statuses
+`new`/`existing`/`resolved` and added/removed occurrence counts.

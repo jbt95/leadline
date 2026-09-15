@@ -30,7 +30,7 @@ pub fn discover(path: &Path) -> Result<Vec<PathBuf>> {
             .into())
         };
     }
-    discover_directory(path, &[])
+    discover_directory(path, &[], supported_source)
 }
 
 /// Like [`discover`], but additionally skips paths matching any of `excludes`.
@@ -41,10 +41,35 @@ pub fn discover_with_excludes(path: &Path, excludes: &[String]) -> Result<Vec<Pa
     if path.is_file() {
         return discover(path);
     }
-    discover_directory(path, excludes)
+    discover_directory(path, excludes, supported_source)
 }
 
-fn discover_directory(path: &Path, excludes: &[String]) -> Result<Vec<PathBuf>> {
+/// Like [`discover_with_excludes`], but keeps files matching `accepts`
+/// instead of supported sources. Explicit files must satisfy the predicate.
+pub fn discover_matching(
+    path: &Path,
+    excludes: &[String],
+    accepts: fn(&Path) -> bool,
+) -> Result<Vec<PathBuf>> {
+    if path.is_file() {
+        return if accepts(path) {
+            Ok(vec![path.to_owned()])
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "unsupported source extension",
+            )
+            .into())
+        };
+    }
+    discover_directory(path, excludes, accepts)
+}
+
+fn discover_directory(
+    path: &Path,
+    excludes: &[String],
+    accepts: fn(&Path) -> bool,
+) -> Result<Vec<PathBuf>> {
     if !path.is_dir() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -59,7 +84,7 @@ fn discover_directory(path: &Path, excludes: &[String]) -> Result<Vec<PathBuf>> 
         .standard_filters(true)
         .require_git(false)
         .follow_links(false)
-        .filter_entry(move |entry| filter.accepts_entry(entry))
+        .filter_entry(move |entry| filter.accepts_entry_with(entry, accepts))
         .build_parallel();
     walker.run(|| {
         let files = &files;
@@ -122,14 +147,19 @@ impl SourceFilter {
         if has_ignored_component(relative) {
             return false;
         }
-        let supported = match relative.to_str() {
-            Some(text) => !text.is_empty() && detect_language(text).is_some(),
-            None => supported_extension(relative),
-        };
-        supported && !self.is_excluded(relative, false)
+        supported_source(relative) && !self.is_excluded(relative, false)
     }
 
-    fn accepts_entry(&self, entry: &DirEntry) -> bool {
+    /// File predicate with a caller-supplied support check; ignored
+    /// components and configured excludes still apply.
+    pub fn accepts_matching(&self, relative: &Path, accepts: fn(&Path) -> bool) -> bool {
+        if has_ignored_component(relative) {
+            return false;
+        }
+        accepts(relative) && !self.is_excluded(relative, false)
+    }
+
+    fn accepts_entry_with(&self, entry: &DirEntry, accepts: fn(&Path) -> bool) -> bool {
         let relative = entry
             .path()
             .strip_prefix(&self.root)
@@ -137,7 +167,7 @@ impl SourceFilter {
         if entry.file_type().is_some_and(|kind| kind.is_dir()) {
             relative.as_os_str().is_empty() || self.accepts_directory(relative)
         } else {
-            self.accepts_file(relative)
+            self.accepts_matching(relative, accepts)
         }
     }
 
@@ -159,6 +189,15 @@ fn supported_extension(relative: &Path) -> bool {
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| detect_language(&format!("file.{extension}")).is_some())
+}
+
+/// Supported-source predicate shared by [`SourceFilter::accepts_file`] and
+/// [`discover_with_excludes`].
+fn supported_source(relative: &Path) -> bool {
+    match relative.to_str() {
+        Some(text) => !text.is_empty() && detect_language(text).is_some(),
+        None => supported_extension(relative),
+    }
 }
 
 fn has_ignored_component(relative: &Path) -> bool {

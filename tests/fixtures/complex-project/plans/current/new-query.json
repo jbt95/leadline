@@ -1,0 +1,1 @@
+[{"Plan":{"Node Type":"Index Scan","Relation Name":"orders","Index Name":"orders_pkey","Total Cost":4.0,"Plan Rows":1}}]

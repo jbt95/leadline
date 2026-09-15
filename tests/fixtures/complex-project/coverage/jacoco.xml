@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<report name="complex-project">
+  <package name="src">
+    <sourcefile name="Order.java">
+      <line nr="6" mi="0" ci="1"/>
+      <line nr="7" mi="0" ci="1"/>
+      <line nr="8" mi="1" ci="0"/>
+      <line nr="12" mi="0" ci="1"/>
+      <line nr="13" mi="0" ci="1"/>
+      <line nr="14" mi="1" ci="0"/>
+    </sourcefile>
+  </package>
+</report>

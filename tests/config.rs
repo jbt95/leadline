@@ -1,9 +1,8 @@
-// Tests for the unwired config module: include the file directly so this
-// suite passes before the later wiring task adds `pub mod config` to lib.rs.
-#[path = "../src/config.rs"]
-mod config;
+use leadline::config::{
+    Config, DuplicationConfig, RegressionLimits, Severity, SqlConfig, Thresholds,
+    VulnerabilityConfig, load_from, parse_str,
+};
 
-use config::{Config, load_from, parse_str};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -29,15 +28,17 @@ fn parses_full_config() {
             analysis_excludes: vec!["generated/**".to_string(), "vendor/**".to_string(),],
             cyclomatic_profile: "default".to_string(),
             cognitive_profile: "default".to_string(),
-            thresholds: config::Thresholds {
+            thresholds: Thresholds {
                 cognitive: Some(15),
                 cyclomatic: Some(10),
                 crap: Some(30.0),
                 max_nesting: Some(4),
             },
-            regressions: config::RegressionLimits::default(),
-            duplication: config::DuplicationConfig::default(),
+            regressions: RegressionLimits::default(),
+            duplication: DuplicationConfig::default(),
             architecture_rules: Vec::new(),
+            vulnerabilities: VulnerabilityConfig::default(),
+            sql: SqlConfig::default(),
         }
     );
     config.validate().unwrap();
@@ -65,7 +66,7 @@ severity = "warning"
 
 #[test]
 fn duplication_defaults_and_parsing() {
-    let default = config::DuplicationConfig::default();
+    let default = DuplicationConfig::default();
     assert_eq!(default.min_tokens, 100);
     assert_eq!(default.min_lines, 10);
     assert!(default.excludes.is_empty());
@@ -98,11 +99,8 @@ fn architecture_rules_preserve_order_and_severity() {
     assert_eq!(first.name, "domain-no-ui");
     assert_eq!(first.source, "src/domain/**");
     assert_eq!(first.deny, ["src/ui/**", "src/widgets/**"]);
-    assert_eq!(first.severity, config::Severity::Error);
-    assert_eq!(
-        parsed.architecture_rules[1].severity,
-        config::Severity::Warning
-    );
+    assert_eq!(first.severity, Severity::Error);
+    assert_eq!(parsed.architecture_rules[1].severity, Severity::Warning);
 }
 
 #[test]
@@ -160,7 +158,7 @@ fn parses_minimal_and_empty_configs() {
     assert!(empty.analysis_excludes.is_empty());
     assert_eq!(empty.cyclomatic_profile, "default");
     assert_eq!(empty.cognitive_profile, "default");
-    assert_eq!(empty.thresholds, config::Thresholds::default());
+    assert_eq!(empty.thresholds, Thresholds::default());
 
     let partial = parse_str("[thresholds.function]\ncognitive = 15\n").unwrap();
     assert_eq!(partial.thresholds.cognitive, Some(15));
@@ -273,4 +271,93 @@ fn temporary_directory() -> PathBuf {
     let path = std::env::temp_dir().join(format!("leadline-config-{}-{id}", std::process::id()));
     std::fs::create_dir_all(&path).unwrap();
     path
+}
+
+#[test]
+fn vulnerabilities_minimum_severity_parses() {
+    let config = parse_str(
+        "[vulnerabilities]
+minimum_severity = 'high'
+",
+    )
+    .unwrap();
+    assert_eq!(
+        config.vulnerabilities,
+        VulnerabilityConfig {
+            minimum_severity: Some(leadline::security::SecuritySeverity::High),
+        }
+    );
+    assert!(
+        parse_str(
+            "[vulnerabilities]
+minimum_severity = 'unknown'
+"
+        )
+        .is_err()
+    );
+    assert!(
+        parse_str(
+            "[vulnerabilities]
+minimum_severity = 'bogus'
+"
+        )
+        .is_err()
+    );
+    assert!(
+        parse_str(
+            "[vulnerabilities]
+minimum_severity = 3
+"
+        )
+        .is_err()
+    );
+    assert!(
+        parse_str(
+            "[vulnerabilities]
+bananas = true
+"
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn sql_section_parses_threshold_and_roots() {
+    let config =
+        parse_str("[sql]\nlarge_offset = 500\nmigration_roots = [\"migrations\", \"db/schema\"]\n")
+            .unwrap();
+    assert_eq!(config.sql.large_offset, 500);
+    assert_eq!(config.sql.migration_roots, vec!["migrations", "db/schema"]);
+    // Dotted and empty components normalize away so roots match display paths.
+    let dotted =
+        parse_str("[sql]\nmigration_roots = [\"./migrations\", \"db/./schema\", \"a//b\"]\n")
+            .unwrap();
+    assert_eq!(
+        dotted.sql.migration_roots,
+        vec!["migrations", "db/schema", "a/b"]
+    );
+    let defaults = parse_str("").unwrap();
+    assert_eq!(defaults.sql.large_offset, 1000);
+    assert!(defaults.sql.migration_roots.is_empty());
+}
+
+#[test]
+fn sql_section_rejects_bad_values() {
+    for body in [
+        "[sql]\nlarge_offset = 0\n",
+        "[sql]\nlarge_offset = -5\n",
+        "[sql]\nlarge_offset = 'far'\n",
+        "[sql]\nbananas = true\n",
+        "[sql]\nmigration_roots = ['/abs']\n",
+        "[sql]\nmigration_roots = ['../escape']\n",
+        "[sql]\nmigration_roots = ['.']\n",
+        "[sql]\nmigration_roots = ['./']\n",
+        // Drive prefixes become absolute on Windows.
+        "[sql]\nmigration_roots = ['C:/migrations']\n",
+        "[sql]\nmigration_roots = ['a', 'a/']\n",
+        "[sql]\nmigration_roots = 'migrations'\n",
+        "[sql]\nmigration_roots = [\"a\u{1}b\"]\n",
+    ] {
+        assert!(parse_str(body).is_err(), "{body:?}");
+    }
 }

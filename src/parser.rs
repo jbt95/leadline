@@ -164,6 +164,11 @@ fn normalize_leaf(node: Node<'_>, source: &[u8]) -> Option<String> {
         || kind == "integer"
         || kind == "float"
         || kind == "decimal_integer_literal"
+        || kind == "hex_integer_literal"
+        || kind == "octal_integer_literal"
+        || kind == "binary_integer_literal"
+        || kind == "decimal_floating_point_literal"
+        || kind == "hex_floating_point_literal"
     {
         return Some("<num>".to_owned());
     }
@@ -587,7 +592,7 @@ fn walk_function(
 
         let this_logical = logical_operator(node, source).is_some();
         if this_logical && !inside_logical {
-            collect_logical(node, source, next_sequence, nesting, events);
+            collect_logical(node, language, next_sequence, nesting, events);
             next_sequence += 1;
         }
 
@@ -704,15 +709,22 @@ fn logical_operator(node: Node<'_>, source: &[u8]) -> Option<LogicalOperator> {
 
 fn collect_logical(
     node: Node<'_>,
-    source: &[u8],
+    language: Language,
     sequence: u32,
     nesting: u32,
     events: &mut Vec<Event>,
 ) {
     let mut stack = vec![node];
     while let Some(current) = stack.pop() {
+        // Nested function bodies have their own walk: an operator inside an
+        // arrow/lambda must not join the enclosing function's sequence.
+        if current.id() != node.id() && is_function(current.kind(), language) {
+            continue;
+        }
         if current.child_count() == 0 {
-            let operator = match node_text(current, source) {
+            // Anonymous operator tokens carry their text as the node kind;
+            // matching text would also match `||` inside strings or JSX text.
+            let operator = match current.kind() {
                 "&&" => Some(LogicalOperator::And),
                 "||" => Some(LogicalOperator::Or),
                 _ => None,
@@ -947,7 +959,10 @@ fn is_operand(kind: &str) -> bool {
                 | "number"
                 | "decimal_integer_literal"
                 | "hex_integer_literal"
+                | "octal_integer_literal"
+                | "binary_integer_literal"
                 | "decimal_floating_point_literal"
+                | "hex_floating_point_literal"
                 | "string"
                 | "string_fragment"
                 | "character_literal"
@@ -964,8 +979,315 @@ fn node_text<'a>(node: Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.byte_range()]).unwrap_or("")
 }
 
+/// One recognized query/execute call site in host-language source.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HostSqlSite {
+    pub(crate) line: u32,
+    pub(crate) end_line: u32,
+    pub(crate) dynamic: bool,
+    pub(crate) inside_loop: bool,
+}
+
+/// Terminal query/execute call names across supported host languages.
+const HOST_SQL_CALLS: &[&str] = &["query", "execute", "executeQuery", "executeUpdate", "raw"];
+
+fn is_loop_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "for_statement"
+            | "for_in_statement"
+            | "enhanced_for_statement"
+            | "while_statement"
+            | "do_statement"
+    )
+}
+
+/// Recognized SQL call sites: terminal `query`/`execute`-family calls with
+/// dynamic-argument and loop-ancestor flags.
+///
+/// Walks call and method-invocation nodes once. Dynamic means the first
+/// argument subtree holds a `+` concatenation or a template substitution;
+/// literal text is never inspected or retained. Loop state walks ancestors
+/// until a function boundary and stops there, so calls in a nested function
+/// are never attributed to an outer loop. Dedplicated by span and flags.
+pub(crate) fn host_sql_sites(path: &str, source: &[u8]) -> crate::Result<Vec<HostSqlSite>> {
+    let (language, tree) = parse_tree(path, source)?;
+    let root = tree.root_node();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut sites = Vec::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if let Some((name, first_argument)) = sql_call_target(node, language, source)
+            && HOST_SQL_CALLS.contains(&name.as_str())
+        {
+            let dynamic =
+                first_argument.is_some_and(|argument| subtree_is_dynamic(argument, language));
+            let inside_loop = has_loop_ancestor(node, language);
+            if seen.insert((node.start_byte(), node.end_byte(), dynamic, inside_loop)) {
+                sites.push(HostSqlSite {
+                    line: node.start_position().row as u32 + 1,
+                    end_line: node.end_position().row as u32 + 1,
+                    dynamic,
+                    inside_loop,
+                });
+            }
+        }
+        for index in (0..node.child_count()).rev() {
+            stack.push(node.child(index).expect("child index is in bounds"));
+        }
+    }
+    sites.sort_by(|left, right| (left.line, left.end_line).cmp(&(right.line, right.end_line)));
+    Ok(sites)
+}
+
+/// Callee name plus first-argument node for query-shaped calls, else `None`.
+///
+/// JavaScript/TypeScript match bare and member calls; Java matches method
+/// invocations. Similarly named declarations and bare references are not
+/// calls and never match.
+fn sql_call_target<'a>(
+    node: Node<'a>,
+    language: Language,
+    source: &'a [u8],
+) -> Option<(String, Option<Node<'a>>)> {
+    let (name_node, arguments) = match language {
+        Language::Java => {
+            if node.kind() != "method_invocation" {
+                return None;
+            }
+            (
+                node.child_by_field_name("name")?,
+                node.child_by_field_name("arguments")?,
+            )
+        }
+        Language::JavaScript | Language::TypeScript | Language::Tsx => {
+            if node.kind() != "call_expression" {
+                return None;
+            }
+            let function = node.child_by_field_name("function")?;
+            let name_node = match function.kind() {
+                "identifier" => function,
+                "member_expression" => function.child_by_field_name("property")?,
+                _ => return None,
+            };
+            (name_node, node.child_by_field_name("arguments")?)
+        }
+    };
+    let name = node_text(name_node, source).to_owned();
+    Some((name, first_named_child(arguments)))
+}
+
+fn first_named_child<'a>(node: Node<'a>) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).next()
+}
+
+/// True when the subtree holds a `+` concatenation or template substitution.
+///
+/// Nested functions are not entered: a callback argument computing `a + b`
+/// is not the call's SQL text.
+fn subtree_is_dynamic(root: Node<'_>, language: Language) -> bool {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.id() != root.id() && is_function(node.kind(), language) {
+            continue;
+        }
+        if node.kind() == "template_substitution" {
+            return true;
+        }
+        if node.kind() == "binary_expression" && has_plus_operator(node) {
+            return true;
+        }
+        for index in (0..node.child_count()).rev() {
+            stack.push(node.child(index).expect("child index is in bounds"));
+        }
+    }
+    false
+}
+
+fn has_plus_operator(node: Node<'_>) -> bool {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| !child.is_named() && child.kind() == "+")
+}
+
+/// True when a loop ancestor precedes any function boundary.
+fn has_loop_ancestor(node: Node<'_>, language: Language) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        let kind = parent.kind();
+        if is_loop_kind(kind) {
+            return true;
+        }
+        if is_function(kind, language) {
+            return false;
+        }
+        current = parent.parent();
+    }
+    false
+}
+
 fn fingerprint(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_sql_sites_detect_dynamic_query_in_loop() {
+        let source = b"import { Pool } from 'pg';
+const pool = new Pool();
+export async function allUsers(names: string[]) {
+  for (const name of names) {
+    await pool.query(`SELECT * FROM users WHERE name = ${name}`);
+  }
+}
+";
+        let sites = host_sql_sites("src/db.ts", source).unwrap();
+        assert_eq!(sites.len(), 1);
+        assert!(sites[0].dynamic);
+        assert!(sites[0].inside_loop);
+        assert_eq!(sites[0].line, 5);
+    }
+
+    #[test]
+    fn host_sql_sites_ignore_parameterized_calls_and_declarations() {
+        let source = b"function query(sql: string) { return sql; }
+const q = query;
+export async function get(pool: any, id: number) {
+  return pool.query('SELECT * FROM users WHERE id = $1', [id]);
+}
+";
+        let sites = host_sql_sites("src/db.ts", source).unwrap();
+        assert_eq!(sites.len(), 1);
+        assert!(!sites[0].dynamic);
+        assert!(!sites[0].inside_loop);
+        assert_eq!(sites[0].line, 4);
+    }
+
+    #[test]
+    fn host_sql_sites_detect_java_concatenation() {
+        let source = r#"import java.sql.*;
+class Dao {
+  void find(Statement st, String name) throws Exception {
+    st.executeQuery("SELECT * FROM users WHERE name = '" + name + "'");
+  }
+}
+"#
+        .as_bytes();
+        let sites = host_sql_sites("src/Dao.java", source).unwrap();
+        assert_eq!(sites.len(), 1);
+        assert!(sites[0].dynamic);
+        assert!(!sites[0].inside_loop);
+        assert_eq!(sites[0].line, 4);
+    }
+
+    #[test]
+    fn logical_operators_stay_out_of_nested_functions_and_literals() {
+        let nested = crate::analyze_source(
+            "outer.js",
+            b"function outer(a, b, c) { return a && (() => b || c)(); }\n",
+        )
+        .unwrap();
+        let outer = nested
+            .functions
+            .iter()
+            .find(|function| function.name == "outer")
+            .unwrap();
+        assert_eq!(outer.metrics.cyclomatic, 2, "nested arrow operator");
+        assert_eq!(outer.metrics.cognitive, 1, "nested arrow operator");
+
+        let jsx =
+            crate::analyze_source("f.tsx", b"function f(c) { return c && <span>||</span>; }\n")
+                .unwrap();
+        let f = jsx
+            .functions
+            .iter()
+            .find(|function| function.name == "f")
+            .unwrap();
+        assert_eq!(f.metrics.cyclomatic, 2, "JSX text must not count");
+        assert_eq!(f.metrics.cognitive, 1, "JSX text must not count");
+
+        let template =
+            crate::analyze_source("g.js", b"function g(a) { return a && `||`; }\n").unwrap();
+        let g = template
+            .functions
+            .iter()
+            .find(|function| function.name == "g")
+            .unwrap();
+        assert_eq!(g.metrics.cyclomatic, 2, "template text must not count");
+        assert_eq!(g.metrics.cognitive, 1, "template text must not count");
+    }
+
+    #[test]
+    fn java_numeric_literals_normalize_for_duplication() {
+        let tokens = normalized_tokens(
+            "A.java",
+            b"class A { double d = 3.14; long h = 0xFF; int o = 017; int b = 0b1010; }\n",
+        )
+        .unwrap();
+        let texts: Vec<&str> = tokens
+            .tokens
+            .iter()
+            .map(|token| token.text.as_str())
+            .collect();
+        assert!(texts.contains(&"<num>"), "{texts:?}");
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.contains("3.14") || text.contains("0xFF")),
+            "{texts:?}"
+        );
+    }
+
+    #[test]
+    fn host_sql_dynamic_stops_at_nested_functions() {
+        let source = b"await db.query(rows.map((r) => r.a + r.b));
+await db.query('SELECT 1 ' + tail);
+";
+        let sites = host_sql_sites("src/db.js", source).unwrap();
+        assert_eq!(sites.len(), 2, "{sites:?}");
+        // A callback's arithmetic is not the call's SQL text.
+        assert!(!sites[0].dynamic, "{sites:?}");
+        assert!(sites[1].dynamic, "{sites:?}");
+    }
+
+    #[test]
+    fn java_octal_binary_and_hex_float_literals_count_as_operands() {
+        let operands = |name: &str, source: &[u8]| {
+            crate::analyze_source(name, source).unwrap().functions[0]
+                .metrics
+                .halstead_n2
+        };
+        // The same two-literal shape in every syntax must count identically;
+        // decimal literals are the established baseline.
+        let decimal = operands(
+            "Dec.java",
+            b"class Dec { void run() { int a = 31; int b = 47; } }\n",
+        );
+        for (name, source) in [
+            (
+                "Hex.java",
+                &b"class Hex { void run() { int a = 0x1F; int b = 0x2F; } }\n"[..],
+            ),
+            (
+                "Octal.java",
+                b"class Octal { void run() { int a = 017; int b = 027; } }\n",
+            ),
+            (
+                "Binary.java",
+                b"class Binary { void run() { int a = 0b1010; int b = 0b1101; } }\n",
+            ),
+            (
+                "HexFloat.java",
+                b"class HexFloat { void run() { double a = 0x1.8p3; double b = 0x2.8p3; } }\n",
+            ),
+        ] {
+            assert_eq!(operands(name, source), decimal, "{name}");
+        }
+    }
 }

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
+mod common;
+use common::temporary_directory;
 
 #[test]
 fn check_uses_distinct_quality_exit_code() {
@@ -85,6 +86,35 @@ fn skill_prints_canonical_skill_text() {
             .unwrap();
         assert!(output.status.success());
         assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+    }
+}
+
+#[test]
+fn embedded_skill_matches_security_contract() {
+    let skill = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("integrations/common/leadline-skill/SKILL.md"),
+    )
+    .unwrap();
+    for term in [
+        "security",
+        "security_findings",
+        "--baseline-sarif",
+        "--new-only",
+    ] {
+        assert!(skill.contains(term), "skill is missing {term}");
+    }
+    assert!(
+        skill.contains("never include") || skill.contains("omitted"),
+        "skill must state that scanner messages/source are omitted"
+    );
+    let help = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    let help = String::from_utf8_lossy(&help.stdout);
+    for term in ["security", "--baseline-sarif", "--new-only"] {
+        assert!(help.contains(term), "help is missing {term}");
     }
 }
 
@@ -178,14 +208,6 @@ fn check(file: &Path, options: &[&str]) -> std::process::Output {
         .args(options)
         .output()
         .unwrap()
-}
-
-fn temporary_directory() -> PathBuf {
-    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("leadline-cli-{}-{id}", std::process::id()));
-    std::fs::create_dir_all(&path).unwrap();
-    path
 }
 
 #[test]
@@ -369,7 +391,7 @@ fn agent_json_shape_on_analyze() {
         .unwrap();
     assert!(output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], 2);
     assert_eq!(value["metric_profile"], "default");
     assert_eq!(value["summary"]["functions"], 1);
     assert_eq!(value["files"][0]["functions"][0]["name"], "alpha");
@@ -844,8 +866,67 @@ fn check_regressions_reports_delta_only_findings_in_sarif() {
         .unwrap();
     let sarif: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let results = sarif["runs"][0]["results"].as_array().unwrap();
+    // Exactly one dimension regressed, so no other rule may appear from a
+    // synthetic zero threshold, and the message carries the real delta.
     assert_eq!(results.len(), 1);
     assert_eq!(results[0]["ruleId"], "leadline/cognitive");
+    let message = results[0]["message"]["text"].as_str().unwrap();
+    assert!(message.contains("exceeds allowed delta 0"), "{message}");
+    assert!(message.contains("cognitive complexity 0 -> 1"), "{message}");
+    assert!(!message.contains("exceeds limit 0"), "{message}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn check_sarif_projects_scanner_gate_violations_only() {
+    let root = temporary_directory();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("src/risky.ts"),
+        "function risky(x: number): number { if (x > 0) return 1; return 0; }\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("risky.sql"), "UPDATE users SET active = false;\n").unwrap();
+    // SQL findings are informational without a gate, so SARIF stays empty
+    // even though the report has findings.
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "check",
+            root.to_str().unwrap(),
+            "--cyclomatic",
+            "100",
+            "--sql",
+            "--format",
+            "sarif",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let sarif: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        sarif["runs"][0]["results"].as_array().unwrap().is_empty(),
+        "{sarif}"
+    );
+    // With the gate on, only the failing family reaches SARIF.
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "check",
+            root.to_str().unwrap(),
+            "--cyclomatic",
+            "100",
+            "--sql",
+            "--sql-fail-on-severity",
+            "low",
+            "--format",
+            "sarif",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let sarif: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = sarif["runs"][0]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["ruleId"], "sql/update-delete-without-where");
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1208,4 +1289,1025 @@ fn help_lists_new_workflows() {
     ] {
         assert!(text.contains(expected), "help is missing {expected}");
     }
+}
+
+fn sql_plan_dirs(cost_current: f64, cost_baseline: f64) -> (PathBuf, PathBuf, PathBuf) {
+    let root = temporary_directory();
+    let current = root.join("current");
+    let baseline = root.join("baseline");
+    std::fs::create_dir_all(&current).unwrap();
+    std::fs::create_dir_all(&baseline).unwrap();
+    std::fs::write(
+        current.join("q.json"),
+        format!(r#"[{{"Plan": {{"Node Type": "Seq Scan", "Relation Name": "t", "Total Cost": {cost_current}, "Plan Rows": 10}}}}]"#),
+    )
+    .unwrap();
+    std::fs::write(
+        baseline.join("q.json"),
+        format!(r#"[{{"Plan": {{"Node Type": "Seq Scan", "Relation Name": "t", "Total Cost": {cost_baseline}, "Plan Rows": 10}}}}]"#),
+    )
+    .unwrap();
+    (root, current, baseline)
+}
+
+#[test]
+fn sql_plan_cost_gate_retains_json() {
+    let (root, current, baseline) = sql_plan_dirs(150.0, 100.0);
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "sql-plan",
+            "--current",
+            &current.display().to_string(),
+            "--baseline",
+            &baseline.display().to_string(),
+            "--max-cost-increase-percent",
+            "25",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["violations"][0]["kind"], "cost_increase");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sql_plan_requires_directories_and_finite_limits() {
+    let missing = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["sql-plan", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(2));
+    let (root, current, baseline) = sql_plan_dirs(10.0, 10.0);
+    for flag in [
+        "--max-cost-increase-percent",
+        "--max-plan-rows-ratio",
+        "--max-estimate-error-ratio",
+    ] {
+        for bad in ["-1", "nan", "inf"] {
+            let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+                .args([
+                    "sql-plan",
+                    "--current",
+                    &current.display().to_string(),
+                    "--baseline",
+                    &baseline.display().to_string(),
+                    flag,
+                    bad,
+                ])
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(2), "{flag} {bad}");
+        }
+    }
+    let unknown = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "sql-plan",
+            "--current",
+            &current.display().to_string(),
+            "--baseline",
+            &baseline.display().to_string(),
+            "--bogus",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(unknown.status.code(), Some(2));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sql_plan_agent_json_sarif_and_determinism() {
+    let (root, current, baseline) = sql_plan_dirs(150.0, 100.0);
+    let agent = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "sql-plan",
+            "--current",
+            &current.display().to_string(),
+            "--baseline",
+            &baseline.display().to_string(),
+            "--max-cost-increase-percent",
+            "25",
+            "--format",
+            "agent-json",
+            "--top",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(agent.status.code(), Some(1));
+    let body: serde_json::Value = serde_json::from_slice(&agent.stdout).unwrap();
+    assert!(body.get("truncated").is_some());
+    assert!(body.get("violations").is_some());
+    let sarif = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "sql-plan",
+            "--current",
+            &current.display().to_string(),
+            "--baseline",
+            &baseline.display().to_string(),
+            "--max-cost-increase-percent",
+            "25",
+            "--format",
+            "sarif",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(sarif.status.code(), Some(1));
+    let document: serde_json::Value = serde_json::from_slice(&sarif.stdout).unwrap();
+    let results = document["runs"][0]["results"].as_array().unwrap();
+    assert!(!results.is_empty());
+    assert!(
+        results[0]["ruleId"]
+            .as_str()
+            .unwrap()
+            .starts_with("postgresql-plan/")
+    );
+    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "sql-plan",
+            "--current",
+            &current.display().to_string(),
+            "--baseline",
+            &baseline.display().to_string(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "sql-plan",
+            "--current",
+            &current.display().to_string(),
+            "--baseline",
+            &baseline.display().to_string(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(first.stdout, second.stdout);
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "no limits means index-clean plans pass"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sql_plan_malformed_input_is_input_error() {
+    let root = temporary_directory();
+    let current = root.join("current");
+    let baseline = root.join("baseline");
+    std::fs::create_dir_all(&current).unwrap();
+    std::fs::create_dir_all(&baseline).unwrap();
+    std::fs::write(current.join("q.json"), b"not json").unwrap();
+    std::fs::write(
+        baseline.join("q.json"),
+        "[{\"Plan\": {\"Node Type\": \"Seq Scan\"}}]",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "sql-plan",
+            "--current",
+            &current.display().to_string(),
+            "--baseline",
+            &baseline.display().to_string(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+const SECURITY_CURRENT: &str = r#"{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "semgrep"}}, "results": [{"ruleId": "sql-injection", "level": "error", "message": {"text": "BAD"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/auth.ts"}, "region": {"startLine": 2}}}], "baselineState": "new"}]}]}"#;
+const SECURITY_BASELINE: &str = r#"{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "semgrep"}}, "results": [{"ruleId": "other-rule", "level": "warning", "message": {"text": "OLD"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/other.ts"}, "region": {"startLine": 1}}}]}]}]}"#;
+
+fn security_repo() -> (PathBuf, PathBuf, PathBuf) {
+    let root = temporary_directory();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("src/auth.ts"),
+        "function outer(x: number): number {\n  function login(y: number): number {\n    if (y > 0) { return 1; }\n    return 0;\n  }\n  return login(x);\n}\n",
+    )
+    .unwrap();
+    let current = root.join("current.sarif");
+    let baseline = root.join("base.sarif");
+    std::fs::write(&current, SECURITY_CURRENT).unwrap();
+    std::fs::write(&baseline, SECURITY_BASELINE).unwrap();
+    (root, current, baseline)
+}
+
+#[test]
+fn security_json_enriches_and_gates_new_high_findings() {
+    let (root, current, baseline) = security_repo();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "security",
+            root.to_str().unwrap(),
+            "--sarif",
+            current.to_str().unwrap(),
+            "--baseline-sarif",
+            baseline.to_str().unwrap(),
+            "--fail-on-severity",
+            "high",
+            "--new-only",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["findings"][0]["state"], "new");
+    assert!(report["findings"][0]["function_id"].is_string());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("BAD"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn security_requires_sarif_and_parses_severity() {
+    let missing = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["security", "."])
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(2));
+    let (root, current, _) = security_repo();
+    let bad_level = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "security",
+            root.to_str().unwrap(),
+            "--sarif",
+            current.to_str().unwrap(),
+            "--fail-on-severity",
+            "bogus",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(bad_level.status.code(), Some(2));
+    let unknown = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "security",
+            root.to_str().unwrap(),
+            "--sarif",
+            current.to_str().unwrap(),
+            "--bogus",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(unknown.status.code(), Some(2));
+    // A missing analysis path is incomplete analysis (exit 3), not a report
+    // input error: the CLI keeps its documented exit codes even though the
+    // library assembly path is shared with `check` and the MCP tool.
+    let missing_path = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "security",
+            root.join("does-not-exist").to_str().unwrap(),
+            "--sarif",
+            current.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(missing_path.status.code(), Some(3));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn security_rejects_exclusive_comparison_flags() {
+    let (root, current, _) = security_repo();
+    for extra in [
+        vec!["--base", "HEAD", "--staged"],
+        vec!["--staged", "--target", "HEAD"],
+        vec!["--base", "HEAD", "--target", "HEAD"],
+    ] {
+        let mut args = vec![
+            "security",
+            root.to_str().unwrap(),
+            "--sarif",
+            current.to_str().unwrap(),
+        ];
+        args.extend(extra.iter().copied());
+        let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{extra:?}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn security_changed_only_requires_a_comparison() {
+    let (root, current, baseline) = security_repo();
+    // Without a comparison every finding stays `changed: null` and the gate
+    // would silently pass: that is a usage error, never a silent pass.
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "security",
+            root.to_str().unwrap(),
+            "--sarif",
+            current.to_str().unwrap(),
+            "--baseline-sarif",
+            baseline.to_str().unwrap(),
+            "--fail-on-severity",
+            "high",
+            "--changed-only",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--changed-only requires"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn security_changed_only_narrows_gate_not_report() {
+    let (root, current, baseline) = security_repo();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "Test"]);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "base", "-q"]);
+    std::fs::write(root.join("README.md"), "# test\n").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "second", "-q"]);
+    // Nothing staged: the finding is not in changed code, so the gate passes
+    // while the report still lists it.
+    let args = [
+        "security",
+        root.to_str().unwrap(),
+        "--sarif",
+        current.to_str().unwrap(),
+        "--baseline-sarif",
+        baseline.to_str().unwrap(),
+        "--fail-on-severity",
+        "high",
+        "--changed-only",
+        "--staged",
+        "--json",
+    ];
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(args)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!report["findings"].as_array().unwrap().is_empty());
+    assert_eq!(report["findings"][0]["changed"], false);
+    // Stage the finding's file: the same gate now fails.
+    std::fs::write(
+        root.join("src/auth.ts"),
+        "function outer(x: number): number {\n  function login(y: number): number {\n    if (y > 0) { return 2; }\n    return 0;\n  }\n  return login(x);\n}\n",
+    )
+    .unwrap();
+    git(&root, &["add", "src/auth.ts"]);
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(args)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["findings"][0]["changed"], true);
+    // Below-threshold gates pass while retaining the report.
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "security",
+            root.to_str().unwrap(),
+            "--sarif",
+            current.to_str().unwrap(),
+            "--fail-on-severity",
+            "critical",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn security_subdirectory_scope_matches_analysis_relative_artifact_paths() {
+    let (root, _current, _baseline) = security_repo();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "Test"]);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "base", "-q"]);
+    std::fs::write(
+        root.join("src/auth.ts"),
+        "function outer(x: number): number {\n  function login(y: number): number {\n    if (y > 0) { return 2; }\n    return 0;\n  }\n  return login(x);\n}\n",
+    )
+    .unwrap();
+    // The scanner ran with `src/` as its root, so its artifact URI is
+    // analysis-root-relative; the changed set must be too.
+    let scoped = root.join("scoped.sarif");
+    std::fs::write(
+        &scoped,
+        r#"{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "semgrep"}}, "results": [{"ruleId": "sql-injection", "level": "error", "locations": [{"physicalLocation": {"artifactLocation": {"uri": "auth.ts"}, "region": {"startLine": 2}}}]}]}]}"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "security",
+            root.join("src").to_str().unwrap(),
+            "--sarif",
+            scoped.to_str().unwrap(),
+            "--base",
+            "HEAD",
+            "--fail-on-severity",
+            "high",
+            "--changed-only",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["findings"][0]["changed"], true);
+    assert!(report["findings"][0]["function_id"].is_string());
+    // The innermost `login` function (cognitive 1) must be attributed, not
+    // the enclosing `outer` (cognitive 0).
+    assert_eq!(report["findings"][0]["cognitive"], 1);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn security_merges_repeated_files_and_renders_all_modes() {
+    let (root, current, _) = security_repo();
+    let second = root.join("second.sarif");
+    std::fs::copy(&current, &second).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "security",
+            root.to_str().unwrap(),
+            "--sarif",
+            current.to_str().unwrap(),
+            "--sarif",
+            second.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["findings"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        report["findings"][0]["report_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let agent = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "security",
+            root.to_str().unwrap(),
+            "--sarif",
+            current.to_str().unwrap(),
+            "--format",
+            "agent-json",
+            "--top",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&agent.stdout).unwrap();
+    assert!(body.get("truncated").is_some());
+    let sarif = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "security",
+            root.to_str().unwrap(),
+            "--sarif",
+            current.to_str().unwrap(),
+            "--format",
+            "sarif",
+        ])
+        .output()
+        .unwrap();
+    let document: serde_json::Value = serde_json::from_slice(&sarif.stdout).unwrap();
+    let results = document["runs"][0]["results"].as_array().unwrap();
+    assert!(!results.is_empty());
+    assert_eq!(results[0]["ruleId"], "semgrep/sql-injection");
+    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "security",
+            root.to_str().unwrap(),
+            "--sarif",
+            current.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "security",
+            root.to_str().unwrap(),
+            "--sarif",
+            current.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(first.stdout, second.stdout);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn security_malformed_sarif_is_input_error() {
+    let root = temporary_directory();
+    let bad = root.join("bad.sarif");
+    std::fs::write(&bad, b"not json").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "security",
+            root.to_str().unwrap(),
+            "--sarif",
+            bad.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn check_combines_complexity_and_security_violations() {
+    let root = temporary_directory();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("src/complex.ts"),
+        "function tangled(x: number): number {\n  if (x > 0) {\n    if (x > 1) {\n      if (x > 2) { return 3; }\n    }\n  }\n  return 0;\n}\n",
+    )
+    .unwrap();
+    let sarif = root.join("findings.sarif");
+    std::fs::write(
+        &sarif,
+        r#"{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "semgrep"}}, "results": [{"ruleId": "sql-injection", "level": "error", "message": {"text": "BAD"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/complex.ts"}, "region": {"startLine": 2}}}]}]}]}"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "check",
+            root.to_str().unwrap(),
+            "--cognitive",
+            "1",
+            "--sarif",
+            sarif.to_str().unwrap(),
+            "--fail-on-severity",
+            "low",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!report["files"].as_array().unwrap().is_empty());
+    assert!(!report["security_violations"].as_array().unwrap().is_empty());
+    // Security-only checks work without metric thresholds and stay silent on stdout gates.
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "check",
+            root.to_str().unwrap(),
+            "--sarif",
+            sarif.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(report.get("security_violations").is_some());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn vulnerabilities_repo() -> (PathBuf, PathBuf) {
+    let root = temporary_directory();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/app.ts"), "import _ from 'lodash';\n").unwrap();
+    let osv = root.join("current.json");
+    std::fs::copy("tests/fixtures/vulnerabilities/osv.json", &osv).unwrap();
+    (root, osv)
+}
+
+#[test]
+fn vulnerabilities_json_prioritizes_changed_imports() {
+    let root = temporary_directory();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/app.ts"), "export const x = 1;\n").unwrap();
+    for args in [
+        &["init"][..],
+        &["config", "user.email", "t@e.invalid"][..],
+        &["config", "user.name", "T"][..],
+        &["add", "."][..],
+        &["commit", "-qm", "base"][..],
+    ] {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+    std::fs::write(root.join("src/app.ts"), "import _ from 'lodash';\n").unwrap();
+    let osv = root.join("current.json");
+    std::fs::copy("tests/fixtures/vulnerabilities/osv.json", &osv).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "vulnerabilities",
+            root.to_str().unwrap(),
+            "--osv",
+            osv.to_str().unwrap(),
+            "--base",
+            "HEAD",
+            "--fail-on-severity",
+            "high",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["findings"][0]["reachable_from_changed"], true);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("DESCRIPTION_SENTINEL"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn vulnerabilities_requires_input_and_parses_limits() {
+    let missing = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["vulnerabilities", "."])
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(2));
+    let (root, osv) = vulnerabilities_repo();
+    for extra in [
+        vec!["--base", "HEAD", "--staged"],
+        vec!["--staged", "--target", "HEAD"],
+    ] {
+        let mut args = vec![
+            "vulnerabilities",
+            root.to_str().unwrap(),
+            "--osv",
+            osv.to_str().unwrap(),
+        ];
+        args.extend(extra.iter().copied());
+        let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{extra:?}");
+    }
+    let bad_level = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "vulnerabilities",
+            root.to_str().unwrap(),
+            "--osv",
+            osv.to_str().unwrap(),
+            "--fail-on-severity",
+            "bogus",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(bad_level.status.code(), Some(2));
+    let malformed = root.join("bad.json");
+    std::fs::write(&malformed, b"not json").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "vulnerabilities",
+            root.to_str().unwrap(),
+            "--osv",
+            malformed.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn vulnerabilities_config_threshold_and_output_modes() {
+    let (root, osv) = vulnerabilities_repo();
+    std::fs::write(
+        root.join("leadline.toml"),
+        "[vulnerabilities]\nminimum_severity = 'critical'\n",
+    )
+    .unwrap();
+    // Config floor without a CLI flag: high finding stays informational.
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "vulnerabilities",
+            root.to_str().unwrap(),
+            "--osv",
+            osv.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    // CLI flag overrides config for one invocation.
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "vulnerabilities",
+            root.to_str().unwrap(),
+            "--osv",
+            osv.to_str().unwrap(),
+            "--fail-on-severity",
+            "low",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let agent = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "vulnerabilities",
+            root.to_str().unwrap(),
+            "--osv",
+            osv.to_str().unwrap(),
+            "--format",
+            "agent-json",
+            "--top",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&agent.stdout).unwrap();
+    assert!(body.get("truncated").is_some());
+    let sarif = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "vulnerabilities",
+            root.to_str().unwrap(),
+            "--osv",
+            osv.to_str().unwrap(),
+            "--format",
+            "sarif",
+        ])
+        .output()
+        .unwrap();
+    let document: serde_json::Value = serde_json::from_slice(&sarif.stdout).unwrap();
+    let results = document["runs"][0]["results"].as_array().unwrap();
+    assert_eq!(
+        results[0]["ruleId"],
+        "vulnerability/npm/GHSA-xxxx-yyyy-zzzz"
+    );
+    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "vulnerabilities",
+            root.to_str().unwrap(),
+            "--osv",
+            osv.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "vulnerabilities",
+            root.to_str().unwrap(),
+            "--osv",
+            osv.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(first.stdout, second.stdout);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn check_vulnerabilities_combines_both_families() {
+    let root = temporary_directory();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("src/complex.ts"),
+        "function tangled(x: number): number {\n  if (x > 0) {\n    if (x > 1) {\n      if (x > 2) { return 3; }\n    }\n  }\n  return 0;\n}\n",
+    )
+    .unwrap();
+    let sarif = root.join("findings.sarif");
+    std::fs::write(
+        &sarif,
+        r#"{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "semgrep"}}, "results": [{"ruleId": "r", "level": "error", "message": {"text": "x"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/complex.ts"}, "region": {"startLine": 2}}}]}]}]}"#,
+    )
+    .unwrap();
+    let osv = root.join("current.json");
+    std::fs::copy("tests/fixtures/vulnerabilities/osv.json", &osv).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "check",
+            root.to_str().unwrap(),
+            "--cognitive",
+            "1",
+            "--sarif",
+            sarif.to_str().unwrap(),
+            "--osv",
+            osv.to_str().unwrap(),
+            "--fail-on-severity",
+            "low",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!report["files"].as_array().unwrap().is_empty());
+    assert!(report.get("security_violations").is_some());
+    assert!(
+        !report["vulnerability_violations"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sql_risk_json_gates_high_findings() {
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "sql",
+            "tests/fixtures/sql-risk",
+            "--fail-on-severity",
+            "high",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["findings"][0]["rule_id"],
+        "sql/update-delete-without-where"
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("LITERAL_SENTINEL"));
+}
+
+#[test]
+fn sql_risk_requires_no_input_and_parses_flags() {
+    // No input flags needed: the analysis path may simply contain no SQL.
+    let empty = temporary_directory();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["sql", empty.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let bad_level = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "sql",
+            "tests/fixtures/sql-risk",
+            "--fail-on-severity",
+            "bogus",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(bad_level.status.code(), Some(2));
+    let unknown = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["sql", "tests/fixtures/sql-risk", "--bogus"])
+        .output()
+        .unwrap();
+    assert_eq!(unknown.status.code(), Some(2));
+    std::fs::remove_dir_all(empty).unwrap();
+}
+
+#[test]
+fn sql_risk_config_threshold_modes_and_determinism() {
+    let root = temporary_directory();
+    std::fs::write(
+        root.join("q.sql"),
+        "SELECT * FROM t ORDER BY id LIMIT 1 OFFSET 600;\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("leadline.toml"), "[sql]\nlarge_offset = 500\n").unwrap();
+    // Config floor without a flag stays informational.
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["sql", root.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    // The configured threshold fires under a gate.
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "sql",
+            root.to_str().unwrap(),
+            "--fail-on-severity",
+            "medium",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["rule_id"] == "sql/large-offset")
+    );
+    // Default threshold would pass the same file: CLI flag wins over config.
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "sql",
+            root.to_str().unwrap(),
+            "--large-offset",
+            "1000",
+            "--fail-on-severity",
+            "medium",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let agent = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "sql",
+            root.to_str().unwrap(),
+            "--format",
+            "agent-json",
+            "--top",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&agent.stdout).unwrap();
+    assert!(body.get("truncated").is_some());
+    let sarif = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["sql", root.to_str().unwrap(), "--format", "sarif"])
+        .output()
+        .unwrap();
+    let document: serde_json::Value = serde_json::from_slice(&sarif.stdout).unwrap();
+    let results = document["runs"][0]["results"].as_array().unwrap();
+    assert!(!results.is_empty());
+    assert_eq!(results[0]["ruleId"], "sql/large-offset");
+    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["sql", root.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["sql", root.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(first.stdout, second.stdout);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sql_risk_malformed_sql_is_input_error() {
+    let root = temporary_directory();
+    std::fs::write(root.join("bad.sql"), b"SELECT 'oops;").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["sql", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn check_sql_combines_both_families() {
+    let root = temporary_directory();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("src/complex.ts"),
+        "function tangled(x: number): number {\n  if (x > 0) {\n    if (x > 1) {\n      if (x > 2) { return 3; }\n    }\n  }\n  return 0;\n}\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("risky.sql"), "UPDATE users SET active = false;\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "check",
+            root.to_str().unwrap(),
+            "--cognitive",
+            "1",
+            "--sql",
+            "--sql-fail-on-severity",
+            "low",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!report["files"].as_array().unwrap().is_empty());
+    assert!(!report["sql_violations"].as_array().unwrap().is_empty());
+    // Without the gate flag, SQL findings stay informational.
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args([
+            "check",
+            root.to_str().unwrap(),
+            "--cognitive",
+            "100",
+            "--sql",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    std::fs::remove_dir_all(root).unwrap();
 }

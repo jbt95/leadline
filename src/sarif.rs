@@ -7,13 +7,56 @@ const SARIF_SCHEMA: &str =
     "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json";
 const INFORMATION_URI: &str = "https://github.com/jbt95/leadline";
 
-/// Convert an [`AnalysisReport`] to SARIF 2.1.0.
+/// Shared SARIF 2.1.0 envelope: one run of the leadline driver.
+fn envelope(rules: Vec<Value>, results: Vec<Value>) -> Value {
+    json!({
+        "version": "2.1.0",
+        "$schema": SARIF_SCHEMA,
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "leadline",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "informationUri": INFORMATION_URI,
+                    "rules": rules,
+                },
+            },
+            "results": results,
+        }],
+    })
+}
+
+/// One explicit per-function gate violation for SARIF projection.
+///
+/// Regression gates build these from real before/after pairs, so results
+/// carry the actual deltas and configured limits instead of synthetic ones.
+pub struct FunctionViolation<'a> {
+    pub rule_id: &'static str,
+    pub message: String,
+    pub path: &'a str,
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+/// Convert an [`AnalysisReport`] to SARIF 2.1.0 with absolute thresholds.
 ///
 /// Only functions violating at least one threshold appear as results (gate
 /// semantics): a function over two limits yields two results, one per
-/// violated dimension, and clean functions yield none. Results are sorted
-/// by file uri, then start line, then rule id for deterministic output.
+/// violated dimension, and clean functions yield none.
 pub fn analysis_to_sarif(report: &AnalysisReport, thresholds: &Thresholds) -> Value {
+    gate_to_sarif(report, thresholds, &[])
+}
+
+/// Metric gate SARIF: absolute threshold violations plus explicit
+/// regression violations, in one run with one rule catalog.
+///
+/// Results are sorted by file uri, then start line, then rule id for
+/// deterministic output.
+pub fn gate_to_sarif(
+    report: &AnalysisReport,
+    thresholds: &Thresholds,
+    regressions: &[FunctionViolation<'_>],
+) -> Value {
     let mut results: Vec<(&str, u32, &str, Value)> = Vec::new();
     for file in &report.files {
         for function in &file.functions {
@@ -40,44 +83,294 @@ pub fn analysis_to_sarif(report: &AnalysisReport, thresholds: &Thresholds) -> Va
             }
         }
     }
+    for violation in regressions {
+        results.push((
+            violation.path,
+            violation.start_line,
+            violation.rule_id,
+            json!({
+                "ruleId": violation.rule_id,
+                "level": "error",
+                "message": { "text": violation.message },
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": { "uri": violation.path },
+                        "region": {
+                            "startLine": violation.start_line,
+                            "endLine": violation.end_line,
+                        },
+                    },
+                }],
+            }),
+        ));
+    }
     results.sort_by(|left, right| {
         left.0
             .cmp(right.0)
             .then(left.1.cmp(&right.1))
             .then(left.2.cmp(right.2))
     });
-    json!({
-        "version": "2.1.0",
-        "$schema": SARIF_SCHEMA,
-        "runs": [{
-            "tool": {
-                "driver": {
-                    "name": "leadline",
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": INFORMATION_URI,
-                    "rules": [
-                        {
-                            "id": "leadline/cognitive",
-                            "shortDescription": { "text": "Cognitive complexity exceeds the function limit" },
-                        },
-                        {
-                            "id": "leadline/cyclomatic",
-                            "shortDescription": { "text": "Cyclomatic complexity exceeds the function limit" },
-                        },
-                        {
-                            "id": "leadline/crap",
-                            "shortDescription": { "text": "CRAP score exceeds the function limit" },
-                        },
-                        {
-                            "id": "leadline/max-nesting",
-                            "shortDescription": { "text": "Maximum nesting depth exceeds the function limit" },
-                        },
-                    ],
-                },
-            },
-            "results": results.into_iter().map(|(_, _, _, result)| result).collect::<Vec<_>>(),
-        }],
+    let rules = vec![
+        json!({
+            "id": "leadline/cognitive",
+            "shortDescription": { "text": "Cognitive complexity exceeds the function limit" },
+        }),
+        json!({
+            "id": "leadline/cyclomatic",
+            "shortDescription": { "text": "Cyclomatic complexity exceeds the function limit" },
+        }),
+        json!({
+            "id": "leadline/crap",
+            "shortDescription": { "text": "CRAP score exceeds the function limit" },
+        }),
+        json!({
+            "id": "leadline/max-nesting",
+            "shortDescription": { "text": "Maximum nesting depth exceeds the function limit" },
+        }),
+    ];
+    let results: Vec<Value> = results
+        .into_iter()
+        .map(|(_, _, _, result)| result)
+        .collect();
+    envelope(rules, results)
+}
+
+/// Convert a PostgreSQL plan comparison report to SARIF 2.1.0.
+///
+/// One result per gate violation. Rule IDs are `postgresql-plan/{kind}` and
+/// artifact URIs are `plans/{query_id}.json`. Messages carry only fixed text
+/// with plan metrics; they never include SQL, plan predicates, or file paths
+/// beyond the query artifact.
+pub fn pg_plan_to_sarif(report: &crate::pg_plan::PgPlanReport) -> Value {
+    let rules: Vec<Value> = [
+        (
+            "index_to_sequential_scan",
+            "Plan regressed from an index scan to a sequential scan",
+        ),
+        (
+            "cost_increase",
+            "Plan total cost increased past the configured limit",
+        ),
+        (
+            "row_growth",
+            "Plan row estimate grew past the configured ratio",
+        ),
+        (
+            "estimate_error",
+            "Planner estimate error exceeds the configured ratio",
+        ),
+        (
+            "added_sort",
+            "Plan added sort nodes beside a numeric regression",
+        ),
+        (
+            "join_strategy_change",
+            "Plan join strategy changed beside a numeric regression",
+        ),
+    ]
+    .iter()
+    .map(|(kind, text)| {
+        json!({
+            "id": format!("postgresql-plan/{kind}"),
+            "shortDescription": { "text": text },
+        })
     })
+    .collect();
+    let mut results = Vec::new();
+    for violation in &report.violations {
+        let kind = violation.kind.as_str();
+        results.push(json!({
+            "ruleId": format!("postgresql-plan/{kind}"),
+            "level": "error",
+            "message": { "text": pg_plan_message(violation) },
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": { "uri": format!("plans/{}.json", violation.query_id) },
+                },
+            }],
+        }));
+    }
+    envelope(rules, results)
+}
+
+/// Fixed SARIF message from metrics only; no SQL or plan predicates.
+fn pg_plan_message(violation: &crate::pg_plan::QueryPlanChange) -> String {
+    use crate::pg_plan::PlanRegressionKind;
+    let id = violation.query_id.as_str();
+    match violation.kind {
+        PlanRegressionKind::IndexToSequentialScan => format!(
+            "query '{id}' regressed from index scan to sequential scan on table '{}'",
+            violation.relation.as_deref().unwrap_or("?")
+        ),
+        PlanRegressionKind::CostIncrease => match (violation.baseline, violation.current) {
+            (Some(base), Some(now)) => format!(
+                "query '{id}' total cost {base} -> {now} ({})",
+                violation.detail.as_deref().unwrap_or("?")
+            ),
+            _ => format!("query '{id}' total cost increased"),
+        },
+        PlanRegressionKind::RowGrowth => match (violation.baseline, violation.current) {
+            (Some(base), Some(now)) => format!(
+                "query '{id}' plan rows {base} -> {now} ({})",
+                violation.detail.as_deref().unwrap_or("?")
+            ),
+            _ => format!("query '{id}' plan rows grew"),
+        },
+        PlanRegressionKind::EstimateError => match violation.current {
+            Some(ratio) => format!("query '{id}' planner estimate error {ratio:.1}x"),
+            None => format!("query '{id}' planner estimate error is unbounded"),
+        },
+        PlanRegressionKind::AddedSort => format!(
+            "query '{id}' added sort nodes ({})",
+            violation.detail.as_deref().unwrap_or("?")
+        ),
+        PlanRegressionKind::JoinStrategyChange => format!(
+            "query '{id}' join strategy changed ({})",
+            violation.detail.as_deref().unwrap_or("?")
+        ),
+    }
+}
+
+/// Convert normalized security findings to SARIF 2.1.0.
+///
+/// One result per finding with rule ID `{tool}/{rule_id}` and the fixed
+/// message `"{tool} finding {rule_id}"`. Scanner messages, snippets, and
+/// source text never cross over. Pathless findings carry no locations.
+/// Callers pass the full report or only gate violations.
+pub fn security_findings_to_sarif(findings: &[crate::security::SecurityFinding]) -> Value {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut rules = Vec::new();
+    for finding in findings {
+        let id = format!("{}/{}", finding.tool, finding.rule_id);
+        if seen.insert(id.clone()) {
+            rules.push(json!({
+                "id": id,
+                "shortDescription": { "text": format!("{} finding {}", finding.tool, finding.rule_id) },
+            }));
+        }
+    }
+    let mut results = Vec::new();
+    for finding in findings {
+        let mut result = json!({
+            "ruleId": format!("{}/{}", finding.tool, finding.rule_id),
+            "level": severity_level(finding.severity),
+            "message": { "text": format!("{} finding {}", finding.tool, finding.rule_id) },
+        });
+        if let Some(path) = finding.path.as_deref() {
+            let mut location = json!({
+                "physicalLocation": {
+                    "artifactLocation": { "uri": path },
+                },
+            });
+            if finding.start_line.is_some() || finding.end_line.is_some() {
+                location["physicalLocation"]["region"] = json!({});
+                if let Some(line) = finding.start_line {
+                    location["physicalLocation"]["region"]["startLine"] = json!(line);
+                }
+                if let Some(line) = finding.end_line {
+                    location["physicalLocation"]["region"]["endLine"] = json!(line);
+                }
+            }
+            result["locations"] = json!([location]);
+        }
+        results.push(result);
+    }
+    envelope(rules, results)
+}
+
+/// SARIF level from normalized severity, shared by every scanner projection.
+fn severity_level(severity: crate::security::SecuritySeverity) -> &'static str {
+    match severity {
+        crate::security::SecuritySeverity::Critical | crate::security::SecuritySeverity::High => {
+            "error"
+        }
+        crate::security::SecuritySeverity::Medium => "warning",
+        crate::security::SecuritySeverity::Low | crate::security::SecuritySeverity::Unknown => {
+            "note"
+        }
+    }
+}
+
+/// Convert normalized vulnerability findings to SARIF 2.1.0.
+///
+/// One result per finding with rule ID
+/// `vulnerability/{ecosystem}/{advisory_id}` and the fixed message
+/// `"vulnerable dependency {package}"`. Installed versions, titles,
+/// descriptions, and URLs never cross over. Findings without a manifest
+/// path carry no locations. Callers pass the full report or only gate
+/// violations.
+pub fn vulnerability_findings_to_sarif(
+    findings: &[crate::vulnerabilities::VulnerabilityFinding],
+) -> Value {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut rules = Vec::new();
+    for finding in findings {
+        let id = format!(
+            "vulnerability/{}/{}",
+            finding.ecosystem, finding.advisory_id
+        );
+        if seen.insert(id.clone()) {
+            rules.push(json!({
+                "id": id,
+                "shortDescription": { "text": "Vulnerable dependency advisory" },
+            }));
+        }
+    }
+    let mut results = Vec::new();
+    for finding in findings {
+        let mut result = json!({
+            "ruleId": format!("vulnerability/{}/{}", finding.ecosystem, finding.advisory_id),
+            "level": severity_level(finding.severity),
+            "message": { "text": format!("vulnerable dependency {}", finding.package) },
+        });
+        if let Some(manifest) = finding.manifest_path.as_deref() {
+            result["locations"] = json!([{
+                "physicalLocation": {
+                    "artifactLocation": { "uri": manifest },
+                },
+            }]);
+        }
+        results.push(result);
+    }
+    envelope(rules, results)
+}
+
+/// Convert static PostgreSQL risk findings to SARIF 2.1.0.
+///
+/// Rule IDs equal the SQL rule IDs; messages carry the fixed remediation
+/// strings only, never SQL text, literals, or identifiers. Callers pass the
+/// full report or only gate violations.
+pub fn sql_findings_to_sarif(findings: &[crate::sql::SqlFinding]) -> Value {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut rules = Vec::new();
+    for finding in findings {
+        if seen.insert(finding.rule_id.clone()) {
+            rules.push(json!({
+                "id": finding.rule_id,
+                "shortDescription": { "text": finding.remediation },
+            }));
+        }
+    }
+    let results: Vec<Value> = findings
+        .iter()
+        .map(|finding| {
+            json!({
+                "ruleId": finding.rule_id,
+                "level": severity_level(finding.severity),
+                "message": { "text": finding.remediation },
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": { "uri": finding.path },
+                        "region": {
+                            "startLine": finding.start_line,
+                            "endLine": finding.end_line,
+                        },
+                    },
+                }],
+            })
+        })
+        .collect();
+    envelope(rules, results)
 }
 
 /// One `(rule id, message)` pair per violated threshold dimension.
@@ -135,6 +428,67 @@ fn violations(metrics: &FunctionMetrics, thresholds: &Thresholds) -> Vec<(&'stat
                 "max nesting {} exceeds limit {}",
                 metrics.max_nesting,
                 thresholds.max_nesting.unwrap()
+            ),
+        ));
+    }
+    out
+}
+
+/// Delta violations for one paired function, with the real limits.
+///
+/// Messages carry the before/after values and the configured allowed delta,
+/// never a synthetic limit. Rule IDs stay dimension-level so consumers group
+/// absolute and regression results per metric.
+pub fn regression_violations<'a>(
+    before: &crate::core::FunctionAnalysis,
+    after: &crate::core::FunctionAnalysis,
+    limits: &crate::config::RegressionLimits,
+    path: &'a str,
+) -> Vec<FunctionViolation<'a>> {
+    let dimensions = crate::diff::regression_dimensions(before, after, limits);
+    let mut out = Vec::new();
+    let location = |rule_id: &'static str, message: String| FunctionViolation {
+        rule_id,
+        message,
+        path,
+        start_line: after.start_line,
+        end_line: after.end_line,
+    };
+    if dimensions[0] {
+        out.push(location(
+            "leadline/cognitive",
+            format!(
+                "cognitive complexity {} -> {} exceeds allowed delta {}",
+                before.metrics.cognitive, after.metrics.cognitive, limits.cognitive
+            ),
+        ));
+    }
+    if dimensions[1] {
+        out.push(location(
+            "leadline/cyclomatic",
+            format!(
+                "cyclomatic complexity {} -> {} exceeds allowed delta {}",
+                before.metrics.cyclomatic, after.metrics.cyclomatic, limits.cyclomatic
+            ),
+        ));
+    }
+    if dimensions[2]
+        && let (Some(before_score), Some(after_score)) = (before.metrics.crap, after.metrics.crap)
+    {
+        out.push(location(
+            "leadline/crap",
+            format!(
+                "CRAP score {before_score} -> {after_score} exceeds allowed delta {}",
+                limits.crap
+            ),
+        ));
+    }
+    if dimensions[3] {
+        out.push(location(
+            "leadline/max-nesting",
+            format!(
+                "max nesting {} -> {} exceeds allowed delta {}",
+                before.metrics.max_nesting, after.metrics.max_nesting, limits.max_nesting
             ),
         ));
     }

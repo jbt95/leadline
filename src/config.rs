@@ -46,6 +46,8 @@ pub struct Config {
     pub regressions: RegressionLimits,
     pub duplication: DuplicationConfig,
     pub architecture_rules: Vec<ArchitectureRule>,
+    pub vulnerabilities: VulnerabilityConfig,
+    pub sql: SqlConfig,
 }
 
 /// Duplication detection settings.
@@ -62,6 +64,28 @@ impl Default for DuplicationConfig {
             min_tokens: 100,
             min_lines: 10,
             excludes: Vec::new(),
+        }
+    }
+}
+
+/// Vulnerability gate settings.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VulnerabilityConfig {
+    pub minimum_severity: Option<crate::security::SecuritySeverity>,
+}
+
+/// Static PostgreSQL risk settings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SqlConfig {
+    pub large_offset: u64,
+    pub migration_roots: Vec<String>,
+}
+
+impl Default for SqlConfig {
+    fn default() -> Self {
+        Self {
+            large_offset: 1000,
+            migration_roots: Vec::new(),
         }
     }
 }
@@ -146,6 +170,8 @@ impl Default for Config {
             regressions: RegressionLimits::default(),
             duplication: DuplicationConfig::default(),
             architecture_rules: Vec::new(),
+            vulnerabilities: VulnerabilityConfig::default(),
+            sql: SqlConfig::default(),
         }
     }
 }
@@ -353,6 +379,8 @@ pub fn parse_str(text: &str) -> Result<Config, ConfigError> {
             "thresholds" => read_thresholds(&mut config, value)?,
             "regressions" => read_regressions(&mut config, value)?,
             "duplication" => read_duplication(&mut config, value)?,
+            "sql" => read_sql(&mut config, value)?,
+            "vulnerabilities" => read_vulnerabilities(&mut config, value)?,
             "architecture" => read_architecture(&mut config, value)?,
             _ if !value.is_table() => {
                 return Err(ConfigError::new(format!(
@@ -433,6 +461,120 @@ fn read_metrics(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
     }
     Ok(())
 }
+fn read_vulnerabilities(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| ConfigError::new("expected table for [vulnerabilities]".to_string()))?;
+    for (key, item) in table {
+        match key.as_str() {
+            "minimum_severity" => {
+                let raw = item.as_str().ok_or_else(|| {
+                    ConfigError::new(format!(
+                        "expected quoted string for `minimum_severity`, got {}",
+                        item.type_str()
+                    ))
+                })?;
+                let severity = crate::security::parse_gate_severity(raw).ok_or_else(|| {
+                    ConfigError::new(format!(
+                        "unknown minimum_severity '{raw}': expected 'low', 'medium', 'high', or 'critical'"
+                    ))
+                })?;
+                config.vulnerabilities.minimum_severity = Some(severity);
+            }
+            _ => {
+                return Err(ConfigError::new(format!(
+                    "unknown key `{key}` in [vulnerabilities]"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_sql(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| ConfigError::new("expected table for [sql]".to_string()))?;
+    for (key, item) in table {
+        match key.as_str() {
+            "large_offset" => match item {
+                Value::Integer(n) if *n >= 1 => config.sql.large_offset = *n as u64,
+                _ => {
+                    return Err(ConfigError::new(format!(
+                        "sql `large_offset` must be an integer >= 1, got `{item}`"
+                    )));
+                }
+            },
+            "migration_roots" => {
+                let array = item.as_array().ok_or_else(|| {
+                    ConfigError::new(format!(
+                        "expected array for `migration_roots`, got {}",
+                        item.type_str()
+                    ))
+                })?;
+                let mut roots = Vec::with_capacity(array.len());
+                let mut seen = std::collections::BTreeSet::new();
+                for entry in array {
+                    let raw = entry.as_str().ok_or_else(|| {
+                        ConfigError::new(format!(
+                            "expected string in `migration_roots` array, got {}",
+                            entry.type_str()
+                        ))
+                    })?;
+                    let root = normalize_migration_root(raw)?;
+                    if !seen.insert(root.clone()) {
+                        return Err(ConfigError::new(format!(
+                            "duplicate migration root `{root}`"
+                        )));
+                    }
+                    roots.push(root);
+                }
+                config.sql.migration_roots = roots;
+            }
+            _ => {
+                return Err(ConfigError::new(format!("unknown key `{key}` in [sql]")));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Normalize one migration root: relative, `/`-separated, no escapes.
+///
+/// Shared by `[sql]` parsing and the `sql` command's `--migration-root` flag.
+pub fn normalize_migration_root(raw: &str) -> Result<String, ConfigError> {
+    let reject =
+        |reason: &str| ConfigError::new(format!("invalid migration root {raw:?}: {reason}"));
+    if raw.is_empty() {
+        return Err(reject("empty"));
+    }
+    if raw.chars().any(char::is_control) {
+        return Err(reject("control character"));
+    }
+    if raw.starts_with('/') || raw.starts_with('\\') || raw.contains('\\') {
+        return Err(reject("must be relative with `/` separators"));
+    }
+    let bytes = raw.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        return Err(reject("drive prefix"));
+    }
+    // `.` and empty components are dropped: `./migrations` and `db/./schema`
+    // must match the normalized display paths sql analysis builds, and a
+    // surviving leading `.` would never match any file.
+    let mut parts = Vec::new();
+    for part in raw.trim_end_matches('/').split('/') {
+        match part {
+            "" | "." => {}
+            ".." => return Err(reject("may not escape the analysis root")),
+            name => parts.push(name),
+        }
+    }
+    if parts.is_empty() {
+        return Err(reject("empty"));
+    }
+    Ok(parts.join("/"))
+}
+
 fn read_regressions(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
     let table = value
         .as_table()

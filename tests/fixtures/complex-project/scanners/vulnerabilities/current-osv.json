@@ -1,0 +1,25 @@
+{
+  "results": [{
+    "source": {"path": "package-lock.json"},
+    "packages": [
+      {
+        "package": {"name": "lodash", "version": "4.17.20", "ecosystem": "npm"},
+        "vulnerabilities": [{
+          "id": "GHSA-existing-lodash",
+          "details": "DESCRIPTION_SENTINEL existing",
+          "database_specific": {"severity": "HIGH"},
+          "affected": [{"ranges": [{"events": [{"fixed": "4.17.21"}]}]}]
+        }]
+      },
+      {
+        "package": {"name": "minimist", "version": "1.2.5", "ecosystem": "npm"},
+        "vulnerabilities": [{
+          "id": "CVE-2021-new",
+          "details": "DESCRIPTION_SENTINEL reachable",
+          "database_specific": {"severity": "HIGH"},
+          "affected": [{"ranges": [{"events": [{"fixed": "1.2.6"}]}]}]
+        }]
+      }
+    ]
+  }]
+}

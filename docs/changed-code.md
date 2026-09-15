@@ -13,7 +13,7 @@
 
 ## Targets
 
-- Default (worktree): tracked changes plus untracked files, matching pre-`--staged`/`--target` behavior. `analyze_changed(path, base)` remains the compatibility wrapper for this case with `--renames` off.
+- Default (worktree): tracked changes plus untracked files, with rename detection off. `check --base REV` gates this same enumeration.
 - `--staged` (index): compares `base` against the index only; unstaged working-tree edits are excluded.
 - `--target REV`: compares `base` against `REV` as two Git trees; the working tree and index are never read.
 

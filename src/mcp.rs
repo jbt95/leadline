@@ -22,20 +22,30 @@ use std::path::{Path, PathBuf};
 /// Maximum entries returned in any result array before truncation kicks in.
 const MAX_ENTRIES: usize = 200;
 
+/// Maximum requests accepted in one JSON-RPC batch.
+const MAX_BATCH_REQUESTS: usize = 64;
+
+/// Maximum serialized bytes of one JSON-RPC response, batch included.
+const MAX_RESPONSE_BYTES: usize = 32 << 20;
+
 /// Usage guidance returned by `initialize`. Hosts may inject this into the
 /// system prompt, so it doubles as the server's self-advertisement.
-const SERVER_INSTRUCTIONS: &str = "leadline reports deterministic function-level complexity metrics (Java, JavaScript, TypeScript, TSX) without executing code or touching the network. Use analyze_changed after substantial edits to spot regressions, repo_summary for a first look at unfamiliar code, analyze_function with explain:true to see which lines drive complexity, check to gate thresholds or regressions, and test_targets to rank uncovered decision lines. Metrics are evidence, not objectives: do not refactor solely to lower a number.";
+const SERVER_INSTRUCTIONS: &str = "leadline reports deterministic function-level complexity metrics (Java, JavaScript, TypeScript, TSX) without executing code or touching the network. Use analyze_changed after substantial edits to spot regressions, repo_summary for a first look at unfamiliar code, analyze_function with explain:true to see which lines drive complexity, check to gate thresholds or regressions, test_targets to rank uncovered decision lines, sql_plan to compare checked-in PostgreSQL EXPLAIN artifacts for plan regressions, security_findings to triage scanner SARIF with code context, vulnerabilities to prioritize vulnerable dependencies with changed-import evidence, and sql_risks to flag static PostgreSQL query risks. Metrics are evidence, not objectives: do not refactor solely to lower a number.";
 
-/// The seven tools this server exposes. Fixed set; keep in sync with
+/// The eleven tools this server exposes. Fixed set; keep in sync with
 /// [`tools_list`] and [`dispatch_tool`].
-const TOOL_NAMES: [&str; 7] = [
+const TOOL_NAMES: [&str; 11] = [
     "analyze",
     "analyze_changed",
     "analyze_function",
     "check",
     "explain_metric",
     "repo_summary",
+    "security_findings",
+    "sql_plan",
     "test_targets",
+    "vulnerabilities",
+    "sql_risks",
 ];
 
 /// Serve JSON-RPC requests from stdin, writing responses to stdout.
@@ -43,13 +53,14 @@ const TOOL_NAMES: [&str; 7] = [
 /// One request per line. Batch arrays are accepted when a whole line parses
 /// as a JSON array. Blank lines are ignored. Responses are flushed after
 /// every line: live clients keep stdin open while waiting, so buffering
-/// until EOF would deadlock them into a request timeout.
+/// until EOF would deadlock them into a request timeout. Lines past
+/// [`MAX_STDIO_LINE`] fail instead of growing a buffer without bound.
 pub fn serve() -> crate::Result<()> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
-    for line in stdin.lock().lines() {
-        let line = line?;
+    let mut reader = std::io::BufReader::new(stdin.lock());
+    while let Some(line) = read_request_line(&mut reader, MAX_STDIO_LINE)? {
         if line.trim().is_empty() {
             continue;
         }
@@ -62,6 +73,651 @@ pub fn serve() -> crate::Result<()> {
     use std::io::Write as _;
     out.flush()?;
     Ok(())
+}
+
+/// Read one newline-terminated request, refusing lines past `limit` instead
+/// of allocating the rest of the input.
+fn read_request_line(
+    reader: &mut impl std::io::BufRead,
+    limit: usize,
+) -> crate::Result<Option<String>> {
+    let mut line = String::new();
+    let mut limited = std::io::Read::take(&mut *reader, limit as u64 + 1);
+    let read = limited.read_line(&mut line)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if read > limit {
+        return Err(format!("MCP request line exceeds the {limit}-byte limit").into());
+    }
+    Ok(Some(line))
+}
+
+// ---------------------------------------------------------------------------
+// HTTP transport (opt-in via `leadline mcp --port [N] [--host ADDR]`)
+// ---------------------------------------------------------------------------
+
+/// Port used when `--port` is passed without a value.
+pub const DEFAULT_HTTP_PORT: u16 = 3000;
+
+/// Bind address used when `--host` is omitted (loopback only).
+pub const DEFAULT_HTTP_HOST: &str = "127.0.0.1";
+
+/// Largest JSON-RPC body accepted over HTTP (32 MiB); larger reads fail
+/// with 413 instead of growing a buffer without bound.
+const MAX_HTTP_BODY: usize = 32 * 1024 * 1024;
+
+/// Largest stdio request line accepted, matching the HTTP body cap.
+const MAX_STDIO_LINE: usize = MAX_HTTP_BODY;
+
+/// Largest request or header line accepted (8 KiB).
+const MAX_HTTP_LINE: usize = 8 * 1024;
+
+/// Largest header block accepted (64 KiB), counting every line.
+const MAX_HTTP_HEADERS: usize = 64 * 1024;
+
+/// Read deadline covering one request's request line and headers.
+const HTTP_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Write deadline for one response.
+const HTTP_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Time an answered connection may spend draining the rest of its request
+/// before the socket is dropped.
+const HTTP_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Concurrent HTTP connections; excess connections fail fast with 503.
+const MAX_HTTP_CONNECTIONS: usize = 64;
+
+/// Aggregate request-body bytes buffered across all connections. Without a
+/// global ceiling, 64 clients could each declare 32 MiB and stream the full
+/// amount inside the read deadline; excess reservations fail fast with 503.
+const MAX_INFLIGHT_BODY_BYTES: usize = 64 * 1024 * 1024;
+
+/// Reserved request-body bytes currently buffered by all connections.
+static INFLIGHT_BODY_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Parsed `mcp` transport options. `None` means plain stdio ([`serve`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HttpOptions {
+    pub host: String,
+    pub port: u16,
+}
+
+/// Parse `mcp` arguments: `--port [N]` enables HTTP mode (a bare `--port`
+/// means [`DEFAULT_HTTP_PORT`], `0` asks the OS for a free port) and
+/// `--host ADDR` sets the bind address (default loopback).
+pub fn parse_mcp_args(args: &[String]) -> Result<Option<HttpOptions>, String> {
+    let mut host: Option<String> = None;
+    let mut port: Option<u16> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--port" => match args.get(index + 1).map(String::as_str) {
+                Some(next) if !next.starts_with('-') => {
+                    port = Some(parse_port(next)?);
+                    index += 1;
+                }
+                _ => port = Some(DEFAULT_HTTP_PORT),
+            },
+            "--host" => {
+                index += 1;
+                host = Some(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| "--host requires an address".to_owned())?,
+                );
+            }
+            other => return Err(format!("unknown mcp option '{other}'")),
+        }
+        index += 1;
+    }
+    match port {
+        Some(port) => Ok(Some(HttpOptions {
+            host: host.unwrap_or_else(|| DEFAULT_HTTP_HOST.to_owned()),
+            port,
+        })),
+        // `--host` only configures the HTTP transport; silently ignoring it
+        // would start stdio with a flag the caller believes is active.
+        None if host.is_some() => Err("--host requires --port".to_owned()),
+        None => Ok(None),
+    }
+}
+
+fn parse_port(raw: &str) -> Result<u16, String> {
+    raw.parse::<u16>()
+        .map_err(|_| format!("invalid --port '{raw}': expected 0-65535"))
+}
+
+/// Bind for HTTP mode, falling back to an OS-assigned free port when the
+/// requested one is taken. Returns the listener, the actual port, and
+/// whether fallback happened (so callers can report it).
+pub fn bind_http(host: &str, port: u16) -> std::io::Result<(std::net::TcpListener, u16, bool)> {
+    match std::net::TcpListener::bind(format!("{host}:{port}")) {
+        Ok(listener) => {
+            let actual = listener.local_addr()?.port();
+            Ok((listener, actual, false))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse && port != 0 => {
+            let listener = std::net::TcpListener::bind(format!("{host}:0"))?;
+            let actual = listener.local_addr()?.port();
+            Ok((listener, actual, true))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Serve the same JSON-RPC API over HTTP: `POST /mcp` takes a request
+/// object (or batch array) as the body, and `GET /health` reports status
+/// for observability. Diagnostics go to stderr, including the actual port
+/// when a taken port falls back to a free one.
+pub fn serve_http(host: &str, port: u16) -> crate::Result<()> {
+    let (listener, actual, fell_back) = bind_http(host, port)?;
+    if fell_back {
+        eprintln!("leadline: port {port} in use, using free port {actual}");
+    }
+    eprintln!("leadline MCP listening on http://{host}:{actual}/mcp");
+    serve_listener(listener);
+    Ok(())
+}
+
+/// Accept loop for an already-bound listener: one worker per connection up
+/// to a fixed ceiling, then fail fast with 503 instead of growing threads.
+pub fn serve_listener(listener: std::net::TcpListener) {
+    let limiter = std::sync::Arc::new(ConnectionLimiter::default());
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => match limiter.try_acquire() {
+                Some(permit) => {
+                    std::thread::spawn(move || {
+                        handle_connection(stream);
+                        drop(permit);
+                    });
+                }
+                None => {
+                    write_response(stream, 503, &http_error("too many concurrent connections"));
+                }
+            },
+            Err(error) => eprintln!("leadline: MCP connection failed: {error}"),
+        }
+    }
+}
+
+/// Open-connection counter with a fixed ceiling.
+#[derive(Default)]
+struct ConnectionLimiter {
+    open: std::sync::atomic::AtomicUsize,
+}
+
+impl ConnectionLimiter {
+    fn try_acquire(self: &std::sync::Arc<Self>) -> Option<ConnectionPermit> {
+        use std::sync::atomic::Ordering;
+        let mut current = self.open.load(Ordering::Relaxed);
+        loop {
+            if current >= MAX_HTTP_CONNECTIONS {
+                return None;
+            }
+            match self.open.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Some(ConnectionPermit(std::sync::Arc::clone(self))),
+                Err(actual) => current = actual,
+            }
+        }
+    }
+}
+
+/// Releases one connection slot on drop.
+struct ConnectionPermit(std::sync::Arc<ConnectionLimiter>);
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
+        self.0.open.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// RAII reservation of buffered request-body bytes.
+#[derive(Debug)]
+struct BodyReservation(usize);
+
+impl Drop for BodyReservation {
+    fn drop(&mut self) {
+        INFLIGHT_BODY_BYTES.fetch_sub(self.0, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+/// Reserve `bytes` of buffered request bodies, or fail fast with 503.
+fn reserve_body_bytes(bytes: usize) -> Result<BodyReservation, (u16, String)> {
+    use std::sync::atomic::Ordering;
+    if bytes == 0 {
+        return Ok(BodyReservation(0));
+    }
+    let mut current = INFLIGHT_BODY_BYTES.load(Ordering::Relaxed);
+    loop {
+        let Some(next) = current.checked_add(bytes) else {
+            return Err((503, http_error("request body budget exhausted")));
+        };
+        if next > MAX_INFLIGHT_BODY_BYTES {
+            return Err((503, http_error("request body budget exhausted")));
+        }
+        match INFLIGHT_BODY_BYTES.compare_exchange_weak(
+            current,
+            next,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return Ok(BodyReservation(bytes)),
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+fn handle_connection(stream: std::net::TcpStream) {
+    // Loopback-bound listeners only answer loopback `Host` authorities; a
+    // wildcard bind answers whatever address the client actually reached.
+    // A dual-stack listener reports IPv4-mapped peers (`::ffff:127.0.0.1`),
+    // which `Ipv6Addr::is_loopback` alone misses. An unresolvable local
+    // address keeps the stricter loopback rule.
+    let loopback_only = stream
+        .local_addr()
+        .map(|address| is_loopback_ip(address.ip()))
+        .unwrap_or(true);
+    // One whole-request deadline: every blocking read is re-armed against it,
+    // so a slow client cannot trickle one byte per timeout window forever.
+    let deadline = std::time::Instant::now() + HTTP_READ_TIMEOUT;
+    let (status, body) = match read_request(&stream, deadline) {
+        Ok(request) => route_http(&request, loopback_only),
+        Err(response) => response,
+    };
+    write_response(stream, status, &body);
+}
+
+/// One parsed HTTP request: request line, `Host`/`Origin`, and body.
+struct HttpRequest {
+    method: String,
+    path: String,
+    host: Option<String>,
+    origin: Option<String>,
+    body: Vec<u8>,
+    /// Released when the parsed request (and its body) is dropped.
+    _body_reservation: BodyReservation,
+}
+
+/// Read one `Connection: close` request: request line, headers, then exactly
+/// `Content-Length` body bytes. Lines are bounded, duplicate framing headers
+/// and unsupported transfer codings are rejected, and every read is re-armed
+/// against the request deadline, so a stalled or endless stream cannot hold
+/// a worker open. Body memory is additionally reserved against a process-wide
+/// ceiling, so many declared bodies cannot multiply into unbounded buffering.
+/// Errors are ready-made status/body pairs.
+fn read_request(
+    stream: &std::net::TcpStream,
+    deadline: std::time::Instant,
+) -> Result<HttpRequest, (u16, String)> {
+    use std::io::Read as _;
+    let mut reader = std::io::BufReader::new(stream);
+    let request_line = read_line(&mut reader, MAX_HTTP_LINE, deadline)?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts
+        .next()
+        .ok_or_else(|| bad_request("malformed request line"))?
+        .to_owned();
+    let path = parts
+        .next()
+        .ok_or_else(|| bad_request("malformed request line"))?
+        .to_owned();
+    let version = parts
+        .next()
+        .ok_or_else(|| bad_request("malformed request line"))?;
+    if parts.next().is_some() {
+        return Err(bad_request("malformed request line"));
+    }
+    if version != "HTTP/1.1" {
+        return Err((505, http_error("HTTP/1.1 required")));
+    }
+    let mut content_length: Option<usize> = None;
+    let mut host = None;
+    let mut origin = None;
+    let mut header_bytes = 0usize;
+    loop {
+        let line = read_line(&mut reader, MAX_HTTP_LINE, deadline)?;
+        header_bytes += line.len();
+        if header_bytes > MAX_HTTP_HEADERS {
+            return Err((431, http_error("request headers too large")));
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.is_empty() {
+            break;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            return Err(bad_request("malformed header line"));
+        };
+        // RFC 7230 field names are tokens: no whitespace before the colon,
+        // no characters a stricter intermediary would parse differently.
+        if !is_header_token(name) {
+            return Err(bad_request("malformed header name"));
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            if content_length.is_some() {
+                return Err(bad_request("duplicate Content-Length"));
+            }
+            let raw = value.trim();
+            if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(bad_request("invalid Content-Length"));
+            }
+            content_length = Some(
+                raw.parse()
+                    .map_err(|_| bad_request("invalid Content-Length"))?,
+            );
+        } else if name.eq_ignore_ascii_case("host") {
+            if host.is_some() {
+                return Err(bad_request("duplicate Host"));
+            }
+            host = Some(value.trim().to_owned());
+        } else if name.eq_ignore_ascii_case("origin") {
+            origin = Some(value.trim().to_owned());
+        } else if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err((501, http_error("Transfer-Encoding is not supported")));
+        }
+    }
+    let content_length = content_length.unwrap_or(0);
+    if content_length > MAX_HTTP_BODY {
+        return Err((413, http_error("request body too large")));
+    }
+    let reservation = reserve_body_bytes(content_length)?;
+    // `read_exact` would keep the single timeout for every inner read, letting
+    // a trickling client stretch one body far past the deadline; re-arm per
+    // chunk instead.
+    let mut body = vec![0u8; content_length];
+    let mut filled = 0usize;
+    while filled < body.len() {
+        arm_read_deadline(stream, deadline)?;
+        let read = reader
+            .read(&mut body[filled..])
+            .map_err(|_| (408, http_error("request body read timed out")))?;
+        if read == 0 {
+            return Err(bad_request("truncated request body"));
+        }
+        filled += read;
+    }
+    Ok(HttpRequest {
+        method,
+        path,
+        host,
+        origin,
+        body,
+        _body_reservation: reservation,
+    })
+}
+
+/// Re-arm the socket read timeout against one whole-request deadline.
+fn arm_read_deadline(
+    stream: &std::net::TcpStream,
+    deadline: std::time::Instant,
+) -> Result<(), (u16, String)> {
+    let remaining = deadline
+        .checked_duration_since(std::time::Instant::now())
+        .ok_or_else(|| (408, http_error("request read deadline exceeded")))?;
+    stream
+        .set_read_timeout(Some(remaining.max(std::time::Duration::from_millis(1))))
+        .map_err(|_| (500, http_error("cannot set read deadline")))?;
+    Ok(())
+}
+
+/// Read one line up to `limit` bytes (inclusive of `\n`); past it, 431.
+fn read_line(
+    reader: &mut std::io::BufReader<&std::net::TcpStream>,
+    limit: usize,
+    deadline: std::time::Instant,
+) -> Result<String, (u16, String)> {
+    use std::io::BufRead as _;
+    let mut bytes = Vec::new();
+    loop {
+        arm_read_deadline(reader.get_ref(), deadline)?;
+        let available = reader
+            .fill_buf()
+            .map_err(|_| (408, http_error("request read timed out")))?;
+        if available.is_empty() {
+            // EOF mid-line is a truncated request, not an empty header line.
+            if bytes.last().is_none_or(|byte| *byte != b'\n') {
+                return Err(bad_request("connection closed before line end"));
+            }
+            break;
+        }
+        let take = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |index| index + 1);
+        if bytes.len() + take > limit {
+            return Err((431, http_error("request line or header too large")));
+        }
+        bytes.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if bytes.last() == Some(&b'\n') {
+            break;
+        }
+    }
+    String::from_utf8(bytes).map_err(|_| bad_request("request must be UTF-8"))
+}
+
+fn bad_request(message: &str) -> (u16, String) {
+    (400, http_error(message))
+}
+
+fn http_error(message: &str) -> String {
+    serde_json::json!({ "error": message }).to_string()
+}
+
+/// RFC 7230 token characters, valid for one header field name.
+fn is_header_token(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
+/// Route one HTTP request to the shared JSON-RPC handler.
+///
+/// HTTP/1.1 requires exactly one `Host`; loopback-bound listeners only accept
+/// loopback authorities. MCP Streamable HTTP requires `Origin` validation
+/// against DNS rebinding: browser origins must be loopback, and anything else
+/// is 403. Non-browser clients omit `Origin` and pass.
+fn route_http(request: &HttpRequest, loopback_only: bool) -> (u16, String) {
+    if !host_allowed(request.host.as_deref(), loopback_only) {
+        return (400, http_error("invalid Host header"));
+    }
+    if !origin_allowed(request.origin.as_deref()) {
+        return (403, http_error("origin not allowed"));
+    }
+    let path = request.path.split('?').next().unwrap_or(&request.path);
+    match (request.method.as_str(), path) {
+        ("GET", "/health") => (
+            200,
+            serde_json::json!({
+                "status": "ok",
+                "transport": "http",
+                "version": env!("CARGO_PKG_VERSION"),
+                "tools": TOOL_NAMES.len(),
+            })
+            .to_string(),
+        ),
+        ("POST", "/mcp" | "/") => match std::str::from_utf8(&request.body) {
+            Ok(text) => {
+                if text.trim().is_empty() {
+                    return bad_request("empty JSON-RPC body");
+                }
+                match handle_request(text) {
+                    // Notifications (no `id`) carry no JSON-RPC response.
+                    Some(response) => (200, response),
+                    None => (202, String::new()),
+                }
+            }
+            Err(_) => bad_request("request body must be UTF-8 JSON"),
+        },
+        ("GET", "/mcp") => (405, http_error("use POST /mcp with a JSON-RPC body")),
+        _ => (404, http_error("not found: try POST /mcp or GET /health")),
+    }
+}
+
+/// `true` when the request carries no browser origin or a loopback one.
+///
+/// Browsers always send an `http(s)://` scheme; scheme-less values (including
+/// `null`) and non-loopback authorities are rejected.
+fn origin_allowed(origin: Option<&str>) -> bool {
+    let Some(origin) = origin else {
+        return true;
+    };
+    let Some((scheme, rest)) = origin.split_once("://") else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return false;
+    }
+    let authority = rest.split('/').next().unwrap_or("");
+    loopback_hostname(authority_host(authority))
+}
+
+/// `true` for `localhost` and any loopback IP literal, IPv4-mapped included.
+fn loopback_hostname(name: &str) -> bool {
+    name.eq_ignore_ascii_case("localhost")
+        || name.parse::<std::net::IpAddr>().is_ok_and(is_loopback_ip)
+}
+
+/// `true` for any loopback address, including IPv4-mapped IPv6 peers.
+fn is_loopback_ip(address: std::net::IpAddr) -> bool {
+    match address {
+        std::net::IpAddr::V4(v4) => v4.is_loopback(),
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
+    }
+}
+
+/// Host part of one `host[:port]` authority, IPv6 brackets stripped.
+fn authority_host(authority: &str) -> &str {
+    let host = match authority.rsplit_once(':') {
+        Some((host, port))
+            if !port.is_empty() && port.chars().all(|digit| digit.is_ascii_digit()) =>
+        {
+            host
+        }
+        _ => authority,
+    };
+    host.trim_matches(['[', ']'])
+}
+
+/// `true` when a request carries the single `Host` HTTP/1.1 requires, and (on
+/// a loopback-bound listener) that host is loopback.
+fn host_allowed(host: Option<&str>, loopback_only: bool) -> bool {
+    let Some(host) = host else {
+        return false;
+    };
+    let host = authority_host(host);
+    if host.is_empty() {
+        return false;
+    }
+    !loopback_only || loopback_hostname(host)
+}
+
+/// `Write` adapter that re-arms the socket write timeout against one
+/// whole-response deadline, so a slow reader cannot pin a worker past it.
+struct DeadlineWriter<'a> {
+    stream: &'a std::net::TcpStream,
+    deadline: std::time::Instant,
+}
+
+impl std::io::Write for DeadlineWriter<'_> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let remaining = self
+            .deadline
+            .checked_duration_since(std::time::Instant::now())
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "response deadline exceeded")
+            })?;
+        self.stream
+            .set_write_timeout(Some(remaining.max(std::time::Duration::from_millis(1))))?;
+        (&*self.stream).write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        (&*self.stream).flush()
+    }
+}
+
+fn write_response(stream: std::net::TcpStream, status: u16, body: &str) {
+    let reason = match status {
+        200 => "OK",
+        202 => "Accepted",
+        400 => "Bad Request",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        408 => "Request Timeout",
+        413 => "Content Too Large",
+        431 => "Request Header Fields Too Large",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        503 => "Service Unavailable",
+        505 => "HTTP Version Not Supported",
+        _ => "OK",
+    };
+    use std::io::Write as _;
+    let stream = stream;
+    let mut writer = DeadlineWriter {
+        stream: &stream,
+        deadline: std::time::Instant::now() + HTTP_WRITE_TIMEOUT,
+    };
+    let _ = write!(
+        writer,
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = writer.flush();
+    // Half-close, then read off what is left of the request. Closing a socket
+    // with unread bytes still queued makes the kernel send RST, and an early
+    // reject such as 431 leaves most of the request behind; either can break
+    // a peer that is still writing or has not read the response yet.
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    drain_request(&stream);
+}
+
+/// Discard the rest of a request after the response is sent, bounded by one
+/// short deadline so a slow client cannot pin the worker.
+fn drain_request(mut stream: &std::net::TcpStream) {
+    use std::io::Read as _;
+    let deadline = std::time::Instant::now() + HTTP_DRAIN_TIMEOUT;
+    let mut scratch = [0u8; 4096];
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+            break;
+        };
+        let _ = stream.set_read_timeout(Some(remaining.max(std::time::Duration::from_millis(1))));
+        match stream.read(&mut scratch) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+    }
 }
 
 /// Handle one raw input line, returning the response line if any.
@@ -78,18 +734,72 @@ pub fn handle_request(raw: &str) -> Option<String> {
         Err(_) => return Some(parse_error_response()),
     };
     if let serde_json::Value::Array(batch) = value {
-        let mut responses = Vec::new();
+        // An empty batch is an invalid request, not a notification.
+        if batch.is_empty() {
+            return Some(
+                error_response(serde_json::Value::Null, -32600, "Invalid Request").to_string(),
+            );
+        }
+        // An oversized batch is rejected, but a batch of notifications must
+        // still never draw a response.
+        if batch.len() > MAX_BATCH_REQUESTS {
+            let expects_response = batch.iter().any(|item| item.get("id").is_some());
+            return expects_response.then(|| batch_error_response(-32600, "Invalid Request"));
+        }
+        // Serialize as we go so one batch cannot retain an unbounded number
+        // of complete responses before the limit is known.
+        let mut parts: Vec<String> = Vec::new();
+        let mut total = 0usize;
         for item in &batch {
             if let Some(response) = handle_single(item) {
-                responses.push(response);
+                let text = response.to_string();
+                total += text.len();
+                if total > MAX_RESPONSE_BYTES {
+                    return Some(batch_error_response(
+                        -32603,
+                        "batch response exceeds the size limit",
+                    ));
+                }
+                parts.push(text);
             }
         }
-        if responses.is_empty() {
+        if parts.is_empty() {
             return None;
         }
-        return Some(serde_json::Value::Array(responses).to_string());
+        // The incremental check omits separators; enforce the exact rendered
+        // size before returning it.
+        let rendered = format!("[{}]", parts.join(","));
+        if rendered.len() > MAX_RESPONSE_BYTES {
+            return Some(batch_error_response(
+                -32603,
+                "batch response exceeds the size limit",
+            ));
+        }
+        return Some(rendered);
     }
-    handle_single(&value).map(|response| response.to_string())
+    let response = handle_single(&value)?;
+    let text = response.to_string();
+    if text.len() > MAX_RESPONSE_BYTES {
+        let id = value
+            .get("id")
+            .cloned()
+            .filter(valid_id)
+            .unwrap_or(serde_json::Value::Null);
+        let fallback = error_response(id, -32603, "response exceeds the size limit").to_string();
+        // A huge echoed id can keep the fallback over the cap too; drop it.
+        if fallback.len() > MAX_RESPONSE_BYTES {
+            return Some(
+                error_response(
+                    serde_json::Value::Null,
+                    -32603,
+                    "response exceeds the size limit",
+                )
+                .to_string(),
+            );
+        }
+        return Some(fallback);
+    }
+    Some(text)
 }
 
 fn handle_single(request: &serde_json::Value) -> Option<serde_json::Value> {
@@ -103,39 +813,81 @@ fn handle_single(request: &serde_json::Value) -> Option<serde_json::Value> {
             ));
         }
     };
-    // No `id` => notification => no response.
-    if !object.contains_key("id") {
-        return None;
-    }
-    let id = object.get("id").cloned().unwrap_or(serde_json::Value::Null);
     let jsonrpc = object.get("jsonrpc").and_then(serde_json::Value::as_str);
     let method = object.get("method").and_then(serde_json::Value::as_str);
+    let id = object.get("id").cloned();
+    // A request without `id` is a notification only when it carries a valid
+    // method; anything else is an invalid request that still gets a response.
     if jsonrpc != Some("2.0") || method.is_none() {
+        let id = id.filter(valid_id).unwrap_or(serde_json::Value::Null);
         return Some(error_response(id, -32600, "Invalid Request"));
     }
     let method = method.unwrap_or_default().to_owned();
-    // `initialized` and `notifications/*` are acknowledgements.
-    if method == "initialized" || method.starts_with("notifications/") {
-        return Some(success_response(id, serde_json::json!({})));
+    if let Some(id) = &id
+        && !valid_id(id)
+    {
+        return Some(error_response(
+            serde_json::Value::Null,
+            -32600,
+            "Invalid Request",
+        ));
     }
+    // Params, when present, must be structured; `null` is accepted as
+    // equivalent to omission for hosts that serialize optional params that
+    // way, but strings, numbers, and booleans are rejected.
     let params = object
         .get("params")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    match method.as_str() {
-        "initialize" => Some(success_response(id, initialize_result(&params))),
-        "ping" => Some(success_response(id, serde_json::json!({}))),
-        "tools/list" => Some(success_response(id, tools_list_result())),
-        "tools/call" => match dispatch_tools_call(&params) {
-            Ok(result) => Some(success_response(id, tool_result(result))),
-            Err((code, message)) => Some(error_response(id, code, &message)),
-        },
-        name if TOOL_NAMES.contains(&name) => match dispatch_tool(name, &params) {
-            Ok(result) => Some(success_response(id, tool_result(result))),
-            Err((code, message)) => Some(error_response(id, code, &message)),
-        },
-        _ => Some(error_response(id, -32601, "Method not found")),
+    if !params.is_null() && !params.is_object() && !params.is_array() {
+        return id.map(|id| error_response(id, -32602, "Invalid params"));
     }
+    let Some(id) = id else {
+        // Notifications run for their side effects and never get a response;
+        // this server is stateless, so only the dispatch matters.
+        if method != "initialized" && !method.starts_with("notifications/") {
+            let _ = dispatch_method(&method, &params);
+        }
+        return None;
+    };
+    // `initialized` and `notifications/*` are acknowledgements.
+    if method == "initialized" || method.starts_with("notifications/") {
+        return Some(success_response(id, serde_json::json!({})));
+    }
+    match dispatch_method(&method, &params) {
+        Ok(result) => Some(success_response(id, result)),
+        Err((code, message)) => Some(error_response(id, code, &message)),
+    }
+}
+
+/// Dispatch one JSON-RPC method, returning its unwrapped result.
+fn dispatch_method(
+    method: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, (i64, String)> {
+    match method {
+        "initialize" => Ok(initialize_result(params)),
+        "ping" => Ok(serde_json::json!({})),
+        "tools/list" => Ok(tools_list_result()),
+        "tools/call" => dispatch_tools_call(params).map(tool_result),
+        name if TOOL_NAMES.contains(&name) => {
+            // Direct tool methods are an extension; they take named parameters
+            // only, so an array must not silently fall back to default paths.
+            if params.is_array() {
+                return Err((-32602, "tool parameters must be an object".to_owned()));
+            }
+            dispatch_tool(name, params).map(tool_result)
+        }
+        _ => Err((-32601, "Method not found".to_owned())),
+    }
+}
+
+/// JSON-RPC ids are strings, numbers, or null; structured ids are invalid.
+fn valid_id(id: &serde_json::Value) -> bool {
+    matches!(
+        id,
+        serde_json::Value::String(_) | serde_json::Value::Number(_) | serde_json::Value::Null
+    )
 }
 
 /// Wrap a tool payload in the MCP `CallToolResult` shape: a text content
@@ -187,6 +939,10 @@ fn dispatch_tool(
         "check" => tool_check(params),
         "explain_metric" => tool_explain_metric(params),
         "repo_summary" => tool_repo_summary(params),
+        "sql_plan" => tool_sql_plan(params),
+        "security_findings" => tool_security_findings(params),
+        "vulnerabilities" => tool_vulnerabilities(params),
+        "sql_risks" => tool_sql_risks(params),
         "test_targets" => tool_test_targets(params),
         _ => Err((-32602, format!("unknown tool '{name}'"))),
     }
@@ -215,10 +971,6 @@ fn envelope(
     );
     fields.insert("metric_specs".to_owned(), metric_specs()?);
     Ok(serde_json::Value::Object(fields))
-}
-
-fn envelope_fields() -> serde_json::Map<String, serde_json::Value> {
-    serde_json::Map::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -270,12 +1022,6 @@ fn round1_opt(value: Option<f64>) -> serde_json::Value {
     }
 }
 
-/// Cap a result array at the default bound, reporting truncation explicitly
-/// instead of silently dropping entries.
-fn cap(entries: &mut Vec<serde_json::Value>) -> (Vec<serde_json::Value>, bool, usize) {
-    cap_with_limit(entries, MAX_ENTRIES)
-}
-
 /// Cap a result array at `limit`. Returns `(kept, truncated, total)`.
 fn cap_with_limit(
     entries: &mut Vec<serde_json::Value>,
@@ -287,6 +1033,22 @@ fn cap_with_limit(
     } else {
         (std::mem::take(entries), false, total)
     }
+}
+
+/// Cap gate violations at the same entry budget as findings. Returns the
+/// serialized rows plus whether anything was dropped.
+fn cap_violations<T: serde::Serialize>(
+    violations: &[T],
+    limit: usize,
+) -> Result<(serde_json::Value, bool), (i64, String)> {
+    let truncated = violations.len() > limit;
+    let rows = violations
+        .iter()
+        .take(limit)
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| (-32603, error.to_string()))?;
+    Ok((serde_json::Value::Array(rows), truncated))
 }
 
 /// Output budget for list-shaped tools, mirroring the CLI agent-json flags.
@@ -319,10 +1081,13 @@ fn parse_tool_budget(
             if count == 0 {
                 return Err((-32602, "top must be at least 1".to_owned()));
             }
+            if count > MAX_ENTRIES {
+                return Err((-32602, format!("top must be at most {MAX_ENTRIES}")));
+            }
             Some(count)
         }
     };
-    let sort_by = match opt_str(params, "sort_by") {
+    let sort_by = match opt_str(params, "sort_by")? {
         None => None,
         Some(value) => Some(SortKey::parse(value).ok_or((
             -32602,
@@ -381,8 +1146,8 @@ fn cmp_desc_f64(left: Option<f64>, right: Option<f64>) -> std::cmp::Ordering {
 
 fn row_position(row: &serde_json::Value) -> (&str, &str, u32) {
     (
-        opt_str(row, "path").unwrap_or_default(),
-        opt_str(row, "name").unwrap_or_default(),
+        row_str(row, "path"),
+        row_str(row, "name"),
         row_u32(row, "line"),
     )
 }
@@ -448,14 +1213,16 @@ fn sort_changed_rows(rows: &mut [serde_json::Value], key: SortKey) {
 // ---------------------------------------------------------------------------
 
 fn tool_analyze(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
-    let path = opt_str(params, "path").unwrap_or(".");
+    let path = opt_str(params, "path")?.unwrap_or(".");
     let budget = parse_tool_budget(params, false)?;
-    let coverage_path = opt_str(params, "coverage");
+    let coverage_path = opt_str(params, "coverage")?;
     let coverage = coverage_path
         .map(load_coverage_file)
         .transpose()
         .map_err(|message| (-32602, message))?;
-    let report = crate::analyze_path(Path::new(path), coverage.as_ref())
+    let config = load_config(path)?;
+    let excludes = config_excludes(config.as_ref());
+    let report = crate::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
         .map_err(|error| (-32602, error.to_string()))?;
     let mut rows = Vec::new();
     for file in &report.files {
@@ -470,7 +1237,7 @@ fn tool_analyze(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
         sort_analyze_rows(&mut rows, key);
     }
     let (functions, truncated, total) = cap_with_limit(&mut rows, budget.limit());
-    let mut fields = envelope_fields();
+    let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("analyze"));
     fields.insert("path".to_owned(), serde_json::json!(path));
     fields.insert("functions".to_owned(), serde_json::Value::Array(functions));
@@ -480,9 +1247,9 @@ fn tool_analyze(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
 }
 
 fn tool_analyze_changed(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
-    let base = opt_str(params, "base").unwrap_or("HEAD~1");
-    let path = opt_str(params, "path").unwrap_or(".");
-    let target = match opt_str(params, "target") {
+    let base = opt_str(params, "base")?.unwrap_or("HEAD~1");
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let target = match opt_str(params, "target")? {
         None | Some("worktree") => crate::diff::ComparisonTarget::Worktree,
         Some("index") => crate::diff::ComparisonTarget::Index,
         Some(revision) => crate::diff::ComparisonTarget::Revision(revision.to_owned()),
@@ -546,7 +1313,7 @@ fn tool_analyze_changed(params: &serde_json::Value) -> Result<serde_json::Value,
         sort_changed_rows(&mut rows, key);
     }
     let (changes, truncated, total) = cap_with_limit(&mut rows, budget.limit());
-    let mut fields = envelope_fields();
+    let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("analyze_changed"));
     fields.insert("base".to_owned(), serde_json::json!(report.base));
     fields.insert("path".to_owned(), serde_json::json!(path));
@@ -614,8 +1381,8 @@ fn tool_analyze_function(params: &serde_json::Value) -> Result<serde_json::Value
         }
     }
     let total = rows.len();
-    let (functions, truncated, _) = cap(&mut rows);
-    let mut fields = envelope_fields();
+    let (functions, truncated, _) = cap_with_limit(&mut rows, MAX_ENTRIES);
+    let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("analyze_function"));
     fields.insert("path".to_owned(), serde_json::json!(analyzed.path));
     fields.insert("function".to_owned(), serde_json::json!(function));
@@ -626,10 +1393,11 @@ fn tool_analyze_function(params: &serde_json::Value) -> Result<serde_json::Value
 }
 
 fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
-    let path = opt_str(params, "path").unwrap_or(".");
-    let regression_limits = parse_regression_limits(params)?;
-    let base = opt_str(params, "base");
-    let baseline_path = opt_str(params, "baseline");
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let config = load_config(path)?;
+    let regression_limits = parse_regression_limits(params, config.as_ref())?;
+    let base = opt_str(params, "base")?;
+    let baseline_path = opt_str(params, "baseline")?;
     if base.is_some() && baseline_path.is_some() {
         return Err((-32602, "base and baseline are exclusive".to_owned()));
     }
@@ -639,11 +1407,15 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
             "check regressions requires a base revision or baseline file".to_owned(),
         ));
     }
-    let thresholds = parse_thresholds(params, regression_limits.is_some())?;
-    let coverage = opt_str(params, "coverage")
+    let mut thresholds = parse_thresholds(params, regression_limits.is_some())?;
+    if let Some(config) = config.as_ref() {
+        fill_thresholds(&mut thresholds, config);
+    }
+    let coverage = opt_str(params, "coverage")?
         .map(load_coverage_file)
         .transpose()
         .map_err(|message| (-32602, message))?;
+    let excludes = config_excludes(config.as_ref());
     let mut rows = Vec::new();
     if let Some(base) = base {
         let mut report = crate::diff::analyze_changed(Path::new(path), base)
@@ -676,8 +1448,9 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
     } else if let Some(baseline_path) = baseline_path {
         let baseline = crate::baseline::Baseline::read(Path::new(baseline_path))
             .map_err(|error| (-32602, error.to_string()))?;
-        let report = crate::analyze_path(Path::new(path), coverage.as_ref())
-            .map_err(|error| (-32602, error.to_string()))?;
+        let report =
+            crate::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
+                .map_err(|error| (-32602, error.to_string()))?;
         let regressed: BTreeSet<(String, String)> = match &regression_limits {
             Some(limits) => baseline
                 .compare(&report, limits)
@@ -697,8 +1470,9 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
             }
         }
     } else {
-        let report = crate::analyze_path(Path::new(path), coverage.as_ref())
-            .map_err(|error| (-32602, error.to_string()))?;
+        let report =
+            crate::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
+                .map_err(|error| (-32602, error.to_string()))?;
         for file in &report.files {
             for function in &file.functions {
                 if thresholds.violates(&function.metrics) {
@@ -708,8 +1482,8 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
         }
     }
     let passed = rows.is_empty();
-    let (violations, truncated, total) = cap(&mut rows);
-    let mut fields = envelope_fields();
+    let (violations, truncated, total) = cap_with_limit(&mut rows, MAX_ENTRIES);
+    let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("check"));
     fields.insert("path".to_owned(), serde_json::json!(path));
     if let Some(base) = base {
@@ -748,9 +1522,34 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
     envelope(fields)
 }
 
+/// Fill request gaps from `[thresholds]`; explicit MCP fields win.
+fn fill_thresholds(thresholds: &mut Thresholds, config: &crate::config::Config) {
+    if thresholds.cognitive.is_none() {
+        thresholds.cognitive = config.thresholds.cognitive;
+    }
+    if thresholds.cyclomatic.is_none() {
+        thresholds.cyclomatic = config.thresholds.cyclomatic;
+    }
+    if thresholds.crap.is_none() {
+        thresholds.crap = config.thresholds.crap;
+    }
+    if thresholds.max_nesting.is_none() {
+        thresholds.max_nesting = config.thresholds.max_nesting;
+    }
+}
+
+/// Regression limits from the request, falling back to `[regressions]`.
+///
+/// `true` means "use the configured limits"; an object starts from the
+/// configured limits and overrides the fields it names, mirroring how
+/// thresholds treat explicit flags.
 fn parse_regression_limits(
     params: &serde_json::Value,
+    config: Option<&crate::config::Config>,
 ) -> Result<Option<RegressionLimits>, (i64, String)> {
+    let configured = config
+        .map(|selected| selected.regressions.clone())
+        .unwrap_or_default();
     let Some(value) = params.get("regressions") else {
         return Ok(None);
     };
@@ -758,12 +1557,12 @@ fn parse_regression_limits(
         return Ok(None);
     }
     if value == &serde_json::Value::Bool(true) {
-        return Ok(Some(RegressionLimits::default()));
+        return Ok(Some(configured));
     }
     let object = value
         .as_object()
         .ok_or((-32602, "regressions must be true or an object".to_owned()))?;
-    let mut limits = RegressionLimits::default();
+    let mut limits = configured;
     for key in ["cognitive", "cyclomatic", "max_nesting"] {
         if let Some(value) = object.get(key) {
             let limit = value.as_u64().ok_or((
@@ -884,7 +1683,7 @@ fn tool_explain_metric(params: &serde_json::Value) -> Result<serde_json::Value, 
             ));
         }
     };
-    let mut fields = envelope_fields();
+    let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("explain_metric"));
     fields.insert("metric".to_owned(), serde_json::json!(name));
     fields.insert("spec".to_owned(), serde_json::json!(METRIC_PROFILE));
@@ -893,7 +1692,7 @@ fn tool_explain_metric(params: &serde_json::Value) -> Result<serde_json::Value, 
 }
 
 fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
-    let path = opt_str(params, "path").unwrap_or(".");
+    let path = opt_str(params, "path")?.unwrap_or(".");
     let top = match params.get("top") {
         None | Some(serde_json::Value::Null) => 5,
         Some(value) => {
@@ -908,8 +1707,12 @@ fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i
             count.min(50)
         }
     };
-    let report =
-        crate::analyze_path(Path::new(path), None).map_err(|error| (-32602, error.to_string()))?;
+    let report = {
+        let config = load_config(path)?;
+        let excludes = config_excludes(config.as_ref());
+        crate::analyze_path_with_excludes(Path::new(path), None, &excludes)
+            .map_err(|error| (-32602, error.to_string()))?
+    };
     let files = report.files.len();
     let mut functions = 0usize;
     let mut parse_errors = 0usize;
@@ -927,7 +1730,7 @@ fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i
         selected.truncate(top);
         selected
     };
-    let mut fields = envelope_fields();
+    let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("repo_summary"));
     fields.insert("path".to_owned(), serde_json::json!(path));
     fields.insert(
@@ -954,31 +1757,20 @@ fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i
 }
 
 fn tool_test_targets(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
-    let path = opt_str(params, "path").unwrap_or(".");
-    let coverage_path = opt_str(params, "coverage").ok_or((
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let coverage_path = opt_str(params, "coverage")?.ok_or((
         -32602,
         "test_targets requires a coverage file path".to_owned(),
     ))?;
-    let top = match params.get("top") {
-        None | Some(serde_json::Value::Null) => None,
-        Some(value) => {
-            let count = value
-                .as_u64()
-                .ok_or((-32602, "top must be a positive integer".to_owned()))?;
-            let count =
-                usize::try_from(count).map_err(|_| (-32602, "top must fit in usize".to_owned()))?;
-            if count == 0 {
-                return Err((-32602, "top must be at least 1".to_owned()));
-            }
-            Some(count)
-        }
-    };
+    let top = parse_top_param(params, MAX_ENTRIES)?;
     let coverage = load_coverage_file(coverage_path).map_err(|message| (-32602, message))?;
-    let report = crate::analyze_path(Path::new(path), Some(&coverage))
+    let config = load_config(path)?;
+    let excludes = config_excludes(config.as_ref());
+    let report = crate::analyze_path_with_excludes(Path::new(path), Some(&coverage), &excludes)
         .map_err(|error| (-32602, error.to_string()))?;
     let ranked = crate::test_targets::test_targets(&report, &coverage);
     let total = ranked.len();
-    let limit = top.unwrap_or(MAX_ENTRIES).min(total);
+    let limit = top.min(total);
     let truncated = total > limit;
     let mut rows = Vec::with_capacity(limit);
     for target in &ranked[..limit] {
@@ -992,7 +1784,7 @@ fn tool_test_targets(params: &serde_json::Value) -> Result<serde_json::Value, (i
             "unknown": target.unknown,
         }));
     }
-    let mut fields = envelope_fields();
+    let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("test_targets"));
     fields.insert("path".to_owned(), serde_json::json!(path));
     fields.insert("targets".to_owned(), serde_json::Value::Array(rows));
@@ -1046,6 +1838,563 @@ fn initialize_result(params: &serde_json::Value) -> serde_json::Value {
     })
 }
 
+/// Compare checked-in PostgreSQL plan directories without touching a database.
+///
+/// `current` and `baseline` stay root-relative; absolute paths are rejected.
+/// Unknown arguments, non-finite or negative limits, and `top` above the
+/// global entry cap are invalid-request errors.
+/// Reject unknown object fields so typos fail loudly instead of silently.
+fn reject_unknown(
+    params: &serde_json::Value,
+    tool: &str,
+    known: &[&str],
+) -> Result<(), (i64, String)> {
+    if let Some(object) = params.as_object() {
+        for key in object.keys() {
+            if !known.contains(&key.as_str()) {
+                return Err((-32602, format!("unknown {tool} argument '{key}'")));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Shared `top` row cap: 1..=MAX_ENTRIES, defaulting when absent or null.
+fn parse_top_param(params: &serde_json::Value, default: usize) -> Result<usize, (i64, String)> {
+    match params.get("top") {
+        None | Some(serde_json::Value::Null) => Ok(default),
+        Some(value) => {
+            let count = value
+                .as_u64()
+                .ok_or((-32602, "top must be a positive integer".to_owned()))?;
+            let count =
+                usize::try_from(count).map_err(|_| (-32602, "top must fit in usize".to_owned()))?;
+            if count == 0 {
+                return Err((-32602, "top must be at least 1".to_owned()));
+            }
+            if count > MAX_ENTRIES {
+                return Err((-32602, format!("top must be at most {MAX_ENTRIES}")));
+            }
+            Ok(count)
+        }
+    }
+}
+
+/// `leadline.toml` from the analysis root of a tool's `path` argument.
+///
+/// MCP tools must match the CLI: `[analysis]`, `[sql]`, and
+/// `[vulnerabilities]` all apply. A broken config is an invalid-params error
+/// so hosts see the same typo the CLI rejects.
+fn load_config(path: &str) -> Result<Option<crate::config::Config>, (i64, String)> {
+    let path = Path::new(path);
+    let dir = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().unwrap_or(Path::new(".")).to_path_buf()
+    };
+    let dir = if dir.is_dir() {
+        dir
+    } else {
+        PathBuf::from(".")
+    };
+    crate::config::load_from(&dir).map_err(|error| (-32602, error.to_string()))
+}
+
+/// `[analysis].exclude` for one tool path; empty without a config file.
+fn config_excludes(config: Option<&crate::config::Config>) -> Vec<String> {
+    config
+        .map(|selected| selected.analysis_excludes.clone())
+        .unwrap_or_default()
+}
+
+/// Optional boolean flag, defaulting to false when absent or null.
+fn opt_flag(params: &serde_json::Value, key: &str, tool: &str) -> Result<bool, (i64, String)> {
+    match params.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(false),
+        Some(value) => value
+            .as_bool()
+            .ok_or((-32602, format!("{tool} '{key}' must be a boolean"))),
+    }
+}
+
+/// Required-or-optional array of path strings (max 32); shape validation
+/// only, callers choose lexical or analysis-root resolution.
+fn path_arguments(
+    params: &serde_json::Value,
+    tool: &str,
+    key: &str,
+    required: bool,
+) -> Result<Vec<String>, (i64, String)> {
+    let Some(value) = params.get(key) else {
+        if required {
+            return Err((-32602, format!("{tool} requires '{key}'")));
+        }
+        return Ok(Vec::new());
+    };
+    if value.is_null() && !required {
+        return Ok(Vec::new());
+    }
+    let entries = value
+        .as_array()
+        .ok_or((-32602, format!("{tool} '{key}' must be an array of paths")))?;
+    if entries.len() > 32 {
+        return Err((-32602, format!("{tool} '{key}' accepts at most 32 entries")));
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .map(str::to_owned)
+                .ok_or((-32602, format!("{tool} '{key}' entries must be strings")))
+        })
+        .collect()
+}
+
+/// Lexically normalize one root-relative path: absolute paths, parent
+/// escapes, backslashes, and control characters are rejected.
+fn relative_path(tool: &str, key: &str, path: &str) -> Result<String, (i64, String)> {
+    crate::external::strict_relative_path(path).map_err(|error| {
+        (
+            -32602,
+            format!("{tool} '{key}' must be root-relative: {error}"),
+        )
+    })
+}
+
+/// Required-or-optional array of artifact paths that must stay inside the
+/// working directory.
+fn artifact_paths(
+    params: &serde_json::Value,
+    tool: &str,
+    key: &str,
+    required: bool,
+) -> Result<Vec<PathBuf>, (i64, String)> {
+    path_arguments(params, tool, key, required)?
+        .into_iter()
+        .map(|raw| {
+            let normalized = relative_path(tool, key, &raw)?;
+            contained_artifact_path(tool, key, &normalized)
+        })
+        .collect()
+}
+
+/// Resolve one lexically normalized artifact path, rejecting paths that
+/// resolve outside the working directory.
+///
+/// The full path is resolved when it exists; otherwise its parent directory
+/// is, so a missing artifact cannot hide behind a symlinked directory. The
+/// later read resolves again, so only a local swap between the two resolves
+/// can still race.
+fn contained_artifact_path(
+    tool: &str,
+    key: &str,
+    normalized: &str,
+) -> Result<PathBuf, (i64, String)> {
+    let outside = || {
+        (
+            -32602,
+            format!("{tool} '{key}' must stay inside the working directory"),
+        )
+    };
+    let root = std::env::current_dir()
+        .and_then(std::fs::canonicalize)
+        .map_err(|_| outside())?;
+    let candidate = Path::new(normalized);
+    let resolved = std::fs::canonicalize(candidate).ok().or_else(|| {
+        let parent = candidate
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())?;
+        std::fs::canonicalize(parent).ok()
+    });
+    if resolved.is_some_and(|resolved| !resolved.starts_with(&root)) {
+        return Err(outside());
+    }
+    Ok(PathBuf::from(normalized))
+}
+
+/// Validate and resolve one root-relative artifact path.
+fn artifact_path(tool: &str, key: &str, path: &str) -> Result<PathBuf, (i64, String)> {
+    let normalized = relative_path(tool, key, path)?;
+    contained_artifact_path(tool, key, &normalized)
+}
+
+/// Triage scanner SARIF with code context, without running scanners.
+///
+/// Artifact arguments stay root-relative; absolute paths, unknown fields,
+/// non-array inputs, bad severities, and over-limit `top` are rejected.
+fn tool_security_findings(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(
+        params,
+        "security_findings",
+        &[
+            "path",
+            "sarif",
+            "baseline_sarif",
+            "base",
+            "staged",
+            "target",
+            "minimum_severity",
+            "new_only",
+            "changed_only",
+            "top",
+        ],
+    )?;
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let sarif = artifact_paths(params, "security_findings", "sarif", true)?;
+    let baseline_sarif = artifact_paths(params, "security_findings", "baseline_sarif", false)?;
+    let base = opt_str(params, "base")?;
+    let staged = opt_flag(params, "staged", "security_findings")?;
+    let target = opt_str(params, "target")?;
+    match (base.is_some(), staged, target.is_some()) {
+        (true, true, _) => {
+            return Err((-32602, "base and staged are exclusive".to_owned()));
+        }
+        (_, true, true) => {
+            return Err((-32602, "staged and target are exclusive".to_owned()));
+        }
+        (true, _, true) => {
+            return Err((-32602, "base and target are exclusive".to_owned()));
+        }
+        _ => {}
+    }
+    let new_only = opt_flag(params, "new_only", "security_findings")?;
+    let changed_only = opt_flag(params, "changed_only", "security_findings")?;
+    let comparison = match (base, staged, target) {
+        (Some(revision), false, None) => {
+            Some(crate::security::ChangeComparison::Base(revision.to_owned()))
+        }
+        (None, true, None) => Some(crate::security::ChangeComparison::Staged),
+        (None, false, Some(revision)) => Some(crate::security::ChangeComparison::Target(
+            revision.to_owned(),
+        )),
+        (None, false, None) => None,
+        _ => unreachable!("exclusive comparison flags are rejected above"),
+    };
+    if changed_only && comparison.is_none() {
+        return Err((
+            -32602,
+            "changed_only requires base, staged, or target".to_owned(),
+        ));
+    }
+    let gate = match opt_str(params, "minimum_severity")? {
+        None => None,
+        Some(raw) => Some(crate::security::SecurityGate {
+            minimum: crate::security::parse_gate_severity(raw).ok_or((
+                -32602,
+                format!("unknown minimum_severity '{raw}': expected 'low', 'medium', 'high', or 'critical'"),
+            ))?,
+            new_only,
+            changed_only,
+        }),
+    };
+    let top = parse_top_param(params, crate::security::AGENT_DEFAULT_TOP)?;
+    let outcome = crate::security::assemble(&crate::security::SecurityRequest {
+        path: PathBuf::from(path),
+        sarif,
+        baseline_sarif,
+        comparison,
+        gate,
+    })
+    .map_err(|error| (-32602, error.message().to_owned()))?;
+    let agent = crate::security::agent_json(&outcome.report, top);
+    let (violations, violations_truncated) = cap_violations(&outcome.violations, top)?;
+    let mut fields = serde_json::Map::new();
+    fields.insert("tool".to_owned(), serde_json::json!("security_findings"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    fields.insert(
+        "findings".to_owned(),
+        agent.get("findings").cloned().unwrap_or_default(),
+    );
+    fields.insert("violations".to_owned(), violations);
+    fields.insert(
+        "truncated".to_owned(),
+        serde_json::Value::from(
+            agent
+                .get("truncated")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                || violations_truncated,
+        ),
+    );
+    envelope(fields)
+}
+
+/// Prioritize vulnerable dependencies with changed-import evidence.
+///
+/// Scanner artifacts stay root-relative (max 32 each); at least one of
+/// `osv`/`trivy` is required. Unknown fields, non-array inputs, absolute
+/// paths, bad severities, and over-limit `top` are rejected.
+fn tool_vulnerabilities(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(
+        params,
+        "vulnerabilities",
+        &[
+            "path",
+            "osv",
+            "trivy",
+            "baseline_osv",
+            "baseline_trivy",
+            "base",
+            "staged",
+            "target",
+            "minimum_severity",
+            "top",
+        ],
+    )?;
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let osv = artifact_paths(params, "vulnerabilities", "osv", false)?;
+    let trivy = artifact_paths(params, "vulnerabilities", "trivy", false)?;
+    if osv.is_empty() && trivy.is_empty() {
+        return Err((
+            -32602,
+            "vulnerabilities requires at least one of 'osv' or 'trivy'".to_owned(),
+        ));
+    }
+    let baseline_osv = artifact_paths(params, "vulnerabilities", "baseline_osv", false)?;
+    let baseline_trivy = artifact_paths(params, "vulnerabilities", "baseline_trivy", false)?;
+    let base = opt_str(params, "base")?;
+    let staged = opt_flag(params, "staged", "vulnerabilities")?;
+    let target = opt_str(params, "target")?;
+    match (base.is_some(), staged, target.is_some()) {
+        (true, true, _) => {
+            return Err((-32602, "base and staged are exclusive".to_owned()));
+        }
+        (_, true, true) => {
+            return Err((-32602, "staged and target are exclusive".to_owned()));
+        }
+        (true, _, true) => {
+            return Err((-32602, "base and target are exclusive".to_owned()));
+        }
+        _ => {}
+    }
+    let comparison = match (base, staged, target) {
+        (Some(revision), false, None) => {
+            Some(crate::security::ChangeComparison::Base(revision.to_owned()))
+        }
+        (None, true, None) => Some(crate::security::ChangeComparison::Staged),
+        (None, false, Some(revision)) => Some(crate::security::ChangeComparison::Target(
+            revision.to_owned(),
+        )),
+        (None, false, None) => None,
+        _ => unreachable!("exclusive comparison flags are rejected above"),
+    };
+    let config = load_config(path)?;
+    let gate = match opt_str(params, "minimum_severity")? {
+        Some(raw) => Some(crate::security::parse_gate_severity(raw).ok_or((
+            -32602,
+            format!(
+                "unknown minimum_severity '{raw}': expected 'low', 'medium', 'high', or 'critical'"
+            ),
+        ))?),
+        None => config
+            .as_ref()
+            .and_then(|selected| selected.vulnerabilities.minimum_severity),
+    };
+    let top = parse_top_param(params, crate::security::AGENT_DEFAULT_TOP)?;
+    let outcome = crate::vulnerabilities::assemble(&crate::vulnerabilities::VulnerabilityRequest {
+        path: PathBuf::from(path),
+        osv,
+        trivy,
+        baseline_osv,
+        baseline_trivy,
+        comparison,
+        gate,
+    })
+    .map_err(|error| (-32602, error.to_string()))?;
+    let agent = crate::vulnerabilities::agent_json(&outcome.report, top);
+    let (violations, violations_truncated) = cap_violations(&outcome.violations, top)?;
+    let mut fields = serde_json::Map::new();
+    fields.insert("tool".to_owned(), serde_json::json!("vulnerabilities"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    fields.insert(
+        "findings".to_owned(),
+        agent.get("findings").cloned().unwrap_or_default(),
+    );
+    fields.insert("violations".to_owned(), violations);
+    fields.insert(
+        "truncated".to_owned(),
+        serde_json::Value::from(
+            agent
+                .get("truncated")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                || violations_truncated,
+        ),
+    );
+    fields.insert(
+        "reachability_model".to_owned(),
+        serde_json::json!("changed-direct-imports"),
+    );
+    envelope(fields)
+}
+
+/// Flag static PostgreSQL query risks without executing SQL.
+///
+/// Unknown fields, bad limits, absolute migration roots, bad severities,
+/// and over-limit `top` are rejected.
+fn tool_sql_risks(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(
+        params,
+        "sql_risks",
+        &[
+            "path",
+            "large_offset",
+            "migration_roots",
+            "minimum_severity",
+            "top",
+        ],
+    )?;
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let config = load_config(path)?;
+    let defaults = config
+        .as_ref()
+        .map(|selected| selected.sql.clone())
+        .unwrap_or_default();
+    let large_offset = match params.get("large_offset") {
+        None | Some(serde_json::Value::Null) => defaults.large_offset,
+        Some(value) => {
+            let threshold = value
+                .as_u64()
+                .ok_or((-32602, "large_offset must be a positive integer".to_owned()))?;
+            if threshold == 0 {
+                return Err((-32602, "large_offset must be at least 1".to_owned()));
+            }
+            threshold
+        }
+    };
+    let migration_roots = match params.get("migration_roots") {
+        None | Some(serde_json::Value::Null) => defaults.migration_roots,
+        // Migration roots are analysis-root-relative, so working-directory
+        // containment must not apply; the CLI normalizer owns lexical rules
+        // (including its rejection of interior `..`), keeping exact parity.
+        Some(_) => path_arguments(params, "sql_risks", "migration_roots", false)?
+            .into_iter()
+            .map(|text| {
+                crate::config::normalize_migration_root(&text)
+                    .map_err(|error| (-32602, error.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    let gate = match opt_str(params, "minimum_severity")? {
+        None => None,
+        Some(raw) => Some(crate::security::parse_gate_severity(raw).ok_or((
+            -32602,
+            format!(
+                "unknown minimum_severity '{raw}': expected 'low', 'medium', 'high', or 'critical'"
+            ),
+        ))?),
+    };
+    let top = parse_top_param(params, crate::security::AGENT_DEFAULT_TOP)?;
+    let excludes = config_excludes(config.as_ref());
+    let report = crate::sql::analyze_sql_path(
+        Path::new(path),
+        &crate::config::SqlConfig {
+            large_offset,
+            migration_roots,
+        },
+        &excludes,
+    )
+    .map_err(|error| (-32602, error.to_string()))?;
+    let outcome = crate::sql::outcome(report, gate);
+    let agent = crate::sql::agent_json(&outcome.report, top);
+    let (violations, violations_truncated) = cap_violations(&outcome.violations, top)?;
+    let mut fields = serde_json::Map::new();
+    fields.insert("tool".to_owned(), serde_json::json!("sql_risks"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    fields.insert("dialect".to_owned(), serde_json::json!("postgresql"));
+    fields.insert(
+        "schema_evidence_available".to_owned(),
+        serde_json::json!(outcome.report.schema_evidence_available),
+    );
+    fields.insert(
+        "findings".to_owned(),
+        agent.get("findings").cloned().unwrap_or_default(),
+    );
+    fields.insert("violations".to_owned(), violations);
+    fields.insert(
+        "truncated".to_owned(),
+        serde_json::Value::from(
+            agent
+                .get("truncated")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                || violations_truncated,
+        ),
+    );
+    envelope(fields)
+}
+
+fn tool_sql_plan(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(
+        params,
+        "sql_plan",
+        &[
+            "current",
+            "baseline",
+            "max_cost_increase_percent",
+            "max_plan_rows_ratio",
+            "max_estimate_error_ratio",
+            "top",
+        ],
+    )?;
+    let current =
+        opt_str(params, "current")?.ok_or((-32602, "sql_plan requires 'current'".to_owned()))?;
+    let baseline =
+        opt_str(params, "baseline")?.ok_or((-32602, "sql_plan requires 'baseline'".to_owned()))?;
+    let current_path = artifact_path("sql_plan", "current", current)?;
+    let baseline_path = artifact_path("sql_plan", "baseline", baseline)?;
+    let limits = crate::pg_plan::PlanLimits {
+        max_cost_increase_percent: opt_plan_limit(params, "max_cost_increase_percent")?,
+        max_plan_rows_ratio: opt_plan_limit(params, "max_plan_rows_ratio")?,
+        max_estimate_error_ratio: opt_plan_limit(params, "max_estimate_error_ratio")?,
+    };
+    let top = parse_top_param(params, crate::security::AGENT_DEFAULT_TOP)?;
+    let report = crate::pg_plan::compare_plan_directories(&current_path, &baseline_path, &limits)
+        .map_err(|error| (-32602, error.to_string()))?;
+    let agent = crate::pg_plan::agent_json(&report, top);
+    let (violations, violations_truncated) = cap_violations(&report.violations, top)?;
+    let mut fields = serde_json::Map::new();
+    fields.insert("tool".to_owned(), serde_json::json!("sql_plan"));
+    fields.insert("current".to_owned(), serde_json::json!(current));
+    fields.insert("baseline".to_owned(), serde_json::json!(baseline));
+    fields.insert(
+        "queries".to_owned(),
+        agent.get("queries").cloned().unwrap_or_default(),
+    );
+    fields.insert("violations".to_owned(), violations);
+    fields.insert(
+        "truncated".to_owned(),
+        serde_json::Value::from(
+            agent
+                .get("truncated")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                || violations_truncated,
+        ),
+    );
+    envelope(fields)
+}
+
+/// Optional non-negative finite `sql_plan` gate limit.
+fn opt_plan_limit(params: &serde_json::Value, key: &str) -> Result<Option<f64>, (i64, String)> {
+    match params.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => {
+            let limit = value
+                .as_f64()
+                .ok_or((-32602, format!("sql_plan '{key}' must be a number")))?;
+            if !limit.is_finite() || limit < 0.0 {
+                return Err((
+                    -32602,
+                    format!("sql_plan '{key}' must be finite and non-negative"),
+                ));
+            }
+            Ok(Some(limit))
+        }
+    }
+}
+
 fn tools_list_result() -> serde_json::Value {
     serde_json::json!({
         "tools": [
@@ -1058,7 +2407,7 @@ fn tools_list_result() -> serde_json::Value {
                     "properties": {
                         "path": { "type": "string", "default": "." },
                         "coverage": { "type": ["string", "null"], "description": "Coverage file path (.info for LCOV, .xml for JaCoCo)." },
-                        "top": { "type": "integer", "minimum": 1, "description": "Keep at most this many rows." },
+                        "top": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Keep at most this many rows." },
                         "sort_by": { "type": "string", "enum": ["crap", "cognitive", "cyclomatic"], "description": "Sort rows by metric descending before capping." },
                         "min_crap": { "type": "number", "description": "Drop functions whose CRAP is below this floor; unknown CRAP is dropped." },
                     },
@@ -1076,7 +2425,8 @@ fn tools_list_result() -> serde_json::Value {
                         "target": { "type": "string", "default": "worktree", "description": "'worktree', 'index', or a revision to compare against base." },
                         "renames": { "type": "boolean", "default": false, "description": "Detect Git file renames and pair old-path content with new-path content." },
                         "explain": { "type": "boolean", "default": false, "description": "Include multiset-added contribution causes on regression rows." },
-                        "top": { "type": "integer", "minimum": 1, "description": "Keep at most this many changes." },
+                        "top": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Keep at most this many changes." },
+
                         "sort_by": { "type": "string", "enum": ["crap", "cognitive", "cyclomatic"], "description": "Sort changes by current-side metric descending." },
                         "min_crap": { "type": "number", "description": "Drop changes whose current-side CRAP is below this floor." },
                         "min_delta": { "type": "number", "description": "Drop changes whose max absolute delta is below this floor." },
@@ -1118,7 +2468,7 @@ fn tools_list_result() -> serde_json::Value {
                             },
                         },
                         "regressions": {
-                            "description": "true for zero-tolerance deltas, or an object of allowed non-negative deltas.",
+                            "description": "true for the configured leadline.toml [regressions] limits (zero without a config), or an object of allowed non-negative deltas overriding those limits.",
                             "type": ["boolean", "object"],
                             "properties": {
                                 "cognitive": { "type": "integer", "minimum": 0 },
@@ -1155,6 +2505,79 @@ fn tools_list_result() -> serde_json::Value {
                 },
             },
             {
+                "name": "security_findings",
+                "description": "Triage scanner SARIF findings with function, risk, and changed-code context. Read-only: never runs scanners or touches the network.",
+                "annotations": { "title": "Triage security findings", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." },
+                        "sarif": { "type": "array", "items": { "type": "string" }, "maxItems": 32, "description": "Root-relative SARIF files." },
+                        "baseline_sarif": { "type": "array", "items": { "type": "string" }, "maxItems": 32, "description": "Root-relative baseline SARIF files for new/existing state." },
+                        "base": { "type": "string", "description": "Git base revision for changed-state attribution. Exclusive with staged/target." },
+                        "staged": { "type": "boolean", "default": false, "description": "Compare against the index. Exclusive with base/target." },
+                        "target": { "type": "string", "description": "Revision to compare against base. Exclusive with base/staged." },
+                        "minimum_severity": { "type": "string", "enum": ["low", "medium", "high", "critical"], "description": "Gate floor; absent means informational." },
+                        "new_only": { "type": "boolean", "default": false, "description": "Gate only new findings." },
+                        "changed_only": { "type": "boolean", "default": false, "description": "Gate only changed findings." },
+                        "top": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Keep at most this many findings." },
+                    },
+                    "required": ["sarif"],
+                },
+            },
+            {
+                "name": "sql_plan",
+                "description": "Compare checked-in PostgreSQL EXPLAIN (FORMAT JSON) directories for plan regressions. Read-only: never connects to a database or executes SQL.",
+                "annotations": { "title": "Check plan regressions", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "current": { "type": "string", "description": "Root-relative directory of current EXPLAIN JSON files." },
+                        "baseline": { "type": "string", "description": "Root-relative directory of baseline EXPLAIN JSON files." },
+                        "max_cost_increase_percent": { "type": "number", "minimum": 0, "description": "Fail cost increases past this percent." },
+                        "max_plan_rows_ratio": { "type": "number", "minimum": 0, "description": "Fail row growth past this ratio." },
+                        "max_estimate_error_ratio": { "type": "number", "minimum": 0, "description": "Fail planner estimate error past this absolute ratio." },
+                        "top": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Keep at most this many changed queries." },
+                    },
+                    "required": ["current", "baseline"],
+                },
+            },
+            {
+                "name": "vulnerabilities",
+                "description": "Prioritize vulnerable dependencies from OSV-Scanner/Trivy reports with changed-import evidence. Read-only: never queries registries or the network.",
+                "annotations": { "title": "Prioritize vulnerabilities", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." },
+                        "osv": { "type": "array", "items": { "type": "string" }, "maxItems": 32, "description": "Root-relative OSV-Scanner files." },
+                        "trivy": { "type": "array", "items": { "type": "string" }, "maxItems": 32, "description": "Root-relative Trivy files." },
+                        "baseline_osv": { "type": "array", "items": { "type": "string" }, "maxItems": 32, "description": "Root-relative baseline OSV files." },
+                        "baseline_trivy": { "type": "array", "items": { "type": "string" }, "maxItems": 32, "description": "Root-relative baseline Trivy files." },
+                        "base": { "type": "string", "description": "Git base revision for changed-import evidence. Exclusive with staged/target." },
+                        "staged": { "type": "boolean", "default": false, "description": "Compare against the index. Exclusive with base/target." },
+                        "target": { "type": "string", "description": "Revision to compare against base. Exclusive with base/staged." },
+                        "minimum_severity": { "type": "string", "enum": ["low", "medium", "high", "critical"], "description": "Gate floor; absent means informational." },
+                        "top": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Keep at most this many findings." },
+                    },
+                },
+            },
+            {
+                "name": "sql_risks",
+                "description": "Flag static PostgreSQL query risks in .sql files and host-language call sites. Read-only: never executes SQL or connects to a database.",
+                "annotations": { "title": "Flag SQL risks", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." },
+                        "large_offset": { "type": "integer", "minimum": 1, "description": "Fail numeric OFFSET past this count." },
+                        "migration_roots": { "type": "array", "items": { "type": "string" }, "maxItems": 32, "description": "Root-relative migration directories declaring tables." },
+                        "minimum_severity": { "type": "string", "enum": ["low", "medium", "high", "critical"], "description": "Gate floor; absent means informational." },
+                        "top": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Keep at most this many findings." },
+                    },
+                },
+            },
+            {
                 "name": "test_targets",
                 "description": "Use to decide what to test: ranks functions holding uncovered decision lines by CRAP. Requires coverage.",
                 "annotations": { "title": "Rank test targets", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
@@ -1163,7 +2586,7 @@ fn tools_list_result() -> serde_json::Value {
                     "properties": {
                         "path": { "type": "string", "default": "." },
                         "coverage": { "type": "string", "description": "Required coverage file path (.info for LCOV, .xml for JaCoCo). Line coverage required; branch records (BRDA, mb/cb) improve ratios when present." },
-                        "top": { "type": "integer", "minimum": 1, "description": "Keep at most this many targets." },
+                        "top": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Keep at most this many targets." },
                     },
                     "required": ["coverage"],
                 },
@@ -1184,20 +2607,156 @@ fn error_response(id: serde_json::Value, code: i64, message: &str) -> serde_json
     })
 }
 
+/// One-error response for a batch that cannot be processed. Batch requests
+/// keep the array shape so clients that posted a batch can parse the reply.
+fn batch_error_response(code: i64, message: &str) -> String {
+    serde_json::Value::Array(vec![error_response(serde_json::Value::Null, code, message)])
+        .to_string()
+}
+
 fn parse_error_response() -> String {
     error_response(serde_json::Value::Null, -32700, "Parse error").to_string()
 }
 
-fn opt_str<'a>(params: &'a serde_json::Value, key: &str) -> Option<&'a str> {
-    params.get(key).and_then(|value| {
-        if value.is_null() {
-            None
-        } else {
-            value.as_str()
-        }
-    })
+/// Optional string argument: absent or null when unset; any other type is an
+/// invalid-params error instead of silently reading as absent.
+fn opt_str<'a>(params: &'a serde_json::Value, key: &str) -> Result<Option<&'a str>, (i64, String)> {
+    match params.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(Some)
+            .ok_or((-32602, format!("{key} must be a string"))),
+    }
+}
+
+/// Internal generated-row accessor; never reads user parameters.
+fn row_str<'a>(row: &'a serde_json::Value, key: &str) -> &'a str {
+    row.get(key)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
 }
 
 fn req_str<'a>(params: &'a serde_json::Value, key: &str) -> Result<&'a str, (i64, String)> {
-    opt_str(params, key).ok_or((-32602, format!("missing required string param '{key}'")))
+    opt_str(params, key)?.ok_or((-32602, format!("missing required string param '{key}'")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_header_rules_require_a_loopback_authority_when_bound_locally() {
+        assert!(host_allowed(Some("localhost"), true));
+        assert!(host_allowed(Some("127.0.0.1:3000"), true));
+        assert!(host_allowed(Some("[::1]:3000"), true));
+        assert!(host_allowed(Some("127.0.0.2"), true));
+        assert!(!host_allowed(Some("evil.example"), true));
+        assert!(!host_allowed(None, true));
+        assert!(!host_allowed(Some(""), true));
+        // A wildcard-bound listener answers whatever address was reached.
+        assert!(host_allowed(Some("leadline.internal"), false));
+    }
+
+    #[test]
+    fn loopback_detection_covers_ipv4_mapped_addresses() {
+        assert!(is_loopback_ip("127.0.0.1".parse().unwrap()));
+        assert!(is_loopback_ip("::1".parse().unwrap()));
+        assert!(is_loopback_ip("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!is_loopback_ip("192.0.2.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn expired_read_deadlines_fail_with_408() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = std::net::TcpStream::connect(address).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let past = std::time::Instant::now() - std::time::Duration::from_millis(1);
+        assert_eq!(arm_read_deadline(&server, past).unwrap_err().0, 408);
+        let future = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        assert!(arm_read_deadline(&server, future).is_ok());
+        drop(client);
+    }
+
+    #[test]
+    fn jsonrpc_ids_reject_structured_values() {
+        assert!(valid_id(&serde_json::json!("1")));
+        assert!(valid_id(&serde_json::json!(1)));
+        assert!(valid_id(&serde_json::Value::Null));
+        assert!(!valid_id(&serde_json::json!(true)));
+        assert!(!valid_id(&serde_json::json!([1])));
+        assert!(!valid_id(&serde_json::json!({"a": 1})));
+    }
+
+    #[test]
+    fn expired_write_deadlines_fail() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = std::net::TcpStream::connect(address).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let mut writer = DeadlineWriter {
+            stream: &server,
+            deadline: std::time::Instant::now() - std::time::Duration::from_millis(1),
+        };
+        use std::io::Write as _;
+        assert!(writer.write_all(b"x").is_err());
+        drop(client);
+    }
+
+    #[test]
+    fn body_reservations_enforce_the_global_ceiling() {
+        let first = reserve_body_bytes(MAX_INFLIGHT_BODY_BYTES).unwrap();
+        assert_eq!(reserve_body_bytes(1).unwrap_err().0, 503);
+        drop(first);
+        // Releasing restores the budget for later requests.
+        assert!(reserve_body_bytes(MAX_INFLIGHT_BODY_BYTES).is_ok());
+    }
+
+    #[test]
+    fn path_arguments_stay_raw_for_the_caller_to_resolve() {
+        let params = serde_json::json!({ "roots": ["migrations", "a/../b"] });
+        // Shape validation keeps the raw text: migration roots must reach
+        // normalize_migration_root unchanged so its `..` rejection applies.
+        assert_eq!(
+            path_arguments(&params, "t", "roots", false).unwrap(),
+            vec!["migrations".to_owned(), "a/../b".to_owned()]
+        );
+        // Artifact paths normalize interior parents and reject escapes.
+        assert_eq!(relative_path("t", "roots", "a/../b").unwrap(), "b");
+        assert!(relative_path("t", "roots", "../escape").is_err());
+        assert!(relative_path("t", "roots", "/abs").is_err());
+    }
+
+    #[test]
+    fn dispatch_method_covers_known_methods_and_rejects_unknown() {
+        assert!(dispatch_method("ping", &serde_json::Value::Null).is_ok());
+        assert_eq!(
+            dispatch_method("does/not/exist", &serde_json::Value::Null)
+                .unwrap_err()
+                .0,
+            -32601
+        );
+    }
+
+    #[test]
+    fn stdio_lines_are_bounded_and_arrays_are_rejected_for_direct_tools() {
+        let mut reader = std::io::BufReader::new(&b"{\"id\":1}\n"[..]);
+        assert_eq!(
+            read_request_line(&mut reader, 64).unwrap().as_deref(),
+            Some("{\"id\":1}\n")
+        );
+        assert_eq!(read_request_line(&mut reader, 64).unwrap(), None);
+        // A line past the limit fails instead of allocating the rest.
+        let mut reader = std::io::BufReader::new(&b"aaaaaaaaaaaaaaaaaaaa\n"[..]);
+        assert!(read_request_line(&mut reader, 8).is_err());
+        // Direct tool methods take named parameters only, so an array must
+        // not silently analyze the default path.
+        assert_eq!(
+            dispatch_method("analyze", &serde_json::json!([1]))
+                .unwrap_err()
+                .0,
+            -32602
+        );
+    }
 }

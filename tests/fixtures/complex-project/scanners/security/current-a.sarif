@@ -1,0 +1,31 @@
+{
+  "version": "2.1.0",
+  "runs": [{
+    "tool": {"driver": {"name": "semgrep"}},
+    "results": [
+      {
+        "ruleId": "legacy-auth",
+        "level": "warning",
+        "message": {"text": "existing finding"},
+        "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/api.ts"}, "region": {"startLine": 10}}}],
+        "partialFingerprints": {"primaryLocationLineHash": "legacy-1"}
+      },
+      {
+        "ruleId": "sql-injection",
+        "level": "error",
+        "message": {"text": "SECRET_SENTINEL dynamic query"},
+        "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/store.ts"}, "region": {"startLine": 3}}}],
+        "partialFingerprints": {"primaryLocationLineHash": "injection-1"},
+        "properties": {"security-severity": "8.8"}
+      },
+      {
+        "ruleId": "hardcoded-secret",
+        "level": "error",
+        "message": {"text": "SECRET_SENTINEL credential"},
+        "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/service.ts"}, "region": {"startLine": 12}}}],
+        "partialFingerprints": {"primaryLocationLineHash": "secret-1"},
+        "properties": {"security-severity": "9.9"}
+      }
+    ]
+  }]
+}

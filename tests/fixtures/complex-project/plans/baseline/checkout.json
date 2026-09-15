@@ -1,0 +1,13 @@
+[{
+  "Plan": {
+    "Node Type": "Hash Join",
+    "Total Cost": 100.0,
+    "Plan Rows": 100,
+    "Actual Rows": 100,
+    "Actual Loops": 1,
+    "Plans": [
+      {"Node Type": "Index Scan", "Relation Name": "users", "Index Name": "users_pkey", "Total Cost": 20.0, "Plan Rows": 10, "Actual Rows": 10, "Actual Loops": 1},
+      {"Node Type": "Seq Scan", "Relation Name": "orders", "Total Cost": 60.0, "Plan Rows": 90, "Actual Rows": 90, "Actual Loops": 1}
+    ]
+  }
+}]

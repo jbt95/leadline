@@ -1,6 +1,6 @@
 # Configuration
 
-Optional file: `leadline.toml` in the analysis root. CLI flags override file values. Unknown keys are a config error (exit `2`).
+Optional file: `leadline.toml` in the analysis root. CLI flags override file values, and MCP tools read the same file from their `path` argument's analysis root, so `[analysis]`, `[sql]`, and `[vulnerabilities]` behave identically on both surfaces. Unknown keys are a config error (exit `2`).
 
 ```toml
 [analysis]
@@ -49,6 +49,19 @@ Metric profiles. Both profile keys must be `"default"`.
 ## `[thresholds.function]`
 
 Absolute limits for `check`. Any subset of `cognitive`, `cyclomatic`, `max_nesting` (integers), and `crap` (float) is allowed. A value fails when it exceeds the limit. Unknown CRAP also fails a CRAP gate.
+
+## `[vulnerabilities]`
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `minimum_severity` | `low` \| `medium` \| `high` \| `critical` | none (informational) | Gate floor for `vulnerabilities` and `check --osv/--trivy`. `--fail-on-severity` overrides it for one invocation. `unknown` is rejected. |
+
+## `[sql]`
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `large_offset` | integer >= 1 | `1000` | Numeric top-level `OFFSET` above this fails `sql/large-offset`. `--large-offset` overrides it for one invocation. Zero is rejected. |
+| `migration_roots` | list of relative paths | empty (no schema evidence) | Migration directories declaring tables for `sql/unknown-table`. Roots must be relative with `/` separators; duplicates are rejected. `--migration-root` overrides the list for one invocation. |
 
 ## `[regressions]`
 

@@ -93,6 +93,78 @@ pub fn analyze_dependencies_from_sources(entries: &[SourceEntry]) -> Result<Depe
     Ok(dependency_report(parsed_files))
 }
 
+/// One bare npm import from a changed source file.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ExternalPackageImport {
+    pub path: String,
+    pub line: u32,
+    pub package: String,
+}
+
+/// Bare JavaScript import/call specifiers from in-memory changed entries.
+///
+/// Only references the internal graph ignores: non-relative specifiers.
+/// Scoped subpaths normalize to `@scope/name`, plain subpaths to `name`;
+/// relative, absolute, and empty specifiers are skipped. Sorted and
+/// deduplicated by package, path, and line.
+pub fn external_packages_from_sources(
+    entries: &[SourceEntry],
+) -> Result<Vec<ExternalPackageImport>> {
+    use crate::parser::{RawDependencyKind, extract_dependencies};
+    let mut imports = BTreeSet::new();
+    for entry in entries {
+        let parsed = extract_dependencies(&entry.path, &entry.bytes)?;
+        for reference in &parsed.references {
+            match reference.kind {
+                RawDependencyKind::JavaScriptImport | RawDependencyKind::JavaScriptCall => {
+                    if let Some(package) = bare_package(&reference.specifier) {
+                        imports.insert((package, entry.path.clone(), reference.line));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(imports
+        .into_iter()
+        .map(|(package, path, line)| ExternalPackageImport {
+            path,
+            line,
+            package,
+        })
+        .collect())
+}
+
+/// Normalize one specifier to its npm package, or `None` when relative,
+/// absolute, empty, or a Node builtin (`node:fs`).
+fn bare_package(specifier: &str) -> Option<String> {
+    if specifier.is_empty()
+        || specifier == "."
+        || specifier == ".."
+        || specifier.starts_with("./")
+        || specifier.starts_with("../")
+        || specifier.starts_with('/')
+        || specifier.starts_with("node:")
+    {
+        return None;
+    }
+    if let Some(rest) = specifier.strip_prefix('@') {
+        let mut parts = rest.split('/');
+        match (parts.next(), parts.next()) {
+            (Some(scope), Some(name)) if !scope.is_empty() && !name.is_empty() => {
+                Some(format!("@{scope}/{name}"))
+            }
+            _ => None,
+        }
+    } else {
+        specifier
+            .split('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+    }
+}
+
 fn dependency_report(mut parsed_files: Vec<ParsedFile>) -> DependencyReport {
     parsed_files.sort_by(|left, right| left.path.cmp(&right.path));
 

@@ -1,0 +1,1 @@
+[{"Plan":{"Node Type":"Seq Scan","Relation Name":"archive","Total Cost":40.0,"Plan Rows":50}}]

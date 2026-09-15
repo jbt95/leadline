@@ -33,9 +33,10 @@ claude plugin marketplace remove leadline
 
 ## Permissions
 
-Hooks shell out to `leadline changed` / `leadline check` only.
-Both hooks default to non-blocking warn mode: they always exit 0
-and print only on material regression, never on success.
+Hooks shell out to `leadline changed` / `leadline check` (warn mode, always
+exit 0, print only on material regression) plus the `Stop` secret gate,
+which blocks where the host supports it (see
+`docs/agent-integration-guide.md`).
 
 ## OS notes
 

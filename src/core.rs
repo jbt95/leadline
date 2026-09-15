@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 pub const METRIC_PROFILE: &str = "default";
-pub const OUTPUT_SCHEMA_VERSION: u32 = 1;
+pub const OUTPUT_SCHEMA_VERSION: u32 = 2;
 pub const CYCLOMATIC_SPEC: &str = "default";
 pub const COGNITIVE_SPEC: &str = "default";
 pub const HALSTEAD_SPEC: &str = "default";
@@ -157,6 +157,32 @@ pub struct FunctionAnalysis {
     pub contributions: Vec<MetricContribution>,
     #[serde(skip)]
     pub source_fingerprint: u64,
+}
+
+/// Smallest span containing `line`, ties broken by the lexical id.
+///
+/// Used to attribute a line to its innermost containing function; `span` and
+/// `id` keep it usable for both analyzed and project-joined function rows.
+pub fn innermost_containing<T>(
+    items: &[T],
+    line: u32,
+    span: impl Fn(&T) -> (u32, u32),
+    id: impl Fn(&T) -> &str,
+) -> Option<&T> {
+    items
+        .iter()
+        .filter(|item| {
+            let (start, end) = span(item);
+            start <= line && line <= end
+        })
+        .min_by(|left, right| {
+            let (left_start, left_end) = span(left);
+            let (right_start, right_end) = span(right);
+            left_end
+                .saturating_sub(left_start)
+                .cmp(&right_end.saturating_sub(right_start))
+                .then_with(|| id(left).cmp(id(right)))
+        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

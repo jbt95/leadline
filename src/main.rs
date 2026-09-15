@@ -18,8 +18,9 @@ use std::process::ExitCode;
 /// CLI failure carrying a stable exit code.
 ///
 /// Codes: 0 success / gate passed, 1 gate failed (returned as [`ExitCode`],
-/// never an error), 2 usage or config error, 3 incomplete analysis, 4
-/// coverage input error, 5 internal error.
+/// never an error), 2 usage or config error, 3 incomplete analysis or a
+/// failed update, 4 external input error (coverage, scanner, SQL, and plan
+/// artifacts), 5 internal error.
 #[derive(Debug)]
 struct CliError {
     code: u8,
@@ -78,6 +79,8 @@ impl From<leadline::config::ConfigError> for CliError {
 }
 
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    leadline::update::cleanup_stale_backup();
     match run(std::env::args().skip(1).collect()) {
         Ok(code) => code,
         Err(error) => {
@@ -114,6 +117,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
         "baseline" => baseline_command(&args[1..]),
         "hotspots" => hotspots_command(&args[1..]),
         "risk" => risk_command(&args[1..]),
+        "security" => security_command(&args[1..]),
         "coupling" => coupling_command(&args[1..]),
         "dependencies" => dependencies_command(&args[1..]),
         "impact" => impact_command(&args[1..]),
@@ -124,11 +128,12 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
         "mutation" => mutation_command(&args[1..]),
         "duplication" => duplication_command(&args[1..]),
         "policy" => policy_command(&args[1..]),
+        "sql-plan" => sql_plan_command(&args[1..]),
+        "sql" => sql_command(&args[1..]),
+        "vulnerabilities" => vulnerabilities_command(&args[1..]),
         "doctor" => doctor_command(&args[1..]),
-        "mcp" => match leadline::mcp::serve() {
-            Ok(()) => Ok(ExitCode::SUCCESS),
-            Err(error) => Err(CliError::internal(error.to_string())),
-        },
+        "update" => update_command(&args[1..]),
+        "mcp" => mcp_command(&args[1..]),
         "skill" | "--skill" => {
             print!("{SKILL_TEXT}");
             Ok(ExitCode::SUCCESS)
@@ -145,6 +150,18 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
             "unknown command '{command}'\n\n{}",
             usage()
         ))),
+    }
+}
+
+fn mcp_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let options = leadline::mcp::parse_mcp_args(args).map_err(CliError::usage)?;
+    let result = match options {
+        None => leadline::mcp::serve(),
+        Some(http) => leadline::mcp::serve_http(&http.host, http.port),
+    };
+    match result {
+        Ok(()) => Ok(ExitCode::SUCCESS),
+        Err(error) => Err(CliError::internal(error.to_string())),
     }
 }
 
@@ -1274,6 +1291,583 @@ fn policy_command(args: &[String]) -> Result<ExitCode, CliError> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// PostgreSQL plan regression checks over checked-in EXPLAIN artifacts.
+///
+/// Reads raw `EXPLAIN (FORMAT JSON)` directories only; never connects to a
+/// database or executes SQL. Malformed plans are input errors (exit 4);
+/// gate violations print the full report and exit 1.
+fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut current: Option<String> = None;
+    let mut baseline: Option<String> = None;
+    let mut limits = leadline::pg_plan::PlanLimits::default();
+    let mut json = false;
+    let mut agent_json = false;
+    let mut sarif = false;
+    let mut top: Option<usize> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--current" => {
+                index += 1;
+                current = Some(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--current requires a directory"))?
+                        .clone(),
+                );
+            }
+            "--baseline" => {
+                index += 1;
+                baseline = Some(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--baseline requires a directory"))?
+                        .clone(),
+                );
+            }
+            "--max-cost-increase-percent" => {
+                index += 1;
+                limits.max_cost_increase_percent = Some(parse_plan_limit(
+                    args.get(index),
+                    "--max-cost-increase-percent",
+                )?);
+            }
+            "--max-plan-rows-ratio" => {
+                index += 1;
+                limits.max_plan_rows_ratio =
+                    Some(parse_plan_limit(args.get(index), "--max-plan-rows-ratio")?);
+            }
+            "--max-estimate-error-ratio" => {
+                index += 1;
+                limits.max_estimate_error_ratio = Some(parse_plan_limit(
+                    args.get(index),
+                    "--max-estimate-error-ratio",
+                )?);
+            }
+            "--json" => json = true,
+            "--format" => {
+                index += 1;
+                parse_scan_format(args.get(index), &mut agent_json, &mut sarif)?;
+            }
+            "--top" => {
+                index += 1;
+                top = Some(parse_top(args.get(index), "--top")?);
+            }
+            value => {
+                return Err(CliError::usage(format!(
+                    "unknown sql-plan option '{value}'"
+                )));
+            }
+        }
+        index += 1;
+    }
+    check_output_format(json, agent_json, sarif, top)?;
+    let (Some(current), Some(baseline)) = (current, baseline) else {
+        return Err(CliError::usage(
+            "sql-plan requires --current DIR and --baseline DIR",
+        ));
+    };
+    let report = leadline::pg_plan::compare_plan_directories(
+        Path::new(&current),
+        Path::new(&baseline),
+        &limits,
+    )
+    .map_err(|error| CliError::input(error.to_string()))?;
+    if agent_json {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::pg_plan::agent_json(
+                &report,
+                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP)
+            ))
+            .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if sarif {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::sarif::pg_plan_to_sarif(&report))
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else {
+        print!("{}", leadline::pg_plan::terminal_text(&report));
+    }
+    if report.violations.is_empty() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::from(1))
+    }
+}
+
+/// Security finding triage over checked-in SARIF artifacts.
+///
+/// Reads untrusted scanner output only; never executes scanners or touches
+/// the network. Enrichment joins one project build against normalized
+/// findings. Malformed SARIF is an input error (exit 4); gate violations
+/// print the full report and exit 1.
+fn security_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut path = PathBuf::from(".");
+    let mut has_path = false;
+    let mut sarifs: Vec<PathBuf> = Vec::new();
+    let mut baseline_sarifs: Vec<PathBuf> = Vec::new();
+    let mut base: Option<String> = None;
+    let mut staged = false;
+    let mut target: Option<String> = None;
+    let mut fail_on_severity = None;
+    let mut new_only = false;
+    let mut changed_only = false;
+    let mut json = false;
+    let mut agent_json = false;
+    let mut sarif = false;
+    let mut top: Option<usize> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--sarif" => {
+                index += 1;
+                sarifs.push(PathBuf::from(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--sarif requires a file"))?,
+                ));
+            }
+            "--baseline-sarif" => {
+                index += 1;
+                baseline_sarifs
+                    .push(PathBuf::from(args.get(index).ok_or_else(|| {
+                        CliError::usage("--baseline-sarif requires a file")
+                    })?));
+            }
+            "--base" => {
+                index += 1;
+                base = Some(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--base requires a revision"))?
+                        .clone(),
+                );
+            }
+            "--staged" => staged = true,
+            "--target" => {
+                index += 1;
+                target = Some(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--target requires a revision"))?
+                        .clone(),
+                );
+            }
+            "--fail-on-severity" => {
+                index += 1;
+                fail_on_severity =
+                    Some(parse_severity_flag(args.get(index), "--fail-on-severity")?);
+            }
+            "--new-only" => new_only = true,
+            "--changed-only" => changed_only = true,
+            "--json" => json = true,
+            "--format" => {
+                index += 1;
+                parse_scan_format(args.get(index), &mut agent_json, &mut sarif)?;
+            }
+            "--top" => {
+                index += 1;
+                top = Some(parse_top(args.get(index), "--top")?);
+            }
+            value if !value.starts_with('-') && !has_path => {
+                path = PathBuf::from(value);
+                has_path = true;
+            }
+            value => {
+                return Err(CliError::usage(format!(
+                    "unknown security option '{value}'"
+                )));
+            }
+        }
+        index += 1;
+    }
+    check_output_format(json, agent_json, sarif, top)?;
+    if sarifs.is_empty() {
+        return Err(CliError::usage(
+            "security requires at least one --sarif FILE",
+        ));
+    }
+    // One assembly path shared with `check` and the MCP tool: read, enrich,
+    // gate. The CLI only chooses the request, then prints the outcome.
+    let outcome = leadline::security::assemble(&leadline::security::SecurityRequest {
+        path,
+        sarif: sarifs,
+        baseline_sarif: baseline_sarifs,
+        comparison: comparison_from_flags(&base, staged, &target, changed_only)?,
+        gate: fail_on_severity.map(|minimum| leadline::security::SecurityGate {
+            minimum,
+            new_only,
+            changed_only,
+        }),
+    })
+    .map_err(|error| match error {
+        leadline::security::SecurityError::Input(message) => CliError::input(message),
+        leadline::security::SecurityError::Incomplete(message) => CliError::incomplete(message),
+    })?;
+    let report = outcome.report;
+    if agent_json {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::security::agent_json(
+                &report,
+                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP)
+            ))
+            .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if sarif {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::sarif::security_findings_to_sarif(
+                &report.findings,
+            ))
+            .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else {
+        print!("{}", leadline::security::terminal_text(&report));
+    }
+    if outcome.violations.is_empty() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::from(1))
+    }
+}
+
+/// Reject mutually exclusive revision selectors and build the comparison.
+///
+/// `changed_only` adds the gate-narrowing requirement: without a comparison
+/// every finding is unchanged, so the combination is a usage error instead of
+/// a silent pass.
+fn comparison_from_flags(
+    base: &Option<String>,
+    staged: bool,
+    target: &Option<String>,
+    changed_only: bool,
+) -> Result<Option<leadline::security::ChangeComparison>, CliError> {
+    if base.is_some() && staged {
+        return Err(CliError::usage("--base and --staged are exclusive"));
+    }
+    if staged && target.is_some() {
+        return Err(CliError::usage("--staged and --target are exclusive"));
+    }
+    if base.is_some() && target.is_some() {
+        return Err(CliError::usage("--base and --target are exclusive"));
+    }
+    if changed_only && base.is_none() && !staged && target.is_none() {
+        return Err(CliError::usage(
+            "--changed-only requires --base REV, --staged, or --target REV",
+        ));
+    }
+    Ok(match (base, staged, target) {
+        (None, false, None) => None,
+        (Some(base), false, None) => Some(leadline::security::ChangeComparison::Base(base.clone())),
+        (None, true, None) => Some(leadline::security::ChangeComparison::Staged),
+        (None, false, Some(revision)) => Some(leadline::security::ChangeComparison::Target(
+            revision.clone(),
+        )),
+        _ => unreachable!("exclusive comparison flags are rejected above"),
+    })
+}
+
+/// Parse one `--format agent-json|sarif` value into its output flags.
+fn parse_scan_format(
+    raw: Option<&String>,
+    agent_json: &mut bool,
+    sarif: &mut bool,
+) -> Result<(), CliError> {
+    let value = raw.ok_or_else(|| CliError::usage("--format requires a value"))?;
+    match value.as_str() {
+        "agent-json" => *agent_json = true,
+        "sarif" => *sarif = true,
+        _ => {
+            return Err(CliError::usage(format!(
+                "unknown --format '{value}': expected 'agent-json' or 'sarif'"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Repeated scanner artifact flags shared by `vulnerabilities` and `check`.
+#[derive(Default)]
+struct VulnerabilityArtifactArgs {
+    osv: Vec<PathBuf>,
+    trivy: Vec<PathBuf>,
+    baseline_osv: Vec<PathBuf>,
+    baseline_trivy: Vec<PathBuf>,
+}
+
+/// Consume one `--osv`/`--trivy`/`--baseline-osv`/`--baseline-trivy` flag.
+/// Returns `true` when `arg` matched so callers continue the loop.
+fn parse_vulnerability_artifact(
+    arg: &str,
+    args: &[String],
+    index: &mut usize,
+    out: &mut VulnerabilityArtifactArgs,
+) -> Result<bool, CliError> {
+    let target = match arg {
+        "--osv" => &mut out.osv,
+        "--trivy" => &mut out.trivy,
+        "--baseline-osv" => &mut out.baseline_osv,
+        "--baseline-trivy" => &mut out.baseline_trivy,
+        _ => return Ok(false),
+    };
+    *index += 1;
+    target
+        .push(PathBuf::from(args.get(*index).ok_or_else(|| {
+            CliError::usage(format!("{arg} requires a file"))
+        })?));
+    Ok(true)
+}
+
+/// Vulnerable dependency triage over checked-in scanner artifacts.
+///
+/// Reads untrusted OSV-Scanner/Trivy output only; never queries advisory
+/// services, registries, or package managers. Malformed reports are input
+/// errors (exit 4); gate violations print the full report and exit 1.
+fn vulnerabilities_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut path = PathBuf::from(".");
+    let mut has_path = false;
+    let mut artifacts = VulnerabilityArtifactArgs::default();
+    let mut base: Option<String> = None;
+    let mut staged = false;
+    let mut target: Option<String> = None;
+    let mut fail_on_severity = None;
+    let mut json = false;
+    let mut agent_json = false;
+    let mut sarif = false;
+    let mut top: Option<usize> = None;
+    let mut index = 0;
+    while index < args.len() {
+        if parse_vulnerability_artifact(&args[index], args, &mut index, &mut artifacts)? {
+            index += 1;
+            continue;
+        }
+        match args[index].as_str() {
+            "--base" => {
+                index += 1;
+                base = Some(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--base requires a revision"))?
+                        .clone(),
+                );
+            }
+            "--staged" => staged = true,
+            "--target" => {
+                index += 1;
+                target = Some(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--target requires a revision"))?
+                        .clone(),
+                );
+            }
+            "--fail-on-severity" => {
+                index += 1;
+                fail_on_severity =
+                    Some(parse_severity_flag(args.get(index), "--fail-on-severity")?);
+            }
+            "--json" => json = true,
+            "--format" => {
+                index += 1;
+                parse_scan_format(args.get(index), &mut agent_json, &mut sarif)?;
+            }
+            "--top" => {
+                index += 1;
+                top = Some(parse_top(args.get(index), "--top")?);
+            }
+            value if !value.starts_with('-') && !has_path => {
+                path = PathBuf::from(value);
+                has_path = true;
+            }
+            value => {
+                return Err(CliError::usage(format!(
+                    "unknown vulnerabilities option '{value}'"
+                )));
+            }
+        }
+        index += 1;
+    }
+    check_output_format(json, agent_json, sarif, top)?;
+    if artifacts.osv.is_empty() && artifacts.trivy.is_empty() {
+        return Err(CliError::usage(
+            "vulnerabilities requires at least one --osv or --trivy FILE",
+        ));
+    }
+    let config = load_config_for(&path)?;
+    let minimum = fail_on_severity.or(config
+        .as_ref()
+        .and_then(|selected| selected.vulnerabilities.minimum_severity));
+    let comparison = comparison_from_flags(&base, staged, &target, false)?;
+    let outcome =
+        leadline::vulnerabilities::assemble(&leadline::vulnerabilities::VulnerabilityRequest {
+            path: path.clone(),
+            osv: artifacts.osv,
+            trivy: artifacts.trivy,
+            baseline_osv: artifacts.baseline_osv,
+            baseline_trivy: artifacts.baseline_trivy,
+            comparison,
+            gate: minimum,
+        })
+        .map_err(|error| CliError::input(error.to_string()))?;
+    let report = outcome.report;
+    if agent_json {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::vulnerabilities::agent_json(
+                &report,
+                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP)
+            ))
+            .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if sarif {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::sarif::vulnerability_findings_to_sarif(
+                &report.findings,
+            ))
+            .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else {
+        print!("{}", leadline::vulnerabilities::terminal_text(&report));
+    }
+    if minimum.is_some() && !outcome.violations.is_empty() {
+        Ok(ExitCode::from(1))
+    } else {
+        Ok(ExitCode::SUCCESS)
+    }
+}
+
+/// Static PostgreSQL risk analysis over `.sql` text and host call sites.
+///
+/// Parses text only; never executes SQL or connects to a database.
+/// Malformed SQL is an input error (exit 4); gate violations print the
+/// full report and exit 1.
+fn sql_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut path = PathBuf::from(".");
+    let mut has_path = false;
+    let mut large_offset: Option<u64> = None;
+    let mut migration_roots: Option<Vec<String>> = None;
+    let mut fail_on_severity = None;
+    let mut json = false;
+    let mut agent_json = false;
+    let mut sarif = false;
+    let mut top: Option<usize> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--large-offset" => {
+                index += 1;
+                let raw = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--large-offset requires a count"))?;
+                let value: u64 = raw
+                    .parse()
+                    .map_err(|_| CliError::usage("--large-offset requires a positive integer"))?;
+                if value == 0 {
+                    return Err(CliError::usage("--large-offset must be at least 1"));
+                }
+                large_offset = Some(value);
+            }
+            "--migration-root" => {
+                index += 1;
+                let raw = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--migration-root requires a directory"))?;
+                let root = leadline::config::normalize_migration_root(raw).map_err(|error| {
+                    CliError::usage(format!("invalid --migration-root: {error}"))
+                })?;
+                migration_roots.get_or_insert_with(Vec::new).push(root);
+            }
+            "--fail-on-severity" => {
+                index += 1;
+                fail_on_severity =
+                    Some(parse_severity_flag(args.get(index), "--fail-on-severity")?);
+            }
+            "--json" => json = true,
+            "--format" => {
+                index += 1;
+                parse_scan_format(args.get(index), &mut agent_json, &mut sarif)?;
+            }
+            "--top" => {
+                index += 1;
+                top = Some(parse_top(args.get(index), "--top")?);
+            }
+            value if !value.starts_with('-') && !has_path => {
+                path = PathBuf::from(value);
+                has_path = true;
+            }
+            value => {
+                return Err(CliError::usage(format!("unknown sql option '{value}'")));
+            }
+        }
+        index += 1;
+    }
+    check_output_format(json, agent_json, sarif, top)?;
+    let config = load_config_for(&path)?;
+    let mut sql_config = config
+        .as_ref()
+        .map(|selected| selected.sql.clone())
+        .unwrap_or_default();
+    if let Some(threshold) = large_offset {
+        sql_config.large_offset = threshold;
+    }
+    if let Some(roots) = migration_roots {
+        sql_config.migration_roots = roots;
+    }
+    let excludes: &[String] = config
+        .as_ref()
+        .map(|selected| selected.analysis_excludes.as_slice())
+        .unwrap_or(&[]);
+    let report = leadline::sql::analyze_sql_path(&path, &sql_config, excludes)
+        .map_err(|error| CliError::input(error.to_string()))?;
+    if agent_json {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::sql::agent_json(
+                &report,
+                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP)
+            ))
+            .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if sarif {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::sarif::sql_findings_to_sarif(&report.findings))
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else {
+        print!("{}", leadline::sql::terminal_text(&report));
+    }
+    if fail_on_severity
+        .is_some_and(|minimum| !leadline::sql::sql_gate_violations(&report, minimum).is_empty())
+    {
+        Ok(ExitCode::from(1))
+    } else {
+        Ok(ExitCode::SUCCESS)
+    }
+}
+
 /// Historically related files for one target, from co-change history.
 fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut target: Option<String> = None;
@@ -1603,6 +2197,54 @@ fn parse_floor(raw: Option<&String>, flag: &str) -> Result<f64, CliError> {
     Ok(value)
 }
 
+/// Parse a non-negative finite `sql-plan` gate limit.
+fn parse_plan_limit(raw: Option<&String>, flag: &str) -> Result<f64, CliError> {
+    let value = parse_floor(raw, flag)?;
+    if value < 0.0 {
+        return Err(CliError::usage(format!("{flag} must be non-negative")));
+    }
+    Ok(value)
+}
+
+/// Parse `--fail-on-severity` / `--sql-fail-on-severity` gate levels.
+fn parse_severity_flag(
+    raw: Option<&String>,
+    flag: &str,
+) -> Result<leadline::security::SecuritySeverity, CliError> {
+    let raw = raw.ok_or_else(|| CliError::usage(format!("{flag} requires a level")))?;
+    leadline::security::parse_gate_severity(raw).ok_or_else(|| {
+        CliError::usage(format!(
+            "unknown {flag} '{raw}': expected 'low', 'medium', 'high', or 'critical'"
+        ))
+    })
+}
+
+/// Shared `--json` / `--format agent-json|sarif` exclusivity plus `--top` guard.
+fn check_output_format(
+    json: bool,
+    agent_json: bool,
+    sarif: bool,
+    top: Option<usize>,
+) -> Result<(), CliError> {
+    if json && agent_json {
+        return Err(CliError::usage(
+            "--json and --format agent-json are exclusive",
+        ));
+    }
+    if json && sarif {
+        return Err(CliError::usage("--json and --format sarif are exclusive"));
+    }
+    if agent_json && sarif {
+        return Err(CliError::usage(
+            "--format agent-json and --format sarif are exclusive",
+        ));
+    }
+    if top.is_some() && !agent_json {
+        return Err(CliError::usage("--top requires --format agent-json"));
+    }
+    Ok(())
+}
+
 /// Config thresholds as engine thresholds for SARIF; absent config means empty.
 fn config_thresholds(config: &Option<Config>) -> Thresholds {
     let Some(selected) = config else {
@@ -1638,9 +2280,22 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut base: Option<String> = None;
     let mut baseline: Option<String> = None;
     let mut regressions = false;
+    let mut sarifs: Vec<PathBuf> = Vec::new();
+    let mut baseline_sarifs: Vec<PathBuf> = Vec::new();
+    let mut fail_on_severity = None;
+    let mut new_only = false;
+    let mut changed_only = false;
+    let mut sql_flag = false;
+    let mut sql_fail_on_severity = None;
     let mut common = Vec::new();
     let mut index = 0;
+    let mut artifacts = VulnerabilityArtifactArgs::default();
     while index < args.len() {
+        let mut artifact_index = index;
+        if parse_vulnerability_artifact(&args[index], args, &mut artifact_index, &mut artifacts)? {
+            index = artifact_index + 1;
+            continue;
+        }
         if args[index] == "--base" {
             index += 1;
             base = Some(
@@ -1663,6 +2318,54 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
         }
         if args[index] == "--regressions" {
             regressions = true;
+            index += 1;
+            continue;
+        }
+        if args[index] == "--sarif" {
+            index += 1;
+            sarifs.push(PathBuf::from(
+                args.get(index)
+                    .ok_or_else(|| CliError::usage("--sarif requires a file"))?,
+            ));
+            index += 1;
+            continue;
+        }
+        if args[index] == "--baseline-sarif" {
+            index += 1;
+            baseline_sarifs
+                .push(PathBuf::from(args.get(index).ok_or_else(|| {
+                    CliError::usage("--baseline-sarif requires a file")
+                })?));
+            index += 1;
+            continue;
+        }
+        if args[index] == "--fail-on-severity" {
+            index += 1;
+            fail_on_severity = Some(parse_severity_flag(args.get(index), "--fail-on-severity")?);
+            index += 1;
+            continue;
+        }
+        if args[index] == "--new-only" {
+            new_only = true;
+            index += 1;
+            continue;
+        }
+        if args[index] == "--changed-only" {
+            changed_only = true;
+            index += 1;
+            continue;
+        }
+        if args[index] == "--sql" {
+            sql_flag = true;
+            index += 1;
+            continue;
+        }
+        if args[index] == "--sql-fail-on-severity" {
+            index += 1;
+            sql_fail_on_severity = Some(parse_severity_flag(
+                args.get(index),
+                "--sql-fail-on-severity",
+            )?);
             index += 1;
             continue;
         }
@@ -1711,9 +2414,13 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
     if base.is_some() && baseline.is_some() {
         return Err(CliError::usage("--base and --baseline are exclusive"));
     }
-    if thresholds.is_empty() && !regressions {
+    if changed_only && base.is_none() {
+        return Err(CliError::usage("--changed-only requires --base REV"));
+    }
+    let has_vuln_input = !artifacts.osv.is_empty() || !artifacts.trivy.is_empty();
+    if thresholds.is_empty() && !regressions && sarifs.is_empty() && !has_vuln_input && !sql_flag {
         return Err(CliError::usage(
-            "check requires at least one metric threshold (e.g. --cognitive 15 --cyclomatic 10 --crap 30 --max-nesting 5), or --regressions with --base/--baseline",
+            "check requires at least one metric threshold (e.g. --cognitive 15 --cyclomatic 10 --crap 30 --max-nesting 5), --regressions with --base/--baseline, --sarif FILE, --osv/--trivy FILE, or --sql",
         ));
     }
 
@@ -1726,12 +2433,83 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
         .as_ref()
         .map(|selected| selected.regressions.clone())
         .unwrap_or_default();
+    let security = if sarifs.is_empty() {
+        None
+    } else {
+        let gate = fail_on_severity.map(|minimum| leadline::security::SecurityGate {
+            minimum,
+            new_only,
+            changed_only,
+        });
+        let comparison = base
+            .as_ref()
+            .map(|revision| leadline::security::ChangeComparison::Base(revision.clone()));
+        Some(
+            leadline::security::assemble(&leadline::security::SecurityRequest {
+                path: options.path.clone(),
+                sarif: sarifs,
+                baseline_sarif: baseline_sarifs,
+                comparison,
+                gate,
+            })
+            .map_err(|error| CliError::input(error.message().to_owned()))?,
+        )
+    };
+    let security_failed = security
+        .as_ref()
+        .is_some_and(|outcome| !outcome.violations.is_empty());
+    let vulnerabilities = if has_vuln_input {
+        let minimum = fail_on_severity.or(config
+            .as_ref()
+            .and_then(|selected| selected.vulnerabilities.minimum_severity));
+        let comparison = base
+            .as_ref()
+            .map(|revision| leadline::security::ChangeComparison::Base(revision.clone()));
+        Some(
+            leadline::vulnerabilities::assemble(&leadline::vulnerabilities::VulnerabilityRequest {
+                path: options.path.clone(),
+                osv: artifacts.osv,
+                trivy: artifacts.trivy,
+                baseline_osv: artifacts.baseline_osv,
+                baseline_trivy: artifacts.baseline_trivy,
+                comparison,
+                gate: minimum,
+            })
+            .map_err(|error| CliError::input(error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    let vulnerabilities_failed = vulnerabilities
+        .as_ref()
+        .is_some_and(|outcome| !outcome.violations.is_empty());
+    let sql = if sql_flag {
+        let sql_config = config
+            .as_ref()
+            .map(|selected| selected.sql.clone())
+            .unwrap_or_default();
+        let excludes: &[String] = config
+            .as_ref()
+            .map(|selected| selected.analysis_excludes.as_slice())
+            .unwrap_or(&[]);
+        let report = leadline::sql::analyze_sql_path(&options.path, &sql_config, excludes)
+            .map_err(|error| CliError::input(error.to_string()))?;
+        Some(leadline::sql::outcome(report, sql_fail_on_severity))
+    } else {
+        None
+    };
+    let sql_failed = sql
+        .as_ref()
+        .is_some_and(|outcome| !outcome.violations.is_empty());
     if let Some(base) = base {
         return check_changed(
             &options,
             &base,
             &thresholds,
             regressions.then_some(&regression_limits),
+            security.as_ref(),
+            vulnerabilities.as_ref(),
+            sql.as_ref(),
         );
     }
     if let Some(baseline) = baseline {
@@ -1740,6 +2518,9 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
             &baseline,
             &thresholds,
             regressions.then_some(&regression_limits),
+            security.as_ref(),
+            vulnerabilities.as_ref(),
+            sql.as_ref(),
         );
     }
     let excludes: &[String] = config
@@ -1764,8 +2545,21 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
         !file.functions.is_empty() || !file.parse_errors.is_empty()
     });
     let has_findings = !report.files.is_empty();
-    options.print_report_or(&report, has_findings, "No violations.", &thresholds)?;
-    if has_findings {
+    options.print_report_or_with_security(
+        &report,
+        ScannerReports {
+            security: security.as_ref(),
+            vulnerabilities: vulnerabilities.as_ref(),
+            sql: sql.as_ref(),
+        },
+        has_findings,
+        "No violations.",
+        MetricGate {
+            thresholds: &thresholds,
+            regressions: &[],
+        },
+    )?;
+    if has_findings || security_failed || vulnerabilities_failed || sql_failed {
         return Ok(ExitCode::from(1));
     }
     Ok(ExitCode::SUCCESS)
@@ -1777,6 +2571,9 @@ fn check_changed(
     base: &str,
     thresholds: &Thresholds,
     regression_limits: Option<&RegressionLimits>,
+    security: Option<&leadline::security::SecurityOutcome>,
+    vulnerabilities: Option<&leadline::vulnerabilities::VulnerabilityOutcome>,
+    sql: Option<&leadline::sql::SqlOutcome>,
 ) -> Result<ExitCode, CliError> {
     let mut changed = leadline::diff::analyze_changed(&options.path, base)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
@@ -1825,29 +2622,49 @@ fn check_changed(
         files,
     };
     let has_findings = !report.files.is_empty();
-    let mut output_thresholds = thresholds.clone();
-    if let Some(limits) = regression_limits {
-        for change in &changed.functions {
-            let Some((before, after)) = change.before.as_ref().zip(change.after.as_ref()) else {
-                continue;
-            };
-            let dimensions = leadline::diff::regression_dimensions(before, after, limits);
-            if dimensions[0] && output_thresholds.cognitive.is_none() {
-                output_thresholds.cognitive = Some(0);
-            }
-            if dimensions[1] && output_thresholds.cyclomatic.is_none() {
-                output_thresholds.cyclomatic = Some(0);
-            }
-            if dimensions[2] && output_thresholds.crap.is_none() {
-                output_thresholds.crap = Some(0.0);
-            }
-            if dimensions[3] && output_thresholds.max_nesting.is_none() {
-                output_thresholds.max_nesting = Some(0);
-            }
-        }
-    }
-    options.print_report_or(&report, has_findings, "No violations.", &output_thresholds)?;
-    if has_findings {
+    let regressions: Vec<leadline::sarif::FunctionViolation<'_>> = regression_limits
+        .map(|limits| {
+            changed
+                .functions
+                .iter()
+                .filter_map(|change| {
+                    let before = change.before.as_ref()?;
+                    let after = change.after.as_ref()?;
+                    Some(leadline::sarif::regression_violations(
+                        before,
+                        after,
+                        limits,
+                        &change.path,
+                    ))
+                })
+                .flatten()
+                .collect()
+        })
+        .unwrap_or_default();
+    let security_failed = security
+        .as_ref()
+        .is_some_and(|outcome| !outcome.violations.is_empty());
+    let vulnerabilities_failed = vulnerabilities
+        .as_ref()
+        .is_some_and(|outcome| !outcome.violations.is_empty());
+    let sql_failed = sql
+        .as_ref()
+        .is_some_and(|outcome| !outcome.violations.is_empty());
+    options.print_report_or_with_security(
+        &report,
+        ScannerReports {
+            security,
+            vulnerabilities,
+            sql,
+        },
+        has_findings,
+        "No violations.",
+        MetricGate {
+            thresholds,
+            regressions: &regressions,
+        },
+    )?;
+    if has_findings || security_failed || vulnerabilities_failed || sql_failed {
         return Ok(ExitCode::from(1));
     }
     Ok(ExitCode::SUCCESS)
@@ -1863,6 +2680,9 @@ fn check_baseline(
     baseline_path: &str,
     thresholds: &Thresholds,
     regression_limits: Option<&RegressionLimits>,
+    security: Option<&leadline::security::SecurityOutcome>,
+    vulnerabilities: Option<&leadline::vulnerabilities::VulnerabilityOutcome>,
+    sql: Option<&leadline::sql::SqlOutcome>,
 ) -> Result<ExitCode, CliError> {
     let baseline = leadline::baseline::Baseline::read(Path::new(baseline_path))
         .map_err(|error| CliError::incomplete(error.to_string()))?;
@@ -1891,28 +2711,21 @@ fn check_baseline(
         .iter()
         .map(|finding| (finding.path.clone(), finding.id.clone()))
         .collect();
-    let mut output_thresholds = thresholds.clone();
-    if let Some(limits) = regression_limits {
-        for finding in &regressions {
-            let dimensions = leadline::diff::regression_dimensions(
-                &finding.before.to_analysis(),
-                &finding.after,
-                limits,
-            );
-            if dimensions[0] && output_thresholds.cognitive.is_none() {
-                output_thresholds.cognitive = Some(0);
-            }
-            if dimensions[1] && output_thresholds.cyclomatic.is_none() {
-                output_thresholds.cyclomatic = Some(0);
-            }
-            if dimensions[2] && output_thresholds.crap.is_none() {
-                output_thresholds.crap = Some(0.0);
-            }
-            if dimensions[3] && output_thresholds.max_nesting.is_none() {
-                output_thresholds.max_nesting = Some(0);
-            }
-        }
-    }
+    let violations: Vec<leadline::sarif::FunctionViolation<'_>> = regression_limits
+        .map(|limits| {
+            regressions
+                .iter()
+                .flat_map(|finding| {
+                    leadline::sarif::regression_violations(
+                        &finding.before.to_analysis(),
+                        &finding.after,
+                        limits,
+                        &finding.path,
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let mut filtered = report;
     filtered.files.retain_mut(|file| {
         file.functions.retain(|function| {
@@ -1923,13 +2736,30 @@ fn check_baseline(
         !file.functions.is_empty() || !file.parse_errors.is_empty()
     });
     let has_findings = !filtered.files.is_empty();
-    options.print_report_or(
+    let vulnerabilities_failed = vulnerabilities
+        .as_ref()
+        .is_some_and(|outcome| !outcome.violations.is_empty());
+    let security_failed = security
+        .as_ref()
+        .is_some_and(|outcome| !outcome.violations.is_empty());
+    let sql_failed = sql
+        .as_ref()
+        .is_some_and(|outcome| !outcome.violations.is_empty());
+    options.print_report_or_with_security(
         &filtered,
+        ScannerReports {
+            security,
+            vulnerabilities,
+            sql,
+        },
         has_findings,
         "No violations.",
-        &output_thresholds,
+        MetricGate {
+            thresholds,
+            regressions: &violations,
+        },
     )?;
-    if has_findings {
+    if has_findings || security_failed || vulnerabilities_failed || sql_failed {
         return Ok(ExitCode::from(1));
     }
     Ok(ExitCode::SUCCESS)
@@ -2264,6 +3094,28 @@ fn doctor_command(args: &[String]) -> Result<ExitCode, CliError> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn update_command(args: &[String]) -> Result<ExitCode, CliError> {
+    if let Some(argument) = args.first() {
+        return Err(CliError::usage(format!(
+            "unknown update option '{argument}'"
+        )));
+    }
+    let base_url = std::env::var("LEADLINE_BASE_URL")
+        .unwrap_or_else(|_| leadline::update::DEFAULT_BASE_URL.to_owned());
+    match leadline::update::run(&base_url) {
+        Ok(leadline::update::Outcome::Current(version)) => {
+            println!("leadline {version} is the latest release.");
+            Ok(ExitCode::SUCCESS)
+        }
+        Ok(leadline::update::Outcome::Updated { from, to, path }) => {
+            println!("leadline {to} (updated from {from})");
+            println!("Installed to {}", path.display());
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => Err(CliError::incomplete(format!("update failed: {error}"))),
+    }
+}
+
 /// Print one `doctor` self-check line; failures flip the incomplete flag.
 fn report_doctor(label: &str, outcome: Result<Option<String>, String>, incomplete: &mut bool) {
     match outcome {
@@ -2401,6 +3253,23 @@ struct CommonOptions {
     cache_dir: Option<PathBuf>,
 }
 
+/// Optional scanner finding families merged into `check` output.
+#[derive(Clone, Copy, Default)]
+struct ScannerReports<'a> {
+    security: Option<&'a leadline::security::SecurityOutcome>,
+    vulnerabilities: Option<&'a leadline::vulnerabilities::VulnerabilityOutcome>,
+    sql: Option<&'a leadline::sql::SqlOutcome>,
+}
+
+/// Metric gate inputs for one `check` run: the real absolute thresholds plus
+/// this run's explicit regression violations. SARIF projects both; terminal
+/// and JSON output ignore them because the report is already filtered.
+#[derive(Clone, Copy)]
+struct MetricGate<'a> {
+    thresholds: &'a Thresholds,
+    regressions: &'a [leadline::sarif::FunctionViolation<'a>],
+}
+
 impl CommonOptions {
     fn parse(args: &[String], command: &str) -> Result<Self, CliError> {
         Self::parse_with_path(args, PathBuf::from("."), command)
@@ -2426,18 +3295,7 @@ impl CommonOptions {
                 "--json" => json = true,
                 "--format" => {
                     index += 1;
-                    let value = args
-                        .get(index)
-                        .ok_or_else(|| CliError::usage("--format requires a value"))?;
-                    match value.as_str() {
-                        "agent-json" => agent_json = true,
-                        "sarif" => sarif = true,
-                        _ => {
-                            return Err(CliError::usage(format!(
-                                "unknown --format '{value}': expected 'agent-json' or 'sarif'"
-                            )));
-                        }
-                    }
+                    parse_scan_format(args.get(index), &mut agent_json, &mut sarif)?;
                 }
                 "--top" => {
                     index += 1;
@@ -2591,6 +3449,166 @@ impl CommonOptions {
         }
         Ok(())
     }
+
+    /// Scanner outcomes merged into `check` output; each is `None` when its
+    /// input was absent, in which case output is exactly [`print_report_or`].
+    /// Present families add `security_violations` / `vulnerability_violations` /
+    /// `sql_violations` to `--json` and `--format agent-json`, merge their
+    /// SARIF rules/results into one run, and append terminal sections when
+    /// they have findings.
+    fn print_report_or_with_security(
+        &self,
+        report: &AnalysisReport,
+        scanners: ScannerReports<'_>,
+        has_findings: bool,
+        empty_text: &str,
+        gate: MetricGate<'_>,
+    ) -> Result<(), CliError> {
+        let ScannerReports {
+            security,
+            vulnerabilities,
+            sql,
+        } = scanners;
+        let internal = |error: serde_json::Error| CliError::internal(error.to_string());
+        if self.agent_json {
+            let mut value = serde_json::to_value(leadline::agent::analyze_agent_json_budgeted(
+                report,
+                &self.budget,
+            ))
+            .map_err(internal)?;
+            if let Some(security) = security {
+                value["security_violations"] =
+                    serde_json::to_value(&security.violations).map_err(internal)?;
+            }
+            if let Some(vulnerabilities) = vulnerabilities {
+                value["vulnerability_violations"] =
+                    serde_json::to_value(&vulnerabilities.violations).map_err(internal)?;
+            }
+            if let Some(sql) = sql {
+                value["sql_violations"] =
+                    serde_json::to_value(&sql.violations).map_err(internal)?;
+            }
+            println!("{value}");
+        } else if self.sarif {
+            // Scanner families contribute gate violations only: `check`
+            // exits 0 when nothing failed, so emitting informational findings
+            // would contradict the exit code and the documented contract.
+            let mut document = serde_json::to_value(leadline::sarif::gate_to_sarif(
+                report,
+                gate.thresholds,
+                gate.regressions,
+            ))
+            .map_err(internal)?;
+            if let Some(security) = security {
+                let findings = leadline::sarif::security_findings_to_sarif(&security.violations);
+                merge_sarif_run(&mut document, &findings);
+            }
+            if let Some(vulnerabilities) = vulnerabilities {
+                let findings =
+                    leadline::sarif::vulnerability_findings_to_sarif(&vulnerabilities.violations);
+                merge_sarif_run(&mut document, &findings);
+            }
+            if let Some(sql) = sql {
+                let findings = leadline::sarif::sql_findings_to_sarif(&sql.violations);
+                merge_sarif_run(&mut document, &findings);
+            }
+            println!("{document}");
+        } else if self.json {
+            let mut value = serde_json::to_value(report).map_err(internal)?;
+            if let Some(security) = security {
+                value["security_violations"] =
+                    serde_json::to_value(&security.violations).map_err(internal)?;
+            }
+            if let Some(vulnerabilities) = vulnerabilities {
+                value["vulnerability_violations"] =
+                    serde_json::to_value(&vulnerabilities.violations).map_err(internal)?;
+            }
+            if let Some(sql) = sql {
+                value["sql_violations"] =
+                    serde_json::to_value(&sql.violations).map_err(internal)?;
+            }
+            if self.pretty {
+                println!("{value:#}");
+            } else {
+                println!("{value}");
+            }
+        } else if has_findings {
+            self.print_report_or(report, true, empty_text, gate.thresholds)?;
+            print_scanner_sections(security, vulnerabilities, sql);
+        } else if has_scanner_findings(security, vulnerabilities, sql) {
+            print_scanner_sections(security, vulnerabilities, sql);
+        } else {
+            println!("{empty_text}");
+        }
+        Ok(())
+    }
+}
+
+/// Print scanner terminal sections for findings that exist.
+fn has_scanner_findings(
+    security: Option<&leadline::security::SecurityOutcome>,
+    vulnerabilities: Option<&leadline::vulnerabilities::VulnerabilityOutcome>,
+    sql: Option<&leadline::sql::SqlOutcome>,
+) -> bool {
+    security.is_some_and(|outcome| !outcome.report.findings.is_empty())
+        || vulnerabilities.is_some_and(|outcome| !outcome.report.findings.is_empty())
+        || sql.is_some_and(|outcome| !outcome.report.findings.is_empty())
+}
+
+/// Print scanner terminal sections for findings that exist.
+fn print_scanner_sections(
+    security: Option<&leadline::security::SecurityOutcome>,
+    vulnerabilities: Option<&leadline::vulnerabilities::VulnerabilityOutcome>,
+    sql: Option<&leadline::sql::SqlOutcome>,
+) {
+    if let Some(security) = security
+        && !security.report.findings.is_empty()
+    {
+        print!("{}", leadline::security::terminal_text(&security.report));
+    }
+    if let Some(vulnerabilities) = vulnerabilities
+        && !vulnerabilities.report.findings.is_empty()
+    {
+        print!(
+            "{}",
+            leadline::vulnerabilities::terminal_text(&vulnerabilities.report)
+        );
+    }
+    if let Some(sql) = sql
+        && !sql.report.findings.is_empty()
+    {
+        print!("{}", leadline::sql::terminal_text(&sql.report));
+    }
+}
+
+/// Merge one scanner SARIF document's rules and results into a run.
+fn merge_sarif_run(document: &mut serde_json::Value, extra: &serde_json::Value) {
+    if let (Some(runs), Some(extra_runs)) = (
+        document
+            .get_mut("runs")
+            .and_then(|runs| runs.as_array_mut()),
+        extra.get("runs").and_then(|runs| runs.as_array()),
+    ) && let (Some(run), Some(extra_run)) = (runs.first_mut(), extra_runs.first())
+    {
+        if let (Some(rules), Some(extra_rules)) = (
+            run.pointer_mut("/tool/driver/rules")
+                .and_then(|rules| rules.as_array_mut()),
+            extra_run
+                .pointer("/tool/driver/rules")
+                .and_then(|rules| rules.as_array()),
+        ) {
+            rules.extend(extra_rules.iter().cloned());
+        }
+        if let (Some(results), Some(extra_results)) = (
+            run.get_mut("results")
+                .and_then(|results| results.as_array_mut()),
+            extra_run
+                .get("results")
+                .and_then(|results| results.as_array()),
+        ) {
+            results.extend(extra_results.iter().cloned());
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2630,8 +3648,8 @@ fn load_coverage(path: &str, format: CoverageFormat) -> Result<CoverageMap, CliE
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]
-  leadline risk [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]
+    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--sarif FILE] [--baseline-sarif FILE] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--osv FILE] [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--sql] [--sql-fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]
+  leadline security [PATH] --sarif FILE [--baseline-sarif FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--json] [--format agent-json|sarif] [--top N]\n  leadline risk [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]
   leadline dependencies [PATH] [--json] [--format agent-json]
-  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp\n  leadline skill\n  leadline version\n  leadline --version"
+  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline sql [PATH] [--large-offset N] [--migration-root DIR] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline vulnerabilities [PATH] --osv FILE [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline sql-plan --current DIR --baseline DIR [--max-cost-increase-percent N] [--max-plan-rows-ratio N] [--max-estimate-error-ratio N] [--json] [--format agent-json|sarif] [--top N]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp [--port [N] [--host ADDR]]\n  leadline skill\n  leadline update\n  leadline version\n  leadline --version"
 }

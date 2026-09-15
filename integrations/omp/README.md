@@ -56,5 +56,9 @@ read the repository files you ask it to analyze.
 - `leadline changed --base <rev> --format agent-json [--path <path>]`
 - `leadline function <file> <name> --format agent-json`
 - `leadline check <path> --format agent-json [--cognitive N --cyclomatic N --max-nesting N]`
+- `leadline_secret_check` (shared secret gate; fails the tool call on
+  findings or an unavailable scanner; see
+  `docs/agent-integration-guide.md`)
 - Post-edit (warn mode, after successful edit/write tool results):
-  `leadline changed --base HEAD~1 --format agent-json`
+  `leadline changed --base HEAD~1 --format agent-json` plus the secret-gate
+  worktree warning

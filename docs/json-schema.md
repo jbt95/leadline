@@ -6,7 +6,7 @@ Reports are UTF-8 JSON. Paths use `/` separators. Floats use stable decimal form
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "analyzer_version": "0.1.0",
   "metric_profile": "default",
   "metric_specs": {
@@ -58,7 +58,7 @@ Reports are UTF-8 JSON. Paths use `/` separators. Floats use stable decimal form
 }
 ```
 
-- `schema_version`: output compatibility marker (`1`).
+- `schema_version`: output compatibility marker (`2`; `check` JSON may carry `security_violations`, `vulnerability_violations`, or `sql_violations` when scanner inputs are passed).
 - `analyzer_version`: the `leadline` crate version that produced the report.
 - `metric_profile`: always `default`; see `metrics.md` for rules.
 - `metric_specs`: per-family rule versions, each `default` in 1.0.
@@ -70,7 +70,7 @@ Reports are UTF-8 JSON. Paths use `/` separators. Floats use stable decimal form
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "analyzer_version": "0.1.0",
   "metric_profile": "default",
   "metric_specs": { "cyclomatic": "default", "cognitive": "default", "halstead": "default", "maintainability": "default", "crap": "default" },
@@ -326,3 +326,19 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
   `git_available`, `summary.{files_analyzed,scope_files,risks}`, and one row
   per file (`path`, `score`, `components` with the same six keys);
   it drops `metric_profile`, `analyzer_version`, `head_commit`, and `raw`.
+
+## Other reports
+
+The top-level `schema_version` `2` above covers the analyze/function/check
+and changed/diff envelopes. Every other report family carries its own
+`schema_version` (`1` today) and is documented next to its command:
+
+- `project`/`debt`: the canonical Project model in
+  [analytics-roadmap.md](analytics-roadmap.md) and [architecture.md](architecture.md).
+- `snapshot`: HEAD-keyed, append-only trend points (atomic with a sibling lock).
+- `duplication`: profile `tokens`; normalization and defaults in [metrics.md](metrics.md).
+- `mutation` and `policy`: normalized PIT/Stryker rows and architecture-rule
+  drift, described in [cli-reference.md](cli-reference.md).
+- Scanner reports: [security-findings.md](security-findings.md),
+  [vulnerabilities.md](vulnerabilities.md), [postgresql-risks.md](postgresql-risks.md),
+  and [postgresql-plans.md](postgresql-plans.md).

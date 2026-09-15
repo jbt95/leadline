@@ -644,3 +644,43 @@ fn cli_dependencies_agent_json_reports_unresolved() {
     assert_eq!(value["unresolved"][0]["reason"], "not_found");
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn external_packages_from_changed_sources() {
+    use leadline::graph::external_packages_from_sources;
+    use leadline::source_snapshot::SourceEntry;
+    let entries = vec![
+        SourceEntry {
+            path: "src/new.ts".to_owned(),
+            bytes: b"import _ from 'lodash';
+const m = require('minimist');
+const c = await import('@scope/client/sub');
+import './local';
+import fs from 'node:fs';
+const fsp = require('node:fs/promises');
+"
+            .to_vec(),
+        },
+        SourceEntry {
+            path: "src/again.ts".to_owned(),
+            bytes: b"import _ from 'lodash/sub';
+"
+            .to_vec(),
+        },
+    ];
+    let imports = external_packages_from_sources(&entries).unwrap();
+    let packages: Vec<&str> = imports.iter().map(|item| item.package.as_str()).collect();
+    assert_eq!(
+        packages,
+        vec!["@scope/client", "lodash", "lodash", "minimist"]
+    );
+    assert_eq!(imports[0].path, "src/new.ts");
+    assert!(imports.iter().all(|item| item.line >= 1));
+    // Relative imports and Node builtins never surface as external packages.
+    assert!(imports.iter().all(|item| !item.package.starts_with('.')));
+    assert!(
+        imports
+            .iter()
+            .all(|item| !item.package.starts_with("node:"))
+    );
+}

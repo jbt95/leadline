@@ -70,6 +70,8 @@ jobs:
           syft-version: v1.51.1
           output-file: dist/leadline.cyclonedx.json
           upload-artifact: false
+      - name: Write VERSION
+        run: echo "$GITHUB_REF_NAME" > dist/VERSION
       - name: Create checksums
         run: cd dist && sha256sum * > SHA256SUMS
       - name: Publish release

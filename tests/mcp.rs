@@ -40,8 +40,41 @@ fn fixture_dir(source: &str) -> PathBuf {
     dir
 }
 
+/// Repository fixture directory that removes itself when the test ends,
+/// including on panic, so interrupted runs do not leave directories inside
+/// the repository.
+struct Fixture(PathBuf);
+
+impl Fixture {
+    fn create(path: PathBuf) -> Self {
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+}
+
+impl std::ops::Deref for Fixture {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for Fixture {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn envelope_ok(result: &Value) {
-    assert_eq!(result["schema_version"], 1);
+    assert_eq!(result["schema_version"], 2);
     assert!(result["analyzer_version"].is_string());
     for metric in [
         "cyclomatic",
@@ -81,7 +114,11 @@ fn initialize_and_tools_list() {
             "check",
             "explain_metric",
             "repo_summary",
-            "test_targets"
+            "security_findings",
+            "sql_plan",
+            "sql_risks",
+            "test_targets",
+            "vulnerabilities"
         ]
     );
     let changed = tools
@@ -921,7 +958,7 @@ fn tools_list_marks_every_tool_read_only() {
     )
     .unwrap();
     let tools = result_of(&response)["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 7);
+    assert_eq!(tools.len(), 11);
     for tool in tools {
         let name = tool["name"].as_str().unwrap();
         assert!(
@@ -952,4 +989,1072 @@ fn tools_list_marks_every_tool_read_only() {
             .contains("after editing"),
         "descriptions must state when to reach for the tool"
     );
+}
+
+fn sql_plan_fixture(cost_current: f64, cost_baseline: f64) -> PathBuf {
+    const PLAN_TEMPLATE: &str =
+        r#"[{"Plan": {"Node Type": "Seq Scan", "Total Cost": COST, "Plan Rows": 10}}]"#;
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    // MCP artifact arguments stay root-relative, so fixtures live under the
+    // package root (the test working directory) instead of the temp dir.
+    let root = PathBuf::from(format!(
+        "target/leadline-mcp-sqlplan-{}-{id}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("current")).unwrap();
+    std::fs::create_dir_all(root.join("baseline")).unwrap();
+    std::fs::write(
+        root.join("current/q.json"),
+        PLAN_TEMPLATE.replace("COST", &cost_current.to_string()),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("baseline/q.json"),
+        PLAN_TEMPLATE.replace("COST", &cost_baseline.to_string()),
+    )
+    .unwrap();
+    root
+}
+
+#[test]
+fn sql_plan_registered_with_schema_and_instructions() {
+    let response: Value = serde_json::from_str(
+        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    let tools = result_of(&response)["tools"].as_array().unwrap().clone();
+    let tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "sql_plan")
+        .expect("sql_plan must be registered");
+    let properties = &tool["inputSchema"]["properties"];
+    for key in [
+        "current",
+        "baseline",
+        "max_cost_increase_percent",
+        "max_plan_rows_ratio",
+        "max_estimate_error_ratio",
+        "top",
+    ] {
+        assert!(properties.get(key).is_some(), "{key} must be a parameter");
+    }
+    assert_eq!(
+        tool["inputSchema"]["required"],
+        serde_json::json!(["current", "baseline"])
+    );
+    let init: Value = serde_json::from_str(
+        &handle_request(&request("initialize", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        result_of(&init)["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("sql_plan")
+    );
+}
+
+#[test]
+fn sql_plan_compares_directories_over_call_and_direct_method() {
+    let root = sql_plan_fixture(150.0, 100.0);
+    let current = root.join("current").to_str().unwrap().to_owned();
+    let baseline = root.join("baseline").to_str().unwrap().to_owned();
+    let arguments = serde_json::json!({ "current": current, "baseline": baseline, "max_cost_increase_percent": 25.0 });
+    let response = call_tool("sql_plan", arguments.clone());
+    assert!(
+        response.get("error").is_none(),
+        "unexpected error: {response}"
+    );
+    let result = result_of(&response);
+    envelope_ok(result);
+    assert_eq!(result["tool"], "sql_plan");
+    assert_eq!(result["violations"][0]["kind"], "cost_increase");
+    assert!(result.get("truncated").is_some());
+    assert!(result.get("queries").is_some());
+    let direct = request("sql_plan", arguments);
+    let direct_response: Value = serde_json::from_str(&handle_request(&direct).unwrap()).unwrap();
+    assert!(
+        direct_response.get("error").is_none(),
+        "direct method failed: {direct_response}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sql_plan_rejects_bad_arguments() {
+    let root = sql_plan_fixture(10.0, 10.0);
+    let current = root.join("current").to_str().unwrap().to_owned();
+    let baseline = root.join("baseline").to_str().unwrap().to_owned();
+    let good = serde_json::json!({ "current": current, "baseline": baseline });
+    // unknown keys
+    let mut bad = good.clone();
+    bad["bogus"] = serde_json::json!(1);
+    assert!(call_tool("sql_plan", bad).get("error").is_some());
+    // absolute paths stay out of MCP
+    let response = call_tool(
+        "sql_plan",
+        serde_json::json!({ "current": "/tmp/x", "baseline": "target/y" }),
+    );
+    assert!(error_of(&response)["code"].as_i64() == Some(-32602));
+    // negative limits
+    let mut bad = good.clone();
+    bad["max_cost_increase_percent"] = serde_json::json!(-1.0);
+    assert!(call_tool("sql_plan", bad).get("error").is_some());
+    // top above the global cap
+    let mut bad = good.clone();
+    bad["top"] = serde_json::json!(201);
+    assert!(call_tool("sql_plan", bad).get("error").is_some());
+    // missing baseline
+    let response = call_tool(
+        "sql_plan",
+        serde_json::json!({ "current": good["current"].clone() }),
+    );
+    assert!(response.get("error").is_some());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn security_findings_fixture() -> (Fixture, String, String) {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    // MCP artifact arguments stay root-relative: the fixture lives under the
+    // package root (the test working directory), cleaned up afterwards.
+    // Note: not under target/, which discovery excludes via .gitignore.
+    let root = Fixture::create(PathBuf::from(format!(
+        "leadline-mcp-security-{}-{id}",
+        std::process::id()
+    )));
+    std::fs::create_dir_all(root.join("proj/src")).unwrap();
+    std::fs::write(
+        root.join("proj/src/auth.ts"),
+        "function login(y: number): number {\n  if (y > 0) { return 1; }\n  return 0;\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("findings.sarif"),
+        r#"{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "eslint"}}, "results": [{"ruleId": "js/hardcoded-secret", "level": "error", "message": {"text": "SENTINEL"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/auth.ts"}, "region": {"startLine": 2}}}]}]}]}"#,
+    )
+    .unwrap();
+    let proj = root.join("proj").to_str().unwrap().to_owned();
+    let sarif = root.join("findings.sarif").to_str().unwrap().to_owned();
+    (root, proj, sarif)
+}
+
+#[test]
+fn security_findings_registered_with_schema_and_instructions() {
+    let response: Value = serde_json::from_str(
+        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    let tools = result_of(&response)["tools"].as_array().unwrap().clone();
+    let tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "security_findings")
+        .expect("security_findings must be registered");
+    let properties = &tool["inputSchema"]["properties"];
+    for key in [
+        "path",
+        "sarif",
+        "baseline_sarif",
+        "base",
+        "staged",
+        "target",
+        "minimum_severity",
+        "new_only",
+        "changed_only",
+        "top",
+    ] {
+        assert!(properties.get(key).is_some(), "{key} must be a parameter");
+    }
+    assert_eq!(
+        tool["inputSchema"]["required"],
+        serde_json::json!(["sarif"])
+    );
+    let init: Value = serde_json::from_str(
+        &handle_request(&request("initialize", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        result_of(&init)["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("security_findings")
+    );
+}
+
+#[test]
+fn security_findings_compare_over_call_and_direct_method() {
+    let (root, proj, sarif) = security_findings_fixture();
+    let arguments =
+        serde_json::json!({ "path": proj, "sarif": [sarif], "minimum_severity": "low" });
+    let response = call_tool("security_findings", arguments.clone());
+    assert!(
+        response.get("error").is_none(),
+        "unexpected error: {response}"
+    );
+    let result = result_of(&response);
+    envelope_ok(result);
+    assert_eq!(result["tool"], "security_findings");
+    assert_eq!(result["findings"][0]["rule_id"], "js/hardcoded-secret");
+    assert!(result["findings"][0]["function_id"].is_string());
+    assert!(result.get("truncated").is_some());
+    assert!(!result["violations"].as_array().unwrap().is_empty());
+    assert!(!serde_json::to_string(&result).unwrap().contains("SENTINEL"));
+    let direct = request("security_findings", arguments);
+    let direct_response: Value = serde_json::from_str(&handle_request(&direct).unwrap()).unwrap();
+    assert!(
+        direct_response.get("error").is_none(),
+        "direct method failed: {direct_response}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn security_findings_rejects_bad_arguments() {
+    let (root, proj, sarif) = security_findings_fixture();
+    let good = serde_json::json!({ "path": proj, "sarif": [sarif] });
+    // non-array sarif
+    let mut bad = good.clone();
+    bad["sarif"] = serde_json::json!("findings.sarif");
+    assert!(call_tool("security_findings", bad).get("error").is_some());
+    // unknown fields
+    let mut bad = good.clone();
+    bad["bogus"] = serde_json::json!(1);
+    assert!(call_tool("security_findings", bad).get("error").is_some());
+    // absolute report paths stay out of MCP
+    let response = call_tool(
+        "security_findings",
+        serde_json::json!({ "sarif": ["/tmp/x.sarif"] }),
+    );
+    assert!(error_of(&response)["code"].as_i64() == Some(-32602));
+    // over-limit top
+    let mut bad = good.clone();
+    bad["top"] = serde_json::json!(201);
+    assert!(call_tool("security_findings", bad).get("error").is_some());
+    // missing sarif
+    let response = call_tool("security_findings", serde_json::json!({ "path": "." }));
+    assert!(response.get("error").is_some());
+    // bad severity
+    let mut bad = good.clone();
+    bad["minimum_severity"] = serde_json::json!("bogus");
+    assert!(call_tool("security_findings", bad).get("error").is_some());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn security_findings_rejects_changed_only_without_comparison() {
+    let (root, proj, sarif) = security_findings_fixture();
+    // Without base/staged/target every finding stays unchanged, so the gate
+    // would silently pass; reject the combination instead.
+    let response = call_tool(
+        "security_findings",
+        serde_json::json!({
+            "path": proj,
+            "sarif": [sarif],
+            "minimum_severity": "low",
+            "changed_only": true,
+        }),
+    );
+    assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn vulnerabilities_fixture() -> (PathBuf, String, String) {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    // Root-relative artifacts under the package root, cleaned up afterwards.
+    // Note: not under target/, which discovery excludes via .gitignore.
+    let root = PathBuf::from(format!("leadline-mcp-vuln-{}-{id}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("proj/src")).unwrap();
+    std::fs::write(root.join("proj/src/app.ts"), "import _ from 'lodash';\n").unwrap();
+    std::fs::write(root.join("osv.json"), r#"{"results": [{"source": {"path": "package-lock.json"}, "packages": [{"package": {"name": "lodash", "version": "4.17.20", "ecosystem": "npm"}, "vulnerabilities": [{"id": "GHSA-xxxx-yyyy-zzzz", "details": "SENTINEL", "database_specific": {"severity": "HIGH"}, "affected": [{"ranges": [{"type": "SEMVER", "events": [{"fixed": "4.17.21"}]}]}]}]}]}]}"#).unwrap();
+    let proj = root.join("proj").to_str().unwrap().to_owned();
+    let osv = root.join("osv.json").to_str().unwrap().to_owned();
+    (root, proj, osv)
+}
+
+#[test]
+fn vulnerabilities_registered_with_schema_and_instructions() {
+    let response: Value = serde_json::from_str(
+        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    let tools = result_of(&response)["tools"].as_array().unwrap().clone();
+    let tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "vulnerabilities")
+        .expect("vulnerabilities must be registered");
+    let properties = &tool["inputSchema"]["properties"];
+    for key in [
+        "path",
+        "osv",
+        "trivy",
+        "baseline_osv",
+        "baseline_trivy",
+        "base",
+        "staged",
+        "target",
+        "minimum_severity",
+        "top",
+    ] {
+        assert!(properties.get(key).is_some(), "{key} must be a parameter");
+    }
+    assert!(tool["inputSchema"].get("required").is_none());
+    let init: Value = serde_json::from_str(
+        &handle_request(&request("initialize", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        result_of(&init)["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("vulnerabilities")
+    );
+}
+
+#[test]
+fn vulnerabilities_reports_direct_import_evidence() {
+    let (root, proj, osv) = vulnerabilities_fixture();
+    let arguments = serde_json::json!({ "path": proj, "osv": [osv], "minimum_severity": "low" });
+    let response = call_tool("vulnerabilities", arguments.clone());
+    assert!(
+        response.get("error").is_none(),
+        "unexpected error: {response}"
+    );
+    let result = result_of(&response);
+    envelope_ok(result);
+    assert_eq!(result["tool"], "vulnerabilities");
+    assert_eq!(result["findings"][0]["advisory_id"], "GHSA-xxxx-yyyy-zzzz");
+    assert_eq!(result["reachability_model"], "changed-direct-imports");
+    assert!(result.get("truncated").is_some());
+    assert!(!result["violations"].as_array().unwrap().is_empty());
+    assert!(!serde_json::to_string(&result).unwrap().contains("SENTINEL"));
+    let direct = request("vulnerabilities", arguments);
+    let direct_response: Value = serde_json::from_str(&handle_request(&direct).unwrap()).unwrap();
+    assert!(
+        direct_response.get("error").is_none(),
+        "direct method failed: {direct_response}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn vulnerabilities_uses_configured_minimum_severity() {
+    let (root, proj, osv) = vulnerabilities_fixture();
+    // `[vulnerabilities] minimum_severity` is the CLI's default gate and must
+    // apply over MCP too, without repeating it in every call.
+    std::fs::write(
+        PathBuf::from(&proj).join("leadline.toml"),
+        "[vulnerabilities]\nminimum_severity = \"high\"\n",
+    )
+    .unwrap();
+    let response = call_tool(
+        "vulnerabilities",
+        serde_json::json!({ "path": proj, "osv": [osv] }),
+    );
+    assert!(
+        response.get("error").is_none(),
+        "unexpected error: {response}"
+    );
+    let result = result_of(&response);
+    assert!(
+        !result["violations"].as_array().unwrap().is_empty(),
+        "{result}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn vulnerabilities_rejects_bad_arguments() {
+    let (root, proj, osv) = vulnerabilities_fixture();
+    let good = serde_json::json!({ "path": proj, "osv": [osv] });
+    let mut bad = good.clone();
+    bad["osv"] = serde_json::json!("osv.json");
+    assert!(call_tool("vulnerabilities", bad).get("error").is_some());
+    let mut bad = good.clone();
+    bad["bogus"] = serde_json::json!(1);
+    assert!(call_tool("vulnerabilities", bad).get("error").is_some());
+    let response = call_tool(
+        "vulnerabilities",
+        serde_json::json!({ "osv": ["/tmp/x.json"] }),
+    );
+    assert!(error_of(&response)["code"].as_i64() == Some(-32602));
+    let many: Vec<serde_json::Value> = (0..33)
+        .map(|i| serde_json::json!(format!("f{i}.json")))
+        .collect();
+    assert!(
+        call_tool("vulnerabilities", serde_json::json!({ "osv": many }))
+            .get("error")
+            .is_some()
+    );
+    let response = call_tool("vulnerabilities", serde_json::json!({ "path": "." }));
+    assert!(response.get("error").is_some());
+    let mut bad = good.clone();
+    bad["minimum_severity"] = serde_json::json!("bogus");
+    assert!(call_tool("vulnerabilities", bad).get("error").is_some());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn sql_risks_fixture() -> (Fixture, String) {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    // Root-relative artifacts under the package root, cleaned up afterwards.
+    // Note: not under target/, which discovery excludes via .gitignore.
+    let root = Fixture::create(PathBuf::from(format!(
+        "leadline-mcp-sql-{}-{id}",
+        std::process::id()
+    )));
+    std::fs::write(root.join("risky.sql"), "UPDATE users SET active = false;\n").unwrap();
+    let rel = root.to_str().unwrap().to_owned();
+    (root, rel)
+}
+
+#[test]
+fn sql_risks_registered_with_schema_and_instructions() {
+    let response: Value = serde_json::from_str(
+        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    let tools = result_of(&response)["tools"].as_array().unwrap().clone();
+    let tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "sql_risks")
+        .expect("sql_risks must be registered");
+    let properties = &tool["inputSchema"]["properties"];
+    for key in [
+        "path",
+        "large_offset",
+        "migration_roots",
+        "minimum_severity",
+        "top",
+    ] {
+        assert!(properties.get(key).is_some(), "{key} must be a parameter");
+    }
+    let init: Value = serde_json::from_str(
+        &handle_request(&request("initialize", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        result_of(&init)["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("sql_risks")
+    );
+}
+
+#[test]
+fn sql_risks_reports_static_findings() {
+    let (root, rel) = sql_risks_fixture();
+    let arguments = serde_json::json!({ "path": rel, "minimum_severity": "low" });
+    let response = call_tool("sql_risks", arguments.clone());
+    assert!(
+        response.get("error").is_none(),
+        "unexpected error: {response}"
+    );
+    let result = result_of(&response);
+    envelope_ok(result);
+    assert_eq!(result["tool"], "sql_risks");
+    assert_eq!(result["dialect"], "postgresql");
+    assert_eq!(
+        result["findings"][0]["rule_id"],
+        "sql/update-delete-without-where"
+    );
+    assert!(result.get("truncated").is_some());
+    assert!(!result["violations"].as_array().unwrap().is_empty());
+    let direct = request("sql_risks", arguments);
+    let direct_response: Value = serde_json::from_str(&handle_request(&direct).unwrap()).unwrap();
+    assert!(
+        direct_response.get("error").is_none(),
+        "direct method failed: {direct_response}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sql_risks_honors_config_excludes_and_defaults() {
+    let (root, rel) = sql_risks_fixture();
+    // `[analysis].exclude` must skip files on MCP exactly like the CLI, and
+    // `[sql]` supplies large_offset/migration_roots without arguments.
+    std::fs::write(
+        root.join("leadline.toml"),
+        "[analysis]\nexclude = [\"risky.sql\"]\n\n[sql]\nlarge_offset = 2\n",
+    )
+    .unwrap();
+    let response = call_tool("sql_risks", serde_json::json!({ "path": rel }));
+    assert!(
+        response.get("error").is_none(),
+        "unexpected error: {response}"
+    );
+    let result = result_of(&response);
+    assert!(
+        result["findings"].as_array().unwrap().is_empty(),
+        "{result}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sql_risks_accepts_relative_migration_roots() {
+    let (root, rel) = sql_risks_fixture();
+    std::fs::create_dir_all(root.join("migrations")).unwrap();
+    std::fs::write(
+        root.join("migrations/001.sql"),
+        "CREATE TABLE users (id int);\n",
+    )
+    .unwrap();
+    // Migration roots are analysis-root-relative, like the CLI flag.
+    let response = call_tool(
+        "sql_risks",
+        serde_json::json!({
+            "path": rel,
+            "migration_roots": ["migrations"],
+            "minimum_severity": "low",
+        }),
+    );
+    assert!(
+        response.get("error").is_none(),
+        "unexpected error: {response}"
+    );
+    let result = result_of(&response);
+    assert_eq!(result["schema_evidence_available"], true);
+    assert!(
+        !result["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["rule_id"] == "sql/unknown-table"),
+        "{result}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sql_risks_rejects_bad_arguments() {
+    let (root, rel) = sql_risks_fixture();
+    let good = serde_json::json!({ "path": rel });
+    let mut bad = good.clone();
+    bad["bogus"] = serde_json::json!(1);
+    assert!(call_tool("sql_risks", bad).get("error").is_some());
+    let mut bad = good.clone();
+    bad["migration_roots"] = serde_json::json!(["/abs"]);
+    assert!(call_tool("sql_risks", bad).get("error").is_some());
+    let mut bad = good.clone();
+    bad["top"] = serde_json::json!(201);
+    assert!(call_tool("sql_risks", bad).get("error").is_some());
+    let mut bad = good.clone();
+    bad["large_offset"] = serde_json::json!(0);
+    assert!(call_tool("sql_risks", bad).get("error").is_some());
+    let mut bad = good.clone();
+    bad["minimum_severity"] = serde_json::json!("bogus");
+    assert!(call_tool("sql_risks", bad).get("error").is_some());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn mcp_args(args: &[&str]) -> Result<Option<leadline::mcp::HttpOptions>, String> {
+    leadline::mcp::parse_mcp_args(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+}
+
+#[test]
+fn mcp_args_default_to_stdio() {
+    assert_eq!(mcp_args(&[]), Ok(None));
+}
+
+#[test]
+fn mcp_args_parse_port_and_host() {
+    assert_eq!(
+        mcp_args(&["--port"]),
+        Ok(Some(leadline::mcp::HttpOptions {
+            host: "127.0.0.1".to_owned(),
+            port: leadline::mcp::DEFAULT_HTTP_PORT,
+        }))
+    );
+    assert_eq!(mcp_args(&["--port", "0"]).unwrap().unwrap().port, 0);
+    let options = mcp_args(&["--port", "8080", "--host", "0.0.0.0"])
+        .unwrap()
+        .unwrap();
+    assert_eq!(options.port, 8080);
+    assert_eq!(options.host, "0.0.0.0");
+    assert!(mcp_args(&["--host"]).is_err());
+    // A host configures only the HTTP transport, so it needs a port.
+    assert!(mcp_args(&["--host", "0.0.0.0"]).is_err());
+    assert!(mcp_args(&["--port", "abc"]).is_err());
+    assert!(mcp_args(&["--bogus"]).is_err());
+}
+
+#[test]
+fn http_bind_falls_back_to_free_port_when_taken() {
+    let guard = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let taken = guard.local_addr().unwrap().port();
+    let (_listener, actual, fell_back) = leadline::mcp::bind_http("127.0.0.1", taken).unwrap();
+    assert!(fell_back);
+    assert_ne!(actual, taken);
+}
+
+fn spawn_http_server() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || leadline::mcp::serve_listener(listener));
+    port
+}
+
+fn http_exchange(port: u16, head: &str, body: &str) -> String {
+    use std::io::{Read as _, Write as _};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        stream,
+        "{head}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
+}
+
+#[test]
+fn http_post_serves_tools_list() {
+    let port = spawn_http_server();
+    let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+        .to_string();
+    let response = http_exchange(port, "POST /mcp HTTP/1.1\r\nHost: localhost", &body);
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(response.contains("analyze_changed"));
+}
+
+#[test]
+fn http_health_reports_status() {
+    let port = spawn_http_server();
+    let response = http_exchange(port, "GET /health HTTP/1.1\r\nHost: localhost", "");
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(response.contains("\"status\":\"ok\""));
+}
+
+#[test]
+fn http_rejects_wrong_method_and_path() {
+    let port = spawn_http_server();
+    let response = http_exchange(port, "GET /mcp HTTP/1.1\r\nHost: localhost", "");
+    assert!(response.starts_with("HTTP/1.1 405"), "{response}");
+    let response = http_exchange(port, "GET /nope HTTP/1.1\r\nHost: localhost", "");
+    assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+}
+
+#[test]
+fn http_validates_origin_for_browser_requests() {
+    let port = spawn_http_server();
+    let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+        .to_string();
+    // Non-loopback, scheme-less, and non-http(s) origins are rejected
+    // (DNS-rebinding defense).
+    for origin in [
+        "http://evil.example",
+        "https://evil.example:8443",
+        "null",
+        "localhost",
+        "evil://localhost",
+    ] {
+        let head = format!("POST /mcp HTTP/1.1\r\nHost: localhost\r\nOrigin: {origin}");
+        let response = http_exchange(port, &head, &body);
+        assert!(response.starts_with("HTTP/1.1 403"), "{origin}: {response}");
+    }
+    // Loopback origins and Origin-less clients (stdio bridges, curl) pass.
+    for head in [
+        "POST /mcp HTTP/1.1\r\nHost: localhost\r\nOrigin: http://localhost:5173",
+        "POST /mcp HTTP/1.1\r\nHost: localhost\r\nOrigin: http://127.0.0.1",
+        "POST /mcp HTTP/1.1\r\nHost: localhost",
+    ] {
+        let response = http_exchange(port, head, &body);
+        assert!(response.starts_with("HTTP/1.1 200"), "{head}: {response}");
+    }
+}
+
+#[test]
+fn http_rejects_oversized_header_lines() {
+    let port = spawn_http_server();
+    let long = "x".repeat(9000);
+    // Send the whole request, oversized line included, then wait before
+    // reading: the early rejection must survive a close with request bytes
+    // still queued, not be reset away.
+    use std::io::{Read as _, Write as _};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        stream,
+        "GET /health HTTP/1.1\r\nHost: localhost\r\nX-Long: {long}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("the rejection must survive a delayed read");
+    assert!(response.starts_with("HTTP/1.1 431"), "{response}");
+}
+
+/// Send one raw request without adding framing headers.
+fn http_raw(port: u16, request: &str) -> String {
+    use std::io::{Read as _, Write as _};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
+}
+
+#[test]
+fn http_requires_exactly_one_valid_host_and_content_length() {
+    let port = spawn_http_server();
+    let body =
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}).to_string();
+    let request = |head: &str| {
+        format!(
+            "{head}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    };
+    // HTTP/1.1 requires a Host, and a loopback listener only trusts loopback.
+    let missing = http_raw(port, &request("POST /mcp HTTP/1.1"));
+    assert!(missing.starts_with("HTTP/1.1 400"), "{missing}");
+    let rebound = http_raw(port, &request("POST /mcp HTTP/1.1\r\nHost: evil.example"));
+    assert!(rebound.starts_with("HTTP/1.1 400"), "{rebound}");
+    let duplicate = http_raw(
+        port,
+        &request("POST /mcp HTTP/1.1\r\nHost: localhost\r\nHost: evil.example"),
+    );
+    assert!(duplicate.starts_with("HTTP/1.1 400"), "{duplicate}");
+    // Duplicate framing headers must not let a proxy and the server disagree.
+    let double_length = http_raw(
+        port,
+        &format!(
+            "POST /mcp HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert!(double_length.starts_with("HTTP/1.1 400"), "{double_length}");
+    // An empty port is a malformed authority, not a loopback host.
+    let empty_port = http_raw(port, &request("POST /mcp HTTP/1.1\r\nHost: localhost:"));
+    assert!(empty_port.starts_with("HTTP/1.1 400"), "{empty_port}");
+    // Loopback authorities with ports keep working, including split bodies.
+    let ok = http_raw(port, &request("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:1"));
+    assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
+    use std::io::{Read as _, Write as _};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        stream,
+        "POST /mcp HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .unwrap();
+    let (first, second) = body.split_at(body.len() / 2);
+    write!(stream, "{first}").unwrap();
+    stream.flush().unwrap();
+    write!(stream, "{second}").unwrap();
+    let mut split_response = String::new();
+    stream.read_to_string(&mut split_response).unwrap();
+    assert!(
+        split_response.starts_with("HTTP/1.1 200"),
+        "{split_response}"
+    );
+}
+
+#[test]
+fn http_rejects_malformed_framing_and_empty_bodies() {
+    let port = spawn_http_server();
+    let body =
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}).to_string();
+    // Only HTTP/1.1 is spoken.
+    let response = http_raw(
+        port,
+        "GET /health HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    );
+    assert!(response.starts_with("HTTP/1.1 505"), "{response}");
+    // Exactly three request-line tokens.
+    let response = http_raw(
+        port,
+        "GET /health HTTP/1.1 extra\r\nHost: localhost\r\n\r\n",
+    );
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    // No whitespace between a header name and its colon.
+    let response = http_raw(port, "GET /health HTTP/1.1\r\nHost : localhost\r\n\r\n");
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    // Header lines without a colon are malformed.
+    let response = http_raw(
+        port,
+        "GET /health HTTP/1.1\r\nHost: localhost\r\nbroken\r\n\r\n",
+    );
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    // Transfer codings are not implemented, so TE plus Content-Length cannot
+    // be interpreted differently from a front proxy.
+    let response = http_raw(
+        port,
+        &format!(
+            "POST /mcp HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert!(response.starts_with("HTTP/1.1 501"), "{response}");
+    // An empty POST is not a JSON-RPC notification.
+    let response = http_raw(
+        port,
+        "POST /mcp HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    // Framing numbers are digits only.
+    let response = http_raw(
+        port,
+        "POST /mcp HTTP/1.1\r\nHost: localhost\r\nContent-Length: +10\r\nConnection: close\r\n\r\n",
+    );
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    // A half-closed connection without the terminating blank line is
+    // truncated, not an empty header line.
+    use std::io::{Read as _, Write as _};
+    use std::net::Shutdown;
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(stream, "GET /health HTTP/1.1\r\nHost: localhost\r\n").unwrap();
+    stream.shutdown(Shutdown::Write).unwrap();
+    let mut truncated = String::new();
+    stream.read_to_string(&mut truncated).unwrap();
+    assert!(truncated.starts_with("HTTP/1.1 400"), "{truncated}");
+}
+
+#[test]
+fn jsonrpc_rejects_invalid_requests_and_oversized_batches() {
+    // Empty batch, missing method, and structured ids are invalid requests.
+    for raw in [
+        "[]",
+        "{}",
+        r#"[{"jsonrpc": "2.0"}]"#,
+        r#"{"jsonrpc": "2.0", "id": true, "method": "ping"}"#,
+        r#"{"jsonrpc": "2.0", "id": [1], "method": "ping"}"#,
+    ] {
+        let mut response: Value = serde_json::from_str(&handle_request(raw).unwrap()).unwrap();
+        if let Value::Array(items) = response {
+            response = items.into_iter().next().unwrap();
+        }
+        assert_eq!(response["error"]["code"], -32600, "{raw}");
+    }
+    // A batch of notifications alone stays silent.
+    let silent = format!(
+        "[{}]",
+        r#"{"jsonrpc": "2.0", "method": "notifications/initialized"}"#
+    );
+    assert!(handle_request(&silent).is_none());
+    // Tool notifications are dispatched for their side effects but never
+    // answered.
+    assert!(
+        handle_request(
+            r#"{"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "explain_metric", "arguments": {"metric": "crap"}}}"#
+        )
+        .is_none()
+    );
+    // Params, when present, must be structured.
+    let mut response: Value = serde_json::from_str(
+        &handle_request(r#"{"jsonrpc": "2.0", "id": 1, "method": "ping", "params": "x"}"#).unwrap(),
+    )
+    .unwrap();
+    if let Value::Array(items) = response {
+        response = items.into_iter().next().unwrap();
+    }
+    assert_eq!(response["error"]["code"], -32602);
+    // Batches are capped before they can amplify into a huge response; the
+    // over-limit reply keeps the array shape so batch clients can parse it.
+    let batch: Vec<Value> = (0..65)
+        .map(|_| serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}))
+        .collect();
+    let mut response: Value =
+        serde_json::from_str(&handle_request(&serde_json::to_string(&batch).unwrap()).unwrap())
+            .unwrap();
+    let Value::Array(items) = &response else {
+        panic!("over-limit batch must answer with an array: {response}");
+    };
+    response = items.first().unwrap().clone();
+    assert_eq!(response["error"]["code"], -32600);
+    // An oversized batch of notifications still draws no response.
+    let notifications: Vec<Value> = (0..65)
+        .map(|_| serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+        .collect();
+    assert!(handle_request(&serde_json::to_string(&notifications).unwrap()).is_none());
+}
+
+#[test]
+fn mis_typed_string_arguments_are_rejected() {
+    // A non-string gate argument must not silently disable the gate.
+    let response = call_tool(
+        "security_findings",
+        serde_json::json!({
+            "sarif": ["tests/fixtures/security/basic.sarif"],
+            "minimum_severity": 123,
+        }),
+    );
+    assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    // Same for the analysis path: a number is not a path.
+    let response = call_tool("analyze", serde_json::json!({ "path": 1 }));
+    assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+}
+
+#[test]
+fn analyze_and_test_targets_reject_over_limit_top() {
+    let dir = fixture_dir("function calc(x: boolean) { if (x) return 1; return 0; }\n");
+    let response = call_tool(
+        "analyze",
+        serde_json::json!({ "path": dir.to_str().unwrap(), "top": 201 }),
+    );
+    assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    let response = call_tool(
+        "test_targets",
+        serde_json::json!({
+            "path": dir.to_str().unwrap(),
+            "coverage": dir.join("missing.info").to_str().unwrap(),
+            "top": 201,
+        }),
+    );
+    assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn artifact_paths_reject_parent_and_symlink_escapes() {
+    let (root, proj, sarif) = security_findings_fixture();
+    // Parent traversal out of the working directory.
+    let response = call_tool(
+        "security_findings",
+        serde_json::json!({ "path": proj, "sarif": ["../outside.sarif"] }),
+    );
+    assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    // Interior `..` that stays inside the working directory is normalized.
+    let interior = format!("leadline-mcp-missing/../{sarif}");
+    let response = call_tool(
+        "security_findings",
+        serde_json::json!({ "path": proj, "sarif": [interior], "minimum_severity": "low" }),
+    );
+    assert!(response.get("error").is_none(), "{response}");
+    // sql_plan directories are validated the same way.
+    let response = call_tool(
+        "sql_plan",
+        serde_json::json!({ "current": "../plans", "baseline": "target/plans" }),
+    );
+    assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    let response = call_tool(
+        "sql_plan",
+        serde_json::json!({ "current": "target/plans", "baseline": "../../plans" }),
+    );
+    assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn artifact_paths_reject_symlinks_that_leave_the_working_directory() {
+    let (root, proj, _sarif) = security_findings_fixture();
+    let link = root.join("escape.sarif");
+    std::os::unix::fs::symlink("/etc/hosts", &link).unwrap();
+    let response = call_tool(
+        "security_findings",
+        serde_json::json!({ "path": proj, "sarif": [link.to_str().unwrap()] }),
+    );
+    assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    // A missing artifact must not hide behind a symlinked parent directory.
+    let directory = root.join("escape_dir");
+    std::os::unix::fs::symlink("/etc", &directory).unwrap();
+    let missing = directory.join("missing.sarif");
+    let response = call_tool(
+        "security_findings",
+        serde_json::json!({ "path": proj, "sarif": [missing.to_str().unwrap()] }),
+    );
+    assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn check_uses_config_thresholds_and_regressions() {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let root =
+        std::env::temp_dir().join(format!("leadline-mcp-config-{}-{id}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("leadline.toml"),
+        "[thresholds.function]\ncyclomatic = 1\n\n[regressions]\ncognitive = 2\ncyclomatic = 1\nmax_nesting = 1\ncrap = 1.0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { if (x > 0) return x; return 0; }\n",
+    )
+    .unwrap();
+    // The request names only cognitive; cyclomatic must come from the config.
+    let response = call_tool(
+        "check",
+        serde_json::json!({
+            "path": root.to_str().unwrap(),
+            "thresholds": { "cognitive": 100 },
+        }),
+    );
+    let result = result_of(&response);
+    assert_eq!(result["passed"], false, "{result}");
+    assert_eq!(result["thresholds"]["cyclomatic"], 1);
+
+    // A configured +1 cyclomatic regression limit must reach the gate.
+    let run = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}");
+    };
+    run(&["init", "-q"]);
+    run(&["config", "user.email", "test@example.com"]);
+    run(&["config", "user.name", "Test"]);
+    run(&["add", "."]);
+    run(&["commit", "-m", "base", "-q"]);
+    std::fs::write(
+        root.join("calc.ts"),
+        "function calc(x: number) { if (x > 0) { if (x > 1) return 2; } return 0; }\n",
+    )
+    .unwrap();
+    let response = call_tool(
+        "check",
+        serde_json::json!({
+            "path": root.to_str().unwrap(),
+            "base": "HEAD",
+            "regressions": true,
+            "thresholds": { "cyclomatic": 100 },
+        }),
+    );
+    let result = result_of(&response);
+    assert_eq!(result["regressions"]["cognitive"], 2);
+    assert_eq!(result["regressions"]["cyclomatic"], 1);
+    // Deltas equal to the configured limits pass; zero-tolerance would fail.
+    assert_eq!(result["passed"], true, "{result}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn security_findings_caps_violations_at_top() {
+    let (root, proj, sarif) = security_findings_fixture();
+    // Three gated findings in one report; top=1 must bound the response.
+    let report = std::fs::read_to_string(&sarif).unwrap();
+    let mut value: Value = serde_json::from_str(&report).unwrap();
+    let mut results = Vec::new();
+    for index in 0..3 {
+        let mut result = value["runs"][0]["results"][0].clone();
+        result["ruleId"] = serde_json::json!(format!("js/hardcoded-secret-{index}"));
+        results.push(result);
+    }
+    value["runs"][0]["results"] = Value::Array(results);
+    std::fs::write(&sarif, value.to_string()).unwrap();
+    let response = call_tool(
+        "security_findings",
+        serde_json::json!({
+            "path": proj,
+            "sarif": [sarif],
+            "minimum_severity": "low",
+            "top": 1,
+        }),
+    );
+    let result = result_of(&response);
+    assert_eq!(result["violations"].as_array().unwrap().len(), 1);
+    assert_eq!(result["truncated"], true);
+    std::fs::remove_dir_all(root).unwrap();
 }

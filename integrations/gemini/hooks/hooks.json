@@ -1,1 +1,35 @@
-{"hooks":{"AfterAgent":[{"command":"\"$GEMINI_PROJECT_DIR\"/integrations/gemini/hooks/leadline-after-tool.sh","timeout":60,"type":"command"}],"AfterTool":[{"command":"\"$GEMINI_PROJECT_DIR\"/integrations/gemini/hooks/leadline-after-tool.sh","matcher":"edit|write","timeout":60,"type":"command"}]}}
+{
+  "hooks": {
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "name": "leadline-changed-feedback",
+            "type": "command",
+            "command": "\"${extensionPath}/hooks/leadline-after-tool.sh\"",
+            "timeout": 60000
+          },
+          {
+            "name": "leadline-secret-gate",
+            "type": "command",
+            "command": "\"${extensionPath}/hooks/leadline-secret-check.sh\"",
+            "timeout": 60000
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "edit|write",
+        "hooks": [
+          {
+            "name": "leadline-changed-feedback",
+            "type": "command",
+            "command": "\"${extensionPath}/hooks/leadline-after-tool.sh\"",
+            "timeout": 60000
+          }
+        ]
+      }
+    ]
+  }
+}

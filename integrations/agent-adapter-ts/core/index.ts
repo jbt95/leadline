@@ -9,6 +9,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { isJsonObject } from "./json.js";
 import type { JsonObject, JsonValue } from "./json.js";
@@ -44,9 +45,16 @@ export interface AnalysisFunction extends FunctionMetrics {
   line: number;
 }
 
+/** One syntax-error span the analyzer could not parse. */
+export interface ParseDiagnostic {
+  line: number;
+  kind: string;
+}
+
 export interface AnalysisFile {
   path: string;
   functions: AnalysisFunction[];
+  parseErrors: ParseDiagnostic[];
 }
 
 export interface AnalysisReport {
@@ -62,11 +70,18 @@ export interface ChangedEntry {
   after: FunctionMetrics;
 }
 
+/** One syntax-error span in the before or after revision of one file. */
+export interface ChangedParseError extends ParseDiagnostic {
+  path: string;
+  phase: "before" | "after";
+}
+
 export interface ChangedReport {
   base: string;
   summary: { changedFunctions: number; regressions: number; improvements: number };
   regressions: ChangedEntry[];
   improvements: ChangedEntry[];
+  parseErrors: ChangedParseError[];
   truncated: boolean;
 }
 
@@ -168,6 +183,25 @@ function decodeMetrics(raw: JsonObject): FunctionMetrics {
   };
 }
 
+function decodeDiagnostics(raw: JsonValue | undefined, what: string): ParseDiagnostic[] {
+  if (!Array.isArray(raw)) {
+    throw new Error(`leadline: ${what} is missing its parse_errors array`);
+  }
+  const diagnostics: ParseDiagnostic[] = [];
+  for (const entry of raw) {
+    if (!isJsonObject(entry)) {
+      throw new Error(`leadline: ${what} parse_errors entries must be objects`);
+    }
+    const line = entry.start_line;
+    const kind = entry.kind;
+    diagnostics.push({
+      line: typeof line === "number" && Number.isFinite(line) ? line : 0,
+      kind: typeof kind === "string" && kind.length > 0 ? kind : "parse-error",
+    });
+  }
+  return diagnostics;
+}
+
 function parseObject(stdout: string, what: string): JsonObject {
   let parsed: JsonValue;
   try {
@@ -211,7 +245,11 @@ export function decodeAnalysis(stdout: string): AnalysisReport {
       }
       functions.push({ name, line: expectNumber(functionRaw, "line"), ...decodeMetrics(functionRaw) });
     }
-    files.push({ path, functions });
+    files.push({
+      path,
+      functions,
+      parseErrors: decodeDiagnostics(fileRaw.parse_errors, `file '${path}'`),
+    });
   }
   return { files, truncated: parsed.truncated === true };
 }
@@ -246,6 +284,31 @@ function decodeChangedEntries(raw: JsonValue | undefined, field: string): Change
   return entries;
 }
 
+function decodeChangedParseErrors(raw: JsonValue | undefined): ChangedParseError[] {
+  if (!Array.isArray(raw)) {
+    throw new Error("leadline: changed output is missing its parse_errors array");
+  }
+  const errors: ChangedParseError[] = [];
+  for (const entryRaw of raw) {
+    if (!isJsonObject(entryRaw)) {
+      throw new Error("leadline: expected entries in changed parse_errors");
+    }
+    const path = entryRaw.path;
+    if (typeof path !== "string" || path.length === 0) {
+      throw new Error("leadline: changed parse_errors entry is missing its path");
+    }
+    for (const phase of ["before", "after"] as const) {
+      for (const diagnostic of decodeDiagnostics(
+        entryRaw[phase],
+        `changed ${phase} for '${path}'`,
+      )) {
+        errors.push({ path, phase, ...diagnostic });
+      }
+    }
+  }
+  return errors;
+}
+
 export function decodeChanged(stdout: string): ChangedReport {
   const parsed = parseObject(stdout, "changed");
   const base = parsed.base;
@@ -265,6 +328,7 @@ export function decodeChanged(stdout: string): ChangedReport {
     },
     regressions: decodeChangedEntries(parsed.regressions, "regressions"),
     improvements: decodeChangedEntries(parsed.improvements, "improvements"),
+    parseErrors: decodeChangedParseErrors(parsed.parse_errors),
     truncated: parsed.truncated === true,
   };
 }
@@ -315,6 +379,9 @@ export function formatAnalysis(report: AnalysisReport): string {
     for (const fn of file.functions) {
       lines.push(analysisLine(file.path, fn));
     }
+    for (const error of file.parseErrors) {
+      lines.push(`${file.path} parse error at line ${error.line} (${error.kind})`);
+    }
   }
   if (report.truncated) {
     lines.push("... truncated: analyzer output was capped");
@@ -336,7 +403,14 @@ export function formatChanged(report: ChangedReport): string {
   for (const entry of report.improvements) {
     lines.push(changeLine("improvement", entry));
   }
-  if (report.regressions.length === 0 && report.improvements.length === 0) {
+  for (const error of report.parseErrors) {
+    lines.push(`${error.path} parse error in ${error.phase} at line ${error.line} (${error.kind})`);
+  }
+  if (
+    report.regressions.length === 0 &&
+    report.improvements.length === 0 &&
+    report.parseErrors.length === 0
+  ) {
     lines.push("No complexity regressions or improvements.");
   }
   if (report.truncated) {
@@ -386,6 +460,78 @@ export async function runCheck(input: CheckInput, cwd?: string): Promise<string>
   const path = input.path !== undefined && input.path.length > 0 ? input.path : ".";
   const args = ["check", path, "--format", AGENT_FORMAT];
   return formatAnalysis(decodeAnalysis(await runCheckWithThresholds(args, cwd)));
+}
+
+// --- Shared secret gate (scanner via the versioned shell runner) ---
+//
+// The shell runner owns scanner invocation and redacted report handoff;
+// this module executes it with a fixed empty argument list and maps its
+// exit codes. No detection patterns live here.
+
+export type SecretGateMode = "worktree" | "staged";
+
+export type SecretGateStatus = "clean" | "findings" | "unavailable";
+
+export interface AdapterResult {
+  status: SecretGateStatus;
+  detail: string;
+}
+
+const SECRET_RUNNER_RELATIVE = ["..", "..", "common", "leadline-secret-check.sh"];
+
+function secretRunnerPath(): string {
+  const override = process.env.LEADLINE_SECRET_RUNNER;
+  if (override !== undefined && override.length > 0) {
+    return override;
+  }
+  return join(fileURLToPath(new URL(".", import.meta.url)), ...SECRET_RUNNER_RELATIVE);
+}
+
+function capDetail(text: string): string {
+  return capLines(text.split("\n")).join("\n");
+}
+
+export async function runSecretGate(root: string, mode: SecretGateMode): Promise<AdapterResult> {
+  const runner = secretRunnerPath();
+  try {
+    await execFileAsync(runner, [], {
+      cwd: root,
+      env: { ...process.env, LEADLINE_SECRET_MODE: mode },
+      maxBuffer: MAX_BUFFER_BYTES,
+    });
+    return { status: "clean", detail: "" };
+  } catch (error) {
+    const failure = error as { code?: string | number; stdout?: string; stderr?: string };
+    if (failure.code === "ENOENT") {
+      return { status: "unavailable", detail: "secret gate runner not found" };
+    }
+    const code = typeof failure.code === "number" ? failure.code : -1;
+    const stdout = typeof failure.stdout === "string" ? failure.stdout : "";
+    const stderr = typeof failure.stderr === "string" ? failure.stderr : "";
+    if (code === 1) {
+      return { status: "findings", detail: capDetail(stdout) };
+    }
+    if (code === 127) {
+      const hint = stderr.trim().length > 0 ? stderr.trim() : "secret scanner unavailable";
+      return { status: "unavailable", detail: capDetail(hint) };
+    }
+    const detail = stderr.trim().length > 0 ? stderr.trim() : `secret gate failed with exit ${code}`;
+    throw new Error(capDetail(detail));
+  }
+}
+
+/// One-line status for an explicit secret-check tool call.
+///
+/// `unavailable` must never read as clean: a missing runner or scanner means
+/// the repository was not scanned, so the caller has to say so.
+export function secretGateMessage(result: AdapterResult): string {
+  if (result.status === "findings") {
+    return `leadline secret gate: possible secrets detected\n${result.detail}`;
+  }
+  if (result.status === "unavailable") {
+    return `leadline secret gate unavailable: ${result.detail}`;
+  }
+  return "leadline secret gate: clean";
 }
 
 // Post-edit feedback runs in warn mode only: it returns null (stays silent)

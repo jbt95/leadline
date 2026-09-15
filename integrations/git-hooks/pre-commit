@@ -1,0 +1,13 @@
+#!/bin/sh
+# Versioned pre-commit hook: delegates secret gating to the shared runner.
+#
+# Install manually (Leadline never installs hooks automatically):
+#   cp integrations/git-hooks/pre-commit .git/hooks/pre-commit
+# or:
+#   ln -s ../../integrations/git-hooks/pre-commit .git/hooks/pre-commit
+#
+# No detection logic lives here; see integrations/common/leadline-secret-check.sh.
+set -eu
+root="$(git rev-parse --show-toplevel)" || exit 2
+runner="${LEADLINE_SECRET_RUNNER:-$root/integrations/common/leadline-secret-check.sh}"
+LEADLINE_SECRET_MODE=staged exec "$runner"

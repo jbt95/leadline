@@ -1,0 +1,14 @@
+{
+  "version": "2.1.0",
+  "runs": [{
+    "tool": {"driver": {"name": "semgrep"}},
+    "results": [{
+      "ruleId": "sql-injection",
+      "level": "error",
+      "message": {"text": "duplicate SECRET_SENTINEL finding"},
+      "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/store.ts"}, "region": {"startLine": 3}}}],
+      "partialFingerprints": {"primaryLocationLineHash": "injection-1"},
+      "properties": {"security-severity": "8.8"}
+    }]
+  }]
+}

@@ -1,0 +1,13 @@
+{
+  "results": [{
+    "source": {"path": "package-lock.json"},
+    "packages": [{
+      "package": {"name": "lodash", "version": "4.17.20", "ecosystem": "npm"},
+      "vulnerabilities": [{
+        "id": "GHSA-existing-lodash",
+        "database_specific": {"severity": "HIGH"},
+        "affected": [{"ranges": [{"events": [{"fixed": "4.17.21"}]}]}]
+      }]
+    }]
+  }]
+}

@@ -101,9 +101,9 @@ print a `raise --limit` hint when rows are hidden. `--json` and
 
 ## Exit status
 
-`risk` is informational and exits `0` on success. It never gates: quality
-gating on risk regressions is deferred to Milestone E (diff intelligence),
-which will keep these exit codes backward compatible. Usage errors exit `2`
+`risk` is informational and exits `0` on success. It never gates: score
+regressions are compared by `debt --fail-on-regression` (diff intelligence),
+which exits `1` when risk increases. Usage errors exit `2`
 (unknown flag, bad `--since`, `--limit 0`, `--json` with `--format`),
 an empty scope exits `3`, and unreadable coverage exits `4`.
 
