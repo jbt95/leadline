@@ -178,11 +178,8 @@ pub fn sha256_file(path: &Path) -> Result<String> {
 }
 
 fn first_hash(stdout: &str) -> Result<String> {
-    let hash = stdout
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let hash = stdout.split_whitespace().next().unwrap_or("");
+    let hash = hash.strip_prefix('\\').unwrap_or(hash).to_ascii_lowercase();
     if is_sha256(&hash) {
         Ok(hash)
     } else {
@@ -528,6 +525,15 @@ mod tests {
         assert_eq!(
             checksum_for(archive, &format!("{}  {archive}\n", "z".repeat(64))),
             None
+        );
+    }
+
+    #[test]
+    fn parses_coreutils_escaped_hash_output() {
+        let hash = "8dde6f74b5006cbeba6856f93407c0c45182e3d8c6b3e6dd8d1e4ee5d40d69d4";
+        assert_eq!(
+            first_hash(&format!("\\{hash}  C:\\temp\\archive.tar.gz\n")).unwrap(),
+            hash
         );
     }
 

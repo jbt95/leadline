@@ -708,10 +708,7 @@ fn drain_request(mut stream: &std::net::TcpStream) {
     use std::io::Read as _;
     let deadline = std::time::Instant::now() + HTTP_DRAIN_TIMEOUT;
     let mut scratch = [0u8; 4096];
-    loop {
-        let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
-            break;
-        };
+    while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
         let _ = stream.set_read_timeout(Some(remaining.max(std::time::Duration::from_millis(1))));
         match stream.read(&mut scratch) {
             Ok(0) | Err(_) => break,

@@ -2,6 +2,12 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## Unreleased
+
+### Fixed
+
+- Windows checksum verification accepts GNU `sha256sum`'s escaped output marker for paths containing backslashes.
+
 ## 0.6.0 - 2026-09-15
 
 ### Added

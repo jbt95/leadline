@@ -1036,7 +1036,7 @@ pub(crate) fn host_sql_sites(path: &str, source: &[u8]) -> crate::Result<Vec<Hos
             stack.push(node.child(index).expect("child index is in bounds"));
         }
     }
-    sites.sort_by(|left, right| (left.line, left.end_line).cmp(&(right.line, right.end_line)));
+    sites.sort_by_key(|site| (site.line, site.end_line));
     Ok(sites)
 }
 
