@@ -29,8 +29,9 @@ only and never blocks the agent.
 Secret gate (optional): register
 `integrations/cline/plugin/leadline-secret-check.sh` as the `secretGate`
 hook from `plugin/cline-hooks.example.json`. It runs the shared worktree
-gate wrapper, which exits `2` on findings, scanner failures, or a missing
-tool; whether Cline treats that exit code as blocking is unverified, so
+gate wrapper, which exits `2` on findings and exits `1` (visible,
+non-blocking) when the scanner or runner is unavailable; whether Cline
+treats exit `2` as blocking is unverified, so
 treat it as a visible check until you confirm it in your Cline version
 (see `docs/agent-integration-guide.md`).
 

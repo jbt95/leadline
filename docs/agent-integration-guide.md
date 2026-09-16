@@ -187,10 +187,14 @@ block; Cline's `secretGate` runs the same shared wrapper (whether Cline
 honors exit `2` as blocking is unverified); Pi's and Cline's post-edit hooks
 only warn; and the OpenCode `leadline_secret_check` tool runs on demand in
 warn mode. Claude and Gemini only block on exit `2`, so the shared wrapper
-maps findings, scanner failures, and missing tools to exit `2` with the
-runner's redacted diagnostics on stderr. The wrapper resolves
-`integrations/common/leadline-secret-check.sh` from the checkout, from the
-host project directory (`GEMINI_PROJECT_DIR`/`CLAUDE_PROJECT_DIR`), or from
+maps findings to exit `2` with the runner's redacted diagnostics on stderr;
+an unavailable scanner or runner, a scan failure, or a bad mode exits `1`
+(visible to the user, non-blocking) so an environment miss cannot loop a
+Stop hook. The wrapper resolves
+`integrations/common/leadline-secret-check.sh` from the packaged extension
+(a vendored `common/` copy ships with the Claude Code plugin), from the
+checkout, from the host project directory
+(`GEMINI_PROJECT_DIR`/`CLAUDE_PROJECT_DIR`), or from
 `LEADLINE_SECRET_RUNNER`. Every invocation passes
 `--redact`, prints only fixed diagnostics (never SARIF, diffs, or secret
 values), and cleans its private temporary files via trap. To bypass,

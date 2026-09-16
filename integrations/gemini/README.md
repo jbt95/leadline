@@ -37,9 +37,10 @@ files are touched, so removal leaves config clean.
 - AfterTool hooks are non-blocking: they always exit 0, return
   `{"decision":"continue"}`, and attach regressions as context only. They
   drain the hook event without logging it.
-- The AfterAgent secret gate exits `2` on findings, scanner failures, or a
-  missing tool, with the runner's redacted diagnostics on stderr; Gemini
-  treats exit `2` as a blocked turn (see `docs/agent-integration-guide.md`).
+- The AfterAgent secret gate exits `2` on findings with the runner's
+  redacted diagnostics on stderr; an unavailable scanner or runner exits `1`
+  (visible, non-blocking). Gemini treats exit `2` as a blocked turn (see
+  `docs/agent-integration-guide.md`).
 - Grant `leadline` subprocess execution; nothing else needed.
 
 ## Hook protocol

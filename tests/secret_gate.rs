@@ -294,6 +294,7 @@ fn native_hook_wrappers_delegate_worktree_mode() {
         &bin.join("runner"),
         r#"#!/bin/sh
 printf '%s\n' "$LEADLINE_SECRET_MODE" > "$MODE_FILE"
+echo "runner diagnostic" >&2
 exit "$RUNNER_EXIT"
 "#,
     );
@@ -311,9 +312,9 @@ exit "$RUNNER_EXIT"
         let mut permissions = std::fs::metadata(&local).unwrap().permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&local, permissions).unwrap();
-        // Without the override and without the shared directory the wrapper
-        // must still fail closed (exit 2), not abort under `set -e` with the
-        // non-blocking exit 1.
+        // Without the override, without a vendored runner, and without the
+        // shared directory the wrapper surfaces a visible non-blocking error
+        // (exit 1) so a packaging miss cannot loop a Stop hook.
         let missing = spaced.join("missing");
         std::fs::create_dir_all(&missing).unwrap();
         let missing_local = missing.join("leadline-secret-check.sh");
@@ -326,10 +327,38 @@ exit "$RUNNER_EXIT"
             .current_dir(&spaced)
             .output()
             .unwrap();
-        assert_eq!(output.status.code(), Some(2), "{wrapper}");
+        assert_eq!(output.status.code(), Some(1), "{wrapper}");
         assert!(
             !String::from_utf8_lossy(&output.stderr).is_empty(),
-            "{wrapper}: a block must carry a reason"
+            "{wrapper}: an unavailable runner must say why"
+        );
+        // A packaged extension vendors the runner at `<hook>/../common`; the
+        // wrapper must prefer that copy over the repository layout.
+        let packaged = spaced.join("packaged");
+        std::fs::create_dir_all(packaged.join("hooks")).unwrap();
+        std::fs::create_dir_all(packaged.join("common")).unwrap();
+        let packaged_local = packaged.join("hooks/leadline-secret-check.sh");
+        std::fs::copy(manifest.join(wrapper), &packaged_local).unwrap();
+        let mut packaged_permissions = std::fs::metadata(&packaged_local).unwrap().permissions();
+        packaged_permissions.set_mode(0o755);
+        std::fs::set_permissions(&packaged_local, packaged_permissions).unwrap();
+        let vendored = packaged.join("common/leadline-secret-check.sh");
+        std::fs::copy(bin.join("runner"), &vendored).unwrap();
+        let mut vendored_permissions = std::fs::metadata(&vendored).unwrap().permissions();
+        vendored_permissions.set_mode(0o755);
+        std::fs::set_permissions(&vendored, vendored_permissions).unwrap();
+        let output = Command::new(&packaged_local)
+            .env("MODE_FILE", spaced.join("mode_packaged"))
+            .env("RUNNER_EXIT", "0")
+            .env("PATH", "/usr/bin:/bin")
+            .current_dir(&spaced)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{wrapper}");
+        assert_eq!(
+            std::fs::read_to_string(spaced.join("mode_packaged")).unwrap(),
+            "worktree\n",
+            "{wrapper}"
         );
         // A copied extension no longer sits beside integrations/common; the
         // host project's checkout still provides the runner.
@@ -361,9 +390,16 @@ exit "$RUNNER_EXIT"
             "worktree\n",
             "{wrapper}"
         );
-        // Findings (runner exit 1) must reach the host as exit 2, the only
-        // blocking status in the shared Claude/Gemini hook protocol.
-        for (exit, wrapper_exit, mode_file) in [(1, 2, "mode_one"), (0, 0, "mode_zero")] {
+        // Findings (runner exit 1) reach the host as exit 2, the only
+        // blocking status in the shared hook protocol. Clean runs exit 0;
+        // an unavailable scanner (127) or failed scan (4) stays visible and
+        // non-blocking (exit 1).
+        for (exit, wrapper_exit, mode_file) in [
+            (0, 0, "mode_zero"),
+            (1, 2, "mode_one"),
+            (4, 1, "mode_four"),
+            (127, 1, "mode_unavailable"),
+        ] {
             let output = Command::new(&local)
                 .env("LEADLINE_SECRET_RUNNER", bin.join("runner"))
                 .env("MODE_FILE", spaced.join(mode_file))
@@ -378,9 +414,32 @@ exit "$RUNNER_EXIT"
                 "worktree\n",
                 "{wrapper}"
             );
+            if exit != 0 {
+                assert!(
+                    String::from_utf8_lossy(&output.stderr).contains("runner diagnostic"),
+                    "{wrapper}: runner exit {exit} must surface its diagnostics"
+                );
+            }
         }
     }
     std::fs::remove_dir_all(root).unwrap();
+}
+
+/// The Claude Code marketplace copies only the plugin directory, so the
+/// plugin ships its own runner copy; keep it byte-identical to the canonical
+/// shared runner or the packaged gate silently drifts.
+#[test]
+fn claude_plugin_ships_the_shared_runner() {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let canonical =
+        std::fs::read(manifest.join("integrations/common/leadline-secret-check.sh")).unwrap();
+    let vendored =
+        std::fs::read(manifest.join("integrations/claude-code/common/leadline-secret-check.sh"))
+            .expect("the Claude Code plugin must vendor the shared runner");
+    assert_eq!(
+        vendored, canonical,
+        "the vendored runner drifted from integrations/common"
+    );
 }
 
 #[test]

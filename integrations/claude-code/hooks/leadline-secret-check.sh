@@ -1,22 +1,28 @@
 #!/bin/sh
-# Shared secret-gate wrapper: worktree scan via the common runner, with the
-# runner's status translated to the hook protocol shared by Claude Code and
-# Gemini CLI, where only exit 2 blocks the action or turn. Findings and gate
-# failures carry the runner's redacted diagnostics on stderr.
+# Secret-gate wrapper for host hooks where exit 2 blocks the action or turn
+# (Claude Code, Gemini CLI, Cline). Only findings block: the shared runner's
+# exit 1 becomes exit 2. An unavailable runner or scanner, a scan failure, or
+# a bad mode exits 1 with the runner's redacted diagnostics on stderr, so an
+# environment miss warns visibly without trapping the turn.
 set -eu
-here="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+here="$(CDPATH='' cd -- "$(dirname "$0")" && pwd)"
 runner="${LEADLINE_SECRET_RUNNER:-}"
 if [ -z "$runner" ]; then
-  # `|| common=""` keeps a missing shared directory from aborting under
-  # `set -e` with exit 1, which hosts read as a warning, not a block.
-  common="$(CDPATH= cd -- "$here/../../common" 2>/dev/null && pwd)" || common=""
-  if [ -n "$common" ] && [ -f "$common/leadline-secret-check.sh" ]; then
-    runner="$common/leadline-secret-check.sh"
-  fi
+  # A vendored runner beside the hook (`common/`) keeps packaged extensions
+  # self-contained; the repository layout carries it one directory higher.
+  for candidate in \
+    "$here/../common/leadline-secret-check.sh" \
+    "$here/../../common/leadline-secret-check.sh"
+  do
+    if [ -f "$candidate" ]; then
+      runner="$candidate"
+      break
+    fi
+  done
 fi
 if [ -z "$runner" ]; then
-  # A copied extension no longer sits beside integrations/common; the host
-  # project's checkout still does.
+  # A copied extension without a vendored runner still resolves from the host
+  # project's checkout.
   for project in "${GEMINI_PROJECT_DIR:-}" "${CLAUDE_PROJECT_DIR:-}"; do
     candidate="$project/integrations/common/leadline-secret-check.sh"
     if [ -n "$project" ] && [ -f "$candidate" ]; then
@@ -27,17 +33,22 @@ if [ -z "$runner" ]; then
 fi
 if [ -z "$runner" ]; then
   echo "leadline-secret-check: shared runner not found; set LEADLINE_SECRET_RUNNER" >&2
-  exit 2
+  exit 1
 fi
 set +e
 diagnostics="$(LEADLINE_SECRET_MODE=worktree "$runner" 2>&1)"
 status=$?
 set -e
-if [ "$status" -ne 0 ]; then
-  if [ -n "$diagnostics" ]; then
-    printf '%s\n' "$diagnostics" >&2
-  fi
-  # Exit 1 (findings), 4 (scanner failure), and 127 (missing tool) would
-  # otherwise read as warnings; only exit 2 blocks.
+if [ "$status" -eq 0 ]; then
+  exit 0
+fi
+if [ -n "$diagnostics" ]; then
+  printf '%s\n' "$diagnostics" >&2
+fi
+if [ "$status" -eq 1 ]; then
+  # Findings are the only blocking status in the host hook protocol.
   exit 2
 fi
+# Scanner/runner unavailable (127), scan failure (4), bad mode (2): visible
+# but non-blocking.
+exit 1

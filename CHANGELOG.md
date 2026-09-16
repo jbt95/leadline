@@ -2,6 +2,20 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## Unreleased
+
+### Fixed
+
+- The Claude Code plugin now vendors the shared secret-gate runner
+  (`integrations/claude-code/common/`), so a marketplace install resolves it
+  without `LEADLINE_SECRET_RUNNER`; a drift test keeps the copy identical to
+  `integrations/common/leadline-secret-check.sh`.
+- The Claude/Gemini/Cline secret-gate wrapper only blocks on findings
+  (runner exit 1 → hook exit 2). An unavailable runner or scanner, a scan
+  failure, or a bad mode now exits 1 with the redacted diagnostics on
+  stderr, so a missing `gitleaks` or a packaging miss warns visibly instead
+  of trapping a Stop hook in a blocking loop.
+
 ## 0.8.0 - 2026-09-16
 
 ### Fixed
