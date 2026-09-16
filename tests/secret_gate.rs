@@ -285,6 +285,25 @@ fn native_hook_manifests_register_secret_gate_once() {
     assert_eq!(secret_clines.len(), 1);
 }
 
+/// Run a hook script the test just copied into place. Linux refuses `exec`
+/// with `ETXTBSY` while a concurrently forking test thread still holds the
+/// script's open write descriptor, so retry that transient error instead of
+/// failing the suite.
+fn run_copied_hook(program: &Path, cwd: &Path, configure: impl Fn(&mut Command)) -> Output {
+    for _ in 0..10 {
+        let mut command = Command::new(program);
+        command.current_dir(cwd);
+        configure(&mut command);
+        match command.output() {
+            Err(error) if error.raw_os_error() == Some(26) => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            result => return result.unwrap(),
+        }
+    }
+    panic!("hook script stayed busy (ETXTBSY) after retries");
+}
+
 #[test]
 fn native_hook_wrappers_delegate_worktree_mode() {
     let root = temporary_directory();
@@ -322,11 +341,9 @@ exit "$RUNNER_EXIT"
         let mut missing_permissions = std::fs::metadata(&missing_local).unwrap().permissions();
         missing_permissions.set_mode(0o755);
         std::fs::set_permissions(&missing_local, missing_permissions).unwrap();
-        let output = Command::new(&missing_local)
-            .env("PATH", "/usr/bin:/bin")
-            .current_dir(&spaced)
-            .output()
-            .unwrap();
+        let output = run_copied_hook(&missing_local, &spaced, |command| {
+            command.env("PATH", "/usr/bin:/bin");
+        });
         assert_eq!(output.status.code(), Some(1), "{wrapper}");
         assert!(
             !String::from_utf8_lossy(&output.stderr).is_empty(),
@@ -347,13 +364,12 @@ exit "$RUNNER_EXIT"
         let mut vendored_permissions = std::fs::metadata(&vendored).unwrap().permissions();
         vendored_permissions.set_mode(0o755);
         std::fs::set_permissions(&vendored, vendored_permissions).unwrap();
-        let output = Command::new(&packaged_local)
-            .env("MODE_FILE", spaced.join("mode_packaged"))
-            .env("RUNNER_EXIT", "0")
-            .env("PATH", "/usr/bin:/bin")
-            .current_dir(&spaced)
-            .output()
-            .unwrap();
+        let output = run_copied_hook(&packaged_local, &spaced, |command| {
+            command
+                .env("MODE_FILE", spaced.join("mode_packaged"))
+                .env("RUNNER_EXIT", "0")
+                .env("PATH", "/usr/bin:/bin");
+        });
         assert_eq!(output.status.code(), Some(0), "{wrapper}");
         assert_eq!(
             std::fs::read_to_string(spaced.join("mode_packaged")).unwrap(),
@@ -376,14 +392,13 @@ exit "$RUNNER_EXIT"
         let mut fallback_permissions = std::fs::metadata(&fallback_local).unwrap().permissions();
         fallback_permissions.set_mode(0o755);
         std::fs::set_permissions(&fallback_local, fallback_permissions).unwrap();
-        let output = Command::new(&fallback_local)
-            .env("GEMINI_PROJECT_DIR", &project)
-            .env("MODE_FILE", spaced.join("mode_project"))
-            .env("RUNNER_EXIT", "0")
-            .env("PATH", "/usr/bin:/bin")
-            .current_dir(&spaced)
-            .output()
-            .unwrap();
+        let output = run_copied_hook(&fallback_local, &spaced, |command| {
+            command
+                .env("GEMINI_PROJECT_DIR", &project)
+                .env("MODE_FILE", spaced.join("mode_project"))
+                .env("RUNNER_EXIT", "0")
+                .env("PATH", "/usr/bin:/bin");
+        });
         assert_eq!(output.status.code(), Some(0), "{wrapper}");
         assert_eq!(
             std::fs::read_to_string(spaced.join("mode_project")).unwrap(),
@@ -400,14 +415,13 @@ exit "$RUNNER_EXIT"
             (4, 1, "mode_four"),
             (127, 1, "mode_unavailable"),
         ] {
-            let output = Command::new(&local)
-                .env("LEADLINE_SECRET_RUNNER", bin.join("runner"))
-                .env("MODE_FILE", spaced.join(mode_file))
-                .env("RUNNER_EXIT", exit.to_string())
-                .env("PATH", "/usr/bin:/bin")
-                .current_dir(&spaced)
-                .output()
-                .unwrap();
+            let output = run_copied_hook(&local, &spaced, |command| {
+                command
+                    .env("LEADLINE_SECRET_RUNNER", bin.join("runner"))
+                    .env("MODE_FILE", spaced.join(mode_file))
+                    .env("RUNNER_EXIT", exit.to_string())
+                    .env("PATH", "/usr/bin:/bin");
+            });
             assert_eq!(output.status.code(), Some(wrapper_exit), "{wrapper}");
             assert_eq!(
                 std::fs::read_to_string(spaced.join(mode_file)).unwrap(),
