@@ -16,6 +16,20 @@ Deterministic function-level complexity analysis for Java, JavaScript, TypeScrip
 
 `leadline` reports physical and logical LOC, parameters, nesting, cyclomatic and cognitive complexity, Halstead metrics, maintainability, coverage, and CRAP. It parses code with Tree-sitter and never executes it: no build runtime, no network, no project scripts.
 
+## Contents
+
+Start here: [installation](docs/installation.md), [CLI reference](docs/cli-reference.md), [configuration](docs/configuration.md).
+
+Metrics and analysis: [metric specification](docs/metrics.md), [changed code](docs/changed-code.md), [hotspots](docs/hotspots.md), [coupling](docs/coupling.md), [dependencies](docs/dependencies.md), [risk](docs/risk.md), [analytics roadmap](docs/analytics-roadmap.md).
+
+Gates and security: [security findings](docs/security-findings.md), [vulnerabilities](docs/vulnerabilities.md), [security model](docs/security-model.md), [PostgreSQL risks](docs/postgresql-risks.md), [PostgreSQL plans](docs/postgresql-plans.md).
+
+Output and agents: [JSON schema](docs/json-schema.md), [agent integration guide](docs/agent-integration-guide.md), [architecture](docs/architecture.md).
+
+Performance: [benchmarks](docs/benchmark.md), [performance methodology](docs/performance-methodology.md), [real-world benchmarks](docs/realworld-benchmarks.md).
+
+Operating: [troubleshooting](docs/troubleshooting.md), [smoke tests](docs/smoke.md), [versioning](docs/versioning.md), [releasing](docs/releasing.md).
+
 ## How it works
 
 ```mermaid
