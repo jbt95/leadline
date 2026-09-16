@@ -2098,7 +2098,7 @@ fn analyze_tool_reuses_an_index_without_writing_one() {
 
     let index_file = dir.join(".leadline").join("index.json");
     let index_arg = dir.join(".leadline");
-    let before = std::fs::metadata(&index_file).unwrap().modified().unwrap();
+    let before = std::fs::read(&index_file).unwrap();
 
     let response = call_tool(
         "analyze",
@@ -2108,8 +2108,35 @@ fn analyze_tool_reuses_an_index_without_writing_one() {
     assert_eq!(result["index"]["analyzed"], 0);
     assert!(result["index"]["reused"].as_u64().unwrap() > 0);
 
-    let after = std::fs::metadata(&index_file).unwrap().modified().unwrap();
+    let after = std::fs::read(&index_file).unwrap();
     assert_eq!(before, after, "MCP must never write the index");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn analyze_tool_reuses_an_index_for_a_file_target() {
+    let dir = fixture_dir("function alpha(a: number) { return a + 1; }\n");
+    let file = dir.join("sample.ts");
+    let index = dir.join(".leadline");
+    // Build the index through the CLI for the same single-file target.
+    let built = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("analyze")
+        .arg(&file)
+        .arg("--index")
+        .arg(&index)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(built.status.success());
+
+    let response = call_tool(
+        "analyze",
+        serde_json::json!({ "path": file.to_str().unwrap(), "index": index.to_str().unwrap() }),
+    );
+    let result = result_of(&response);
+    assert_eq!(result["index"]["analyzed"], 0);
+    assert!(result["index"]["reused"].as_u64().unwrap() > 0);
+
     std::fs::remove_dir_all(dir).unwrap();
 }
 

@@ -2430,6 +2430,48 @@ fn index_verify_detects_a_tampered_index() {
     let verified_json: serde_json::Value = serde_json::from_slice(&verified.stdout).unwrap();
     assert_eq!(verified_json["index"]["verified"], false);
 
+    // --verify must not repair or overwrite the tampered index.
+    let still_tampered: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(still_tampered["files"][&first_key]["key"], "tampered");
+
+    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("index")
+        .arg(&root)
+        .arg("--verify")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(second.status.success());
+    let second_json: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(second_json["index"]["verified"], false);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn index_verify_reports_true_for_an_untampered_index() {
+    let root = index_fixture();
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_leadline"))
+            .arg("index")
+            .arg(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let verified = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("index")
+        .arg(&root)
+        .arg("--verify")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(verified.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&verified.stdout).unwrap();
+    assert_eq!(json["index"]["verified"], true);
+
     std::fs::remove_dir_all(root).unwrap();
 }
 

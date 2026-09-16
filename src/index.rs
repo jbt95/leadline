@@ -10,6 +10,7 @@ use crate::core::{
     OUTPUT_SCHEMA_VERSION,
 };
 use crate::history::FileHistory;
+use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -366,37 +367,57 @@ pub fn refresh_files(
     let mut ordered: Vec<&crate::source_snapshot::SourceEntry> = entries.iter().collect();
     ordered.sort_by(|left, right| left.path.cmp(&right.path));
 
+    // Per-entry decisions are independent, so misses are parsed in parallel;
+    // `collect` preserves the path-sorted order and the serial pass below
+    // assembles `files` and the index exactly as the serial version did.
+    enum Outcome {
+        Reused(IndexedFile, crate::core::FileAnalysis),
+        Analyzed(String, crate::Result<crate::core::FileAnalysis>),
+    }
+    let outcomes: Vec<Outcome> = ordered
+        .par_iter()
+        .map(|entry| {
+            let key = content_key(&entry.bytes);
+            let hit = reusable
+                .and_then(|index| index.files.get(&entry.path))
+                .filter(|file| file.key == key)
+                .and_then(|file| rebuild(entry, file).map(|analysis| (file, analysis)));
+            match hit {
+                Some((file, analysis)) => Outcome::Reused(file.clone(), analysis),
+                None => Outcome::Analyzed(key, crate::analyze_source(&entry.path, &entry.bytes)),
+            }
+        })
+        .collect();
+
     let mut index = AnalysisIndex::empty(scope, config_fingerprint);
     let mut files = Vec::with_capacity(ordered.len());
     let mut reuse = Reuse::default();
-    for entry in ordered {
-        let key = content_key(&entry.bytes);
-        let hit = reusable
-            .and_then(|index| index.files.get(&entry.path))
-            .filter(|file| file.key == key)
-            .and_then(|file| rebuild(entry, file).map(|analysis| (file, analysis)));
-        if let Some((file, analysis)) = hit {
-            reuse.reused += 1;
-            index.files.insert(entry.path.clone(), file.clone());
-            files.push(analysis);
-        } else {
-            let analysis = crate::analyze_source(&entry.path, &entry.bytes)?;
-            reuse.analyzed += 1;
-            if analysis.parse_errors.is_empty() {
-                index.files.insert(
-                    entry.path.clone(),
-                    IndexedFile {
-                        size: entry.bytes.len() as u64,
-                        key,
-                        functions: analysis
-                            .functions
-                            .iter()
-                            .map(IndexedFunction::from)
-                            .collect(),
-                    },
-                );
+    for (entry, outcome) in ordered.iter().zip(outcomes) {
+        match outcome {
+            Outcome::Reused(file, analysis) => {
+                reuse.reused += 1;
+                index.files.insert(entry.path.clone(), file);
+                files.push(analysis);
             }
-            files.push(analysis);
+            Outcome::Analyzed(key, analysis) => {
+                let analysis = analysis?;
+                reuse.analyzed += 1;
+                if analysis.parse_errors.is_empty() {
+                    index.files.insert(
+                        entry.path.clone(),
+                        IndexedFile {
+                            size: entry.bytes.len() as u64,
+                            key,
+                            functions: analysis
+                                .functions
+                                .iter()
+                                .map(IndexedFunction::from)
+                                .collect(),
+                        },
+                    );
+                }
+                files.push(analysis);
+            }
         }
     }
     Ok((crate::analysis_report(files), index, reuse))
@@ -454,7 +475,7 @@ pub struct IndexRequest<'a> {
 pub struct IndexOutcome {
     pub index: AnalysisIndex,
     pub reuse: Reuse,
-    /// `Some(true)` when `--verify` re-derived an index byte-identical to the
+    /// `Some(true)` when `--verify` re-derived an index value-identical to the
     /// stored one; `Some(false)` when it did not or none was stored.
     pub verified: Option<bool>,
     pub path: std::path::PathBuf,
@@ -485,7 +506,9 @@ pub fn build(request: &IndexRequest<'_>) -> crate::Result<IndexOutcome> {
             .and_then(|bytes| serde_json::from_slice::<AnalysisIndex>(bytes).ok())
             .is_some_and(|previous| previous == index)
     });
-    index.save(request.index_dir)?;
+    if verified != Some(false) {
+        index.save(request.index_dir)?;
+    }
     Ok(IndexOutcome {
         path: request.index_dir.join(INDEX_FILE_NAME),
         index,
@@ -506,7 +529,14 @@ pub fn warm_report(
     excludes: &[String],
 ) -> crate::Result<(crate::core::AnalysisReport, Reuse)> {
     let previous = AnalysisIndex::open(index_dir);
-    let entries = load_entries(root, excludes)?;
+    let entries = if root.is_file() {
+        vec![crate::source_snapshot::SourceEntry {
+            path: crate::normalize_path(root),
+            bytes: std::fs::read(root)?,
+        }]
+    } else {
+        load_entries(root, excludes)?
+    };
     let (report, _, reuse) = refresh_files(Some(&previous), scope, config_fingerprint, &entries)?;
     Ok((report, reuse))
 }
