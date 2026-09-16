@@ -317,3 +317,115 @@ impl From<IndexedFunction> for FunctionAnalysis {
         }
     }
 }
+
+/// Counts of files analyzed and files reused in one refresh.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Reuse {
+    pub analyzed: usize,
+    pub reused: usize,
+}
+
+/// Analysis-root label used to keep one index from mixing scopes.
+pub fn scope_label(path: &Path) -> String {
+    let label = crate::normalize_path(path);
+    if label.is_empty() {
+        ".".to_owned()
+    } else {
+        label
+    }
+}
+
+/// Read every discovered source file under `root` into an owned entry.
+pub fn load_entries(
+    root: &Path,
+    excludes: &[String],
+) -> crate::Result<Vec<crate::source_snapshot::SourceEntry>> {
+    let discovered = crate::discovery::discover_with_excludes(root, excludes)?;
+    let mut entries = Vec::with_capacity(discovered.len());
+    for file in discovered {
+        let bytes = std::fs::read(&file)?;
+        entries.push(crate::source_snapshot::SourceEntry {
+            path: crate::normalized_relative_path(&file, root),
+            bytes,
+        });
+    }
+    Ok(entries)
+}
+
+/// Rebuild the report and index for `entries`, reusing unchanged files.
+///
+/// Files are processed in path order so the report and the index are
+/// deterministic. Only files without parse errors are stored.
+pub fn refresh_files(
+    previous: Option<&AnalysisIndex>,
+    scope: &str,
+    config_fingerprint: &str,
+    entries: &[crate::source_snapshot::SourceEntry],
+) -> crate::Result<(crate::core::AnalysisReport, AnalysisIndex, Reuse)> {
+    let reusable = previous.filter(|index| index.is_usable(scope, config_fingerprint));
+    let mut ordered: Vec<&crate::source_snapshot::SourceEntry> = entries.iter().collect();
+    ordered.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let mut index = AnalysisIndex::empty(scope, config_fingerprint);
+    let mut files = Vec::with_capacity(ordered.len());
+    let mut reuse = Reuse::default();
+    for entry in ordered {
+        let key = content_key(&entry.bytes);
+        let hit = reusable
+            .and_then(|index| index.files.get(&entry.path))
+            .filter(|file| file.key == key)
+            .and_then(|file| rebuild(entry, file).map(|analysis| (file, analysis)));
+        if let Some((file, analysis)) = hit {
+            reuse.reused += 1;
+            index.files.insert(entry.path.clone(), file.clone());
+            files.push(analysis);
+        } else {
+            let analysis = crate::analyze_source(&entry.path, &entry.bytes)?;
+            reuse.analyzed += 1;
+            if analysis.parse_errors.is_empty() {
+                index.files.insert(
+                    entry.path.clone(),
+                    IndexedFile {
+                        size: entry.bytes.len() as u64,
+                        key,
+                        functions: analysis
+                            .functions
+                            .iter()
+                            .map(IndexedFunction::from)
+                            .collect(),
+                    },
+                );
+            }
+            files.push(analysis);
+        }
+    }
+    Ok((analysis_report(files), index, reuse))
+}
+
+fn rebuild(
+    entry: &crate::source_snapshot::SourceEntry,
+    file: &IndexedFile,
+) -> Option<crate::core::FileAnalysis> {
+    let language = crate::parser::detect_language(&entry.path)?;
+    Some(crate::core::FileAnalysis {
+        path: entry.path.clone(),
+        language,
+        functions: file
+            .functions
+            .iter()
+            .cloned()
+            .map(crate::core::FunctionAnalysis::from)
+            .collect(),
+        parse_errors: Vec::new(),
+    })
+}
+
+fn analysis_report(files: Vec<crate::core::FileAnalysis>) -> crate::core::AnalysisReport {
+    crate::core::AnalysisReport {
+        schema_version: OUTPUT_SCHEMA_VERSION,
+        metric_profile: METRIC_PROFILE,
+        analyzer_version: env!("CARGO_PKG_VERSION"),
+        metric_specs: crate::core::MetricSpecs::default(),
+        files,
+    }
+}
