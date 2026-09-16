@@ -1287,14 +1287,8 @@ fn tool_analyze_changed(params: &serde_json::Value) -> Result<serde_json::Value,
         Some("index") => crate::diff::ComparisonTarget::Index,
         Some(revision) => crate::diff::ComparisonTarget::Revision(revision.to_owned()),
     };
-    let detect_renames = params
-        .get("renames")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    let explain = params
-        .get("explain")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
+    let detect_renames = opt_flag(params, "renames", "analyze_changed")?;
+    let explain = opt_flag(params, "explain", "analyze_changed")?;
     let budget = parse_tool_budget(params, true)?;
     let options = crate::diff::ChangeOptions {
         base: base.to_owned(),
@@ -1404,10 +1398,7 @@ fn tool_analyze_function(params: &serde_json::Value) -> Result<serde_json::Value
         .iter()
         .map(|item| compact_function(&analyzed.path, item))
         .collect();
-    let explain = params
-        .get("explain")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
+    let explain = opt_flag(params, "explain", "analyze_function")?;
     if explain {
         for (row, function) in rows.iter_mut().zip(&analyzed.functions) {
             row["contributions"] =
@@ -1770,7 +1761,10 @@ fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i
             if count == 0 {
                 return Err((-32602, "top must be at least 1".to_owned()));
             }
-            count.min(50)
+            if count > 50 {
+                return Err((-32602, "top must be at most 50".to_owned()));
+            }
+            count
         }
     };
     let coverage = opt_str(params, "coverage")?

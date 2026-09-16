@@ -2183,13 +2183,62 @@ fn mis_typed_string_arguments_are_rejected() {
 }
 
 #[test]
-fn analyze_and_test_targets_reject_over_limit_top() {
+fn mis_typed_boolean_arguments_are_rejected() {
+    // A non-boolean flag must not silently read as false.
+    let dir = fixture_dir("function calc(x: boolean) { if (x) return 1; return 0; }\n");
+    let path = dir.to_str().unwrap();
+    let file = dir.join("sample.ts");
+    for (tool, arguments) in [
+        (
+            "analyze_changed",
+            serde_json::json!({ "path": path, "explain": "yes" }),
+        ),
+        (
+            "analyze_changed",
+            serde_json::json!({ "path": path, "renames": 1 }),
+        ),
+        (
+            "analyze_function",
+            serde_json::json!({ "path": file.to_str().unwrap(), "function": "calc", "explain": "yes" }),
+        ),
+    ] {
+        let response = call_tool(tool, arguments);
+        assert_eq!(
+            error_of(&response)["code"].as_i64(),
+            Some(-32602),
+            "{tool}: expected an invalid-params rejection, got {response}"
+        );
+        let message = error_of(&response)["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(
+            message.contains("must be a boolean"),
+            "{tool}: expected a boolean rejection, got {response}"
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn list_tools_reject_over_limit_top() {
     let dir = fixture_dir("function calc(x: boolean) { if (x) return 1; return 0; }\n");
     let response = call_tool(
         "analyze",
         serde_json::json!({ "path": dir.to_str().unwrap(), "top": 201 }),
     );
     assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    let response = call_tool(
+        "repo_summary",
+        serde_json::json!({ "path": dir.to_str().unwrap(), "top": 51 }),
+    );
+    assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    // The cap is inclusive: top=50 stays valid.
+    let response = call_tool(
+        "repo_summary",
+        serde_json::json!({ "path": dir.to_str().unwrap(), "top": 50 }),
+    );
+    assert!(response.get("error").is_none(), "{response}");
     let response = call_tool(
         "test_targets",
         serde_json::json!({

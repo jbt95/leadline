@@ -6,6 +6,10 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ### Fixed
 
+- MCP tool arguments are validated strictly: `analyze_changed.explain`,
+  `analyze_changed.renames`, and `analyze_function.explain` reject a
+  non-boolean value with `-32602` instead of silently treating it as `false`,
+  and `repo_summary` rejects `top` above 50 instead of clamping it.
 - The worktree secret gate preflights the git HEAD it needs to diff against
   before scanning: a directory that is not a repository, or a repository with
   no commits, skips the gate with a visible non-blocking diagnostic instead
