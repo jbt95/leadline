@@ -374,6 +374,12 @@ fn worktree_mailmap(start: &Path) -> Option<Vec<u8>> {
     None
 }
 
+/// HEAD commit and timestamp for the repository containing `scope`, or `None`
+/// when `scope` is not inside a repository.
+pub(crate) fn scope_head(scope: &Path) -> Result<Option<(Option<String>, Option<i64>)>> {
+    repository_head(workdir_for(scope))
+}
+
 /// Analyzes Git history for every file under `scope`.
 ///
 /// `scope` is a repository directory; results are keyed relative to it and
@@ -386,10 +392,10 @@ fn worktree_mailmap(start: &Path) -> Option<Vec<u8>> {
 /// A rename that crosses the scope boundary is reported as an add or delete,
 /// because only one side of the pair is inside the scope.
 pub fn analyze_history(scope: &Path) -> Result<HistoryReport> {
-    let workdir = workdir_for(scope);
-    let Some((head_commit, head_timestamp)) = repository_head(workdir)? else {
+    let Some((head_commit, head_timestamp)) = scope_head(scope)? else {
         return Ok(unavailable());
     };
+    let workdir = workdir_for(scope);
     let Some(head_timestamp) = head_timestamp else {
         let mut report = unavailable();
         report.available = true;

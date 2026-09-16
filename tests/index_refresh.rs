@@ -91,3 +91,17 @@ fn parse_error_files_are_never_stored_and_are_always_reanalyzed() {
     assert_eq!(reuse.analyzed, 1);
     assert_eq!(reuse.reused, 0);
 }
+
+#[test]
+fn history_is_unavailable_outside_a_repository() {
+    let dir = std::env::temp_dir().join(format!(
+        "leadline-index-nogit-{}-{:?}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(leadline::index::refresh_history(None, &dir).is_none());
+}

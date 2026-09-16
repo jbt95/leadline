@@ -419,3 +419,24 @@ fn rebuild(
         parse_errors: Vec::new(),
     })
 }
+
+/// Git facts for `scope`, reused when the stored HEAD is unchanged.
+///
+/// Returns `None` outside a repository or when Git fails; the index is never
+/// an error path, so a missing history section only means `git_available:
+/// false` for the commands that consume it.
+pub fn refresh_history(previous: Option<&AnalysisIndex>, scope: &Path) -> Option<HistoryFacts> {
+    let (head, _) = crate::history::scope_head(scope).ok().flatten()?;
+    if let Some(facts) = previous.and_then(|index| index.history.as_ref())
+        && facts.head_commit == head
+        && !facts.files.is_empty()
+    {
+        return Some(facts.clone());
+    }
+    let report = crate::history::analyze_history(scope).ok()?;
+    Some(HistoryFacts {
+        head_commit: report.head_commit,
+        head_timestamp: report.head_timestamp,
+        files: report.files,
+    })
+}
