@@ -30,7 +30,7 @@ const MAX_RESPONSE_BYTES: usize = 32 << 20;
 
 /// Usage guidance returned by `initialize`. Hosts may inject this into the
 /// system prompt, so it doubles as the server's self-advertisement.
-const SERVER_INSTRUCTIONS: &str = "leadline reports deterministic function-level complexity metrics (Java, JavaScript, TypeScript, TSX) without executing code or touching the network. Use analyze_changed after substantial edits to spot regressions, repo_summary for a first look at unfamiliar code, analyze_function with explain:true to see which lines drive complexity, check to gate thresholds or regressions, test_targets to rank uncovered decision lines, sql_plan to compare checked-in PostgreSQL EXPLAIN artifacts for plan regressions, security_findings to triage scanner SARIF with code context, vulnerabilities to prioritize vulnerable dependencies with changed-import evidence, and sql_risks to flag static PostgreSQL query risks. Metrics are evidence, not objectives: do not refactor solely to lower a number.";
+const SERVER_INSTRUCTIONS: &str = "leadline reports deterministic function-level complexity metrics (Java, JavaScript, TypeScript, TSX) without executing code or touching the network. Use analyze_changed after substantial edits to spot regressions, repo_summary for a first look at unfamiliar code, analyze_function with explain:true to see which lines drive complexity, check to gate thresholds or regressions, test_targets to rank uncovered decision lines, sql_plan to compare checked-in PostgreSQL EXPLAIN artifacts for plan regressions, security_findings to triage scanner SARIF with code context, vulnerabilities to prioritize vulnerable dependencies with changed-import evidence, and sql_risks to flag static PostgreSQL query risks. The analyze and check tools accept an optional index directory and only ever read it. Metrics are evidence, not objectives: do not refactor solely to lower a number.";
 
 /// The eleven tools this server exposes. Fixed set; keep in sync with
 /// [`tools_list`] and [`dispatch_tool`].
@@ -1219,8 +1219,8 @@ fn tool_analyze(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
         .map_err(|message| (-32602, message))?;
     let config = load_config(path)?;
     let excludes = config_excludes(config.as_ref());
-    let report = crate::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
-        .map_err(|error| (-32602, error.to_string()))?;
+    let (report, reuse) =
+        analyze_read_only(params, config.as_ref(), path, coverage.as_ref(), &excludes)?;
     let mut rows = Vec::new();
     for file in &report.files {
         for function in &file.functions {
@@ -1240,6 +1240,9 @@ fn tool_analyze(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
     fields.insert("functions".to_owned(), serde_json::Value::Array(functions));
     fields.insert("truncated".to_owned(), serde_json::Value::from(truncated));
     fields.insert("total".to_owned(), serde_json::Value::from(total as u64));
+    if let Some(counts) = index_counts(reuse) {
+        fields.insert("index".to_owned(), counts);
+    }
     envelope(fields)
 }
 
@@ -1414,6 +1417,7 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
         .map_err(|message| (-32602, message))?;
     let excludes = config_excludes(config.as_ref());
     let mut rows = Vec::new();
+    let mut reuse = None;
     if let Some(base) = base {
         let mut report = crate::diff::analyze_changed(Path::new(path), base)
             .map_err(|error| (-32602, error.to_string()))?;
@@ -1445,9 +1449,9 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
     } else if let Some(baseline_path) = baseline_path {
         let baseline = crate::baseline::Baseline::read(Path::new(baseline_path))
             .map_err(|error| (-32602, error.to_string()))?;
-        let report =
-            crate::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
-                .map_err(|error| (-32602, error.to_string()))?;
+        let (report, warm) =
+            analyze_read_only(params, config.as_ref(), path, coverage.as_ref(), &excludes)?;
+        reuse = warm;
         let regressed: BTreeSet<(String, String)> = match &regression_limits {
             Some(limits) => baseline
                 .compare(&report, limits)
@@ -1467,9 +1471,9 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
             }
         }
     } else {
-        let report =
-            crate::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
-                .map_err(|error| (-32602, error.to_string()))?;
+        let (report, warm) =
+            analyze_read_only(params, config.as_ref(), path, coverage.as_ref(), &excludes)?;
+        reuse = warm;
         for file in &report.files {
             for function in &file.functions {
                 if thresholds.violates(&function.metrics) {
@@ -1516,6 +1520,9 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
     );
     fields.insert("truncated".to_owned(), serde_json::Value::from(truncated));
     fields.insert("total".to_owned(), serde_json::Value::from(total as u64));
+    if let Some(counts) = index_counts(reuse) {
+        fields.insert("index".to_owned(), counts);
+    }
     envelope(fields)
 }
 
@@ -1883,18 +1890,24 @@ fn parse_top_param(params: &serde_json::Value, default: usize) -> Result<usize, 
 /// `[vulnerabilities]` all apply. A broken config is an invalid-params error
 /// so hosts see the same typo the CLI rejects.
 fn load_config(path: &str) -> Result<Option<crate::config::Config>, (i64, String)> {
+    crate::config::load_from(&config_dir(path)).map_err(|error| (-32602, error.to_string()))
+}
+
+/// Analysis-root directory a tool's `path` points at: the path itself when it
+/// names a directory, its parent when it names a file, and the working
+/// directory when neither exists.
+fn config_dir(path: &str) -> PathBuf {
     let path = Path::new(path);
     let dir = if path.is_dir() {
         path.to_path_buf()
     } else {
         path.parent().unwrap_or(Path::new(".")).to_path_buf()
     };
-    let dir = if dir.is_dir() {
+    if dir.is_dir() {
         dir
     } else {
         PathBuf::from(".")
-    };
-    crate::config::load_from(&dir).map_err(|error| (-32602, error.to_string()))
+    }
 }
 
 /// `[analysis].exclude` for one tool path; empty without a config file.
@@ -1902,6 +1915,62 @@ fn config_excludes(config: Option<&crate::config::Config>) -> Vec<String> {
     config
         .map(|selected| selected.analysis_excludes.clone())
         .unwrap_or_default()
+}
+
+/// Index directory a read-only tool should warm from: the explicit `index`
+/// argument when given, else `[index].path` from configuration joined onto
+/// the tool's `path`, else nothing. These callers only ever read it.
+fn index_directory(
+    params: &serde_json::Value,
+    config: Option<&crate::config::Config>,
+    path: &str,
+) -> Result<Option<PathBuf>, (i64, String)> {
+    if let Some(argument) = opt_str(params, "index")? {
+        return Ok(Some(PathBuf::from(argument)));
+    }
+    Ok(config
+        .and_then(|selected| selected.index.as_ref())
+        .map(|configured| Path::new(path).join(&configured.path)))
+}
+
+/// Report for `analyze` and `check`: reuse a stored index when one is
+/// resolved and no coverage is applied, else measure the path cold.
+///
+/// Returns the reuse counts only when the warm path produced the report; a
+/// missing or unusable index silently falls back to the cold analysis.
+fn analyze_read_only(
+    params: &serde_json::Value,
+    config: Option<&crate::config::Config>,
+    path: &str,
+    coverage: Option<&crate::coverage::CoverageMap>,
+    excludes: &[String],
+) -> Result<(crate::core::AnalysisReport, Option<crate::index::Reuse>), (i64, String)> {
+    let index_dir = index_directory(params, config, path)?;
+    if coverage.is_none()
+        && let Some(dir) = index_dir
+        && let Ok((report, reuse)) = crate::index::warm_report(
+            Path::new(path),
+            &dir,
+            &crate::index::scope_label(Path::new(path)),
+            &crate::config::fingerprint(&config_dir(path)),
+            excludes,
+        )
+    {
+        return Ok((report, Some(reuse)));
+    }
+    let report = crate::analyze_path_with_excludes(Path::new(path), coverage, excludes)
+        .map_err(|error| (-32602, error.to_string()))?;
+    Ok((report, None))
+}
+
+/// Envelope `index` block for a report that reused a stored index.
+fn index_counts(reuse: Option<crate::index::Reuse>) -> Option<serde_json::Value> {
+    reuse.map(|reuse| {
+        serde_json::json!({
+            "reused": reuse.reused,
+            "analyzed": reuse.analyzed,
+        })
+    })
 }
 
 /// Optional boolean flag, defaulting to false when absent or null.
@@ -2412,6 +2481,7 @@ fn tools_list_result() -> serde_json::Value {
                         "top": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Keep at most this many rows." },
                         "sort_by": { "type": "string", "enum": ["crap", "cognitive", "cyclomatic"], "description": "Sort rows by metric descending before capping." },
                         "min_crap": { "type": "number", "description": "Drop functions whose CRAP is below this floor; unknown CRAP is dropped." },
+                        "index": { "type": "string", "description": "Directory containing index.json; reuse unchanged analysis. Read-only." },
                     },
                 },
             },
@@ -2460,6 +2530,7 @@ fn tools_list_result() -> serde_json::Value {
                         "base": { "type": "string", "description": "Git base revision for changed-function gates." },
                         "baseline": { "type": "string", "description": "Baseline snapshot file for regression gates without Git. Exclusive with base; read-only, never written by this server." },
                         "coverage": { "type": "string", "description": "Coverage file path (.info for LCOV, .xml for JaCoCo) applied before CRAP gates." },
+                        "index": { "type": "string", "description": "Directory containing index.json; reuse unchanged analysis. Read-only." },
                         "thresholds": {
                             "type": "object",
                             "properties": {

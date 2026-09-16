@@ -2083,3 +2083,38 @@ fn security_findings_caps_violations_at_top() {
     assert_eq!(result["truncated"], true);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn analyze_tool_reuses_an_index_without_writing_one() {
+    let dir = fixture_dir("function alpha(a: number) { return a + 1; }\n");
+    let path = dir.to_str().unwrap();
+    // Build the index outside MCP so this test only exercises reads.
+    let built = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("index")
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(built.status.success());
+
+    let index_file = dir.join(".leadline").join("index.json");
+    let index_arg = dir.join(".leadline");
+    let before = std::fs::metadata(&index_file).unwrap().modified().unwrap();
+
+    let response = call_tool(
+        "analyze",
+        serde_json::json!({ "path": path, "index": index_arg.to_str().unwrap() }),
+    );
+    let result = result_of(&response);
+    assert_eq!(result["index"]["analyzed"], 0);
+    assert!(result["index"]["reused"].as_u64().unwrap() > 0);
+
+    let after = std::fs::metadata(&index_file).unwrap().modified().unwrap();
+    assert_eq!(before, after, "MCP must never write the index");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn non_string_index_argument_is_rejected() {
+    let response = call_tool("analyze", serde_json::json!({ "path": ".", "index": 7 }));
+    assert_eq!(error_of(&response)["code"], -32602);
+}

@@ -493,3 +493,20 @@ pub fn build(request: &IndexRequest<'_>) -> crate::Result<IndexOutcome> {
         verified,
     })
 }
+
+/// Read-only warm report: reuse the stored index, never write, never walk Git.
+///
+/// A missing or unusable index degrades to a full analysis. This is the entry
+/// point read-only callers (MCP) use.
+pub fn warm_report(
+    root: &Path,
+    index_dir: &Path,
+    scope: &str,
+    config_fingerprint: &str,
+    excludes: &[String],
+) -> crate::Result<(crate::core::AnalysisReport, Reuse)> {
+    let previous = AnalysisIndex::open(index_dir);
+    let entries = load_entries(root, excludes)?;
+    let (report, _, reuse) = refresh_files(Some(&previous), scope, config_fingerprint, &entries)?;
+    Ok((report, reuse))
+}
