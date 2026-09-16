@@ -186,10 +186,11 @@ walk or filter the whole repository. A `gix` spike is justified later, when
 incremental snapshotting (Milestone G) needs random access to history rather
 than one linear walk; it is not justified for Milestone A.
 
-Caching plan (not yet implemented): cache history facts keyed by repository
-identity plus `HEAD` commit hash, independently of source-metric caches. A
-source edit must not invalidate Git aggregates, and a new commit must not
-invalidate parsed source metrics.
+The analysis index now stores content-keyed file metrics alongside HEAD-keyed
+Git history facts, so a source edit does not invalidate Git aggregates and a
+new commit does not invalidate parsed source metrics. Warm `analyze` and
+`check` output is byte-identical to a cold run; any version, configuration, or
+scope mismatch falls back to a full analysis.
 
 ## Milestones
 

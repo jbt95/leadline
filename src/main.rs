@@ -10,7 +10,6 @@ use leadline::history::HistoryWindow;
 use leadline::mutation::MutationInput;
 use leadline::ownership::OwnershipMode;
 use leadline::source_snapshot::SnapshotTarget;
-use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -260,11 +259,12 @@ fn analyze_command(args: &[String]) -> Result<ExitCode, CliError> {
         .as_ref()
         .map(|selected| selected.analysis_excludes.as_slice())
         .unwrap_or(&[]);
-    let report = analyze_with_cache(
+    let index_dir = resolve_index_dir(&options.path, options.index_dir.as_deref(), config.as_ref());
+    let report = analyze_with_index(
         &options.path,
         options.coverage.as_ref(),
         excludes,
-        options.cache_dir.as_deref(),
+        index_dir.as_deref(),
     )?;
     if report.files.is_empty() {
         return Err(CliError::incomplete(format!(
@@ -621,7 +621,8 @@ fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
             scope,
         )
     } else {
-        let analyzed = analyze_with_cache(&path, coverage.as_ref(), excludes, None)?;
+        // The warm path is scoped to analyze and check in this phase.
+        let analyzed = analyze_with_index(&path, coverage.as_ref(), excludes, None)?;
         (analyzed, path.clone())
     };
     if analysis.files.is_empty() {
@@ -752,7 +753,8 @@ fn risk_command(args: &[String]) -> Result<ExitCode, CliError> {
             scope,
         )
     } else {
-        let analyzed = analyze_with_cache(&path, coverage.as_ref(), excludes, None)?;
+        // The warm path is scoped to analyze and check in this phase.
+        let analyzed = analyze_with_index(&path, coverage.as_ref(), excludes, None)?;
         (analyzed, path.clone())
     };
     if analysis.files.is_empty() {
@@ -2615,11 +2617,12 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
         .as_ref()
         .map(|selected| selected.analysis_excludes.as_slice())
         .unwrap_or(&[]);
-    let mut report = analyze_with_cache(
+    let index_dir = resolve_index_dir(&options.path, options.index_dir.as_deref(), config.as_ref());
+    let mut report = analyze_with_index(
         &options.path,
         options.coverage.as_ref(),
         excludes,
-        options.cache_dir.as_deref(),
+        index_dir.as_deref(),
     )?;
     if report.files.is_empty() {
         return Err(CliError::incomplete(format!(
@@ -2779,12 +2782,8 @@ fn check_baseline(
         .as_ref()
         .map(|selected| selected.analysis_excludes.as_slice())
         .unwrap_or(&[]);
-    let report = analyze_with_cache(
-        &options.path,
-        options.coverage.as_ref(),
-        excludes,
-        options.cache_dir.as_deref(),
-    )?;
+    // The warm path is scoped to analyze and check in this phase.
+    let report = analyze_with_index(&options.path, options.coverage.as_ref(), excludes, None)?;
     if report.files.is_empty() {
         return Err(CliError::incomplete(format!(
             "no supported files found under {}",
@@ -2919,7 +2918,8 @@ fn baseline_command(args: &[String]) -> Result<ExitCode, CliError> {
         .as_ref()
         .map(|selected| selected.analysis_excludes.as_slice())
         .unwrap_or(&[]);
-    let report = analyze_with_cache(&path, has_coverage.then_some(&coverage), excludes, None)?;
+    // The warm path is scoped to analyze and check in this phase.
+    let report = analyze_with_index(&path, has_coverage.then_some(&coverage), excludes, None)?;
     if report.files.is_empty() {
         return Err(CliError::incomplete(format!(
             "no supported files found under {}",
@@ -3017,7 +3017,8 @@ fn test_targets_command(args: &[String]) -> Result<ExitCode, CliError> {
         .as_ref()
         .map(|selected| selected.analysis_excludes.as_slice())
         .unwrap_or(&[]);
-    let report = analyze_with_cache(&path, Some(&coverage), excludes, None)?;
+    // The warm path is scoped to analyze and check in this phase.
+    let report = analyze_with_index(&path, Some(&coverage), excludes, None)?;
     if report.files.is_empty() {
         return Err(CliError::incomplete(format!(
             "no supported files found under {}",
@@ -3237,97 +3238,63 @@ fn load_config_for(path: &Path) -> Result<Option<Config>, CliError> {
     Ok(config::load_from(&dir)?)
 }
 
-/// Analyze with an optional [`leadline::cache::FileCache`].
+/// `--index DIR` when given, else the configured `[index].path` for this
+/// analysis root, else `None` (cold analysis).
+fn resolve_index_dir(path: &Path, flag: Option<&Path>, config: Option<&Config>) -> Option<PathBuf> {
+    if let Some(dir) = flag {
+        return Some(dir.to_owned());
+    }
+    config
+        .and_then(|selected| selected.index.as_ref())
+        .map(|index| config_dir(path).join(index.path.as_str()))
+}
+
+/// Analyze with the analysis index.
 ///
-/// Coverage merges into metrics after analysis, so cached (pre-coverage)
-/// functions would carry stale CRAP: any coverage input bypasses the cache.
-/// Cache I/O failures warn on stderr and fall back to a fresh analysis.
-fn analyze_with_cache(
+/// The caller resolves the index directory with [`resolve_index_dir`]; `None`
+/// means cold analysis. Coverage merges into metrics after analysis, so
+/// indexed (pre-coverage) functions would carry stale CRAP: any coverage
+/// input bypasses the index. Index write failures warn on stderr and never
+/// fail the run.
+fn analyze_with_index(
     path: &Path,
     coverage: Option<&CoverageMap>,
     excludes: &[String],
-    cache_dir: Option<&Path>,
+    index_dir: Option<&Path>,
 ) -> Result<AnalysisReport, CliError> {
-    let Some(dir) = cache_dir.filter(|_| coverage.is_none()) else {
+    let Some(dir) = index_dir.filter(|_| coverage.is_none()) else {
         return leadline::analyze_path_with_excludes(path, coverage, excludes)
             .map_err(|error| CliError::incomplete(error.to_string()));
     };
-    let mut cache = leadline::cache::FileCache::open(dir);
-    let mut files = Vec::new();
-    if path.is_file() {
+    let entries = if path.is_file() {
         let bytes = std::fs::read(path).map_err(|error| CliError::incomplete(error.to_string()))?;
-        let key = leadline::normalize_path(path);
-        match cache
-            .get(&key, &bytes)
-            .and_then(|hit| cached_file(&key, hit))
-        {
-            Some(hit) => files.push(hit),
-            None => {
-                let analyzed = leadline::analyze_source(&key, &bytes)
-                    .map_err(|error| CliError::incomplete(error.to_string()))?;
-                if analyzed.parse_errors.is_empty() {
-                    cache.put(&key, &bytes, analyzed.functions.clone());
-                }
-                files.push(analyzed);
-            }
-        }
+        vec![leadline::source_snapshot::SourceEntry {
+            path: leadline::normalize_path(path),
+            bytes,
+        }]
     } else {
-        let discovered = leadline::discovery::discover_with_excludes(path, excludes)
-            .map_err(|error| CliError::incomplete(error.to_string()))?;
-        let analyzed: Result<Vec<_>, CliError> = discovered
-            .par_iter()
-            .map(|file| {
-                let bytes =
-                    std::fs::read(file).map_err(|error| CliError::incomplete(error.to_string()))?;
-                let key = leadline::normalized_relative_path(file, path);
-                if let Some(hit) = cache
-                    .get(&key, &bytes)
-                    .and_then(|functions| cached_file(&key, functions))
-                {
-                    return Ok((hit, None));
-                }
-                let analyzed = leadline::analyze_source(&key, &bytes)
-                    .map_err(|error| CliError::incomplete(error.to_string()))?;
-                let update = analyzed
-                    .parse_errors
-                    .is_empty()
-                    .then(|| (key, bytes, analyzed.functions.clone()));
-                Ok((analyzed, update))
-            })
-            .collect();
-        for (analyzed, update) in analyzed? {
-            if let Some((key, bytes, functions)) = update {
-                cache.put(&key, &bytes, functions);
-            }
-            files.push(analyzed);
-        }
-        files.sort_by(|left, right| left.path.cmp(&right.path));
-    }
-    if let Err(error) = cache.save(dir) {
+        leadline::index::load_entries(path, excludes)
+            .map_err(|error| CliError::incomplete(error.to_string()))?
+    };
+    let previous = leadline::index::AnalysisIndex::open(dir);
+    let (report, index, reuse) = leadline::index::refresh_files(
+        Some(&previous),
+        &leadline::index::scope_label(path),
+        &leadline::config::fingerprint(&config_dir(path)),
+        &entries,
+    )
+    .map_err(|error| CliError::incomplete(error.to_string()))?;
+    if let Err(error) = index.save(dir) {
         eprintln!(
-            "leadline: cache warning: cannot save cache in {}: {error}",
+            "leadline: index warning: cannot save index in {}: {error}",
             dir.display()
         );
     }
-    Ok(AnalysisReport {
-        schema_version: OUTPUT_SCHEMA_VERSION,
-        metric_profile: METRIC_PROFILE,
-        analyzer_version: env!("CARGO_PKG_VERSION"),
-        metric_specs: MetricSpecs::default(),
-        files,
-    })
-}
-
-/// Rebuild a [`FileAnalysis`] from cached functions; `None` when the cached
-/// path names no supported language (falls back to a fresh analysis).
-fn cached_file(key: &str, functions: Vec<FunctionAnalysis>) -> Option<FileAnalysis> {
-    let language = leadline::parser::detect_language(key)?;
-    Some(FileAnalysis {
-        path: key.to_owned(),
-        language,
-        functions,
-        parse_errors: Vec::new(),
-    })
+    eprintln!(
+        "leadline: index {} reused, {} analyzed",
+        reuse.reused, reuse.analyzed
+    );
+    Ok(report)
 }
 
 struct CommonOptions {
@@ -3338,7 +3305,7 @@ struct CommonOptions {
     pretty: bool,
     coverage: Option<CoverageMap>,
     budget: Budget,
-    cache_dir: Option<PathBuf>,
+    index_dir: Option<PathBuf>,
 }
 
 /// Optional scanner finding families merged into `check` output.
@@ -3376,7 +3343,7 @@ impl CommonOptions {
         let mut has_path = path != Path::new(".");
         let mut budget = Budget::default();
         let mut has_budget = false;
-        let mut cache_dir: Option<PathBuf> = None;
+        let mut index_dir: Option<PathBuf> = None;
         let mut index = 0;
         while index < args.len() {
             match args[index].as_str() {
@@ -3400,11 +3367,11 @@ impl CommonOptions {
                     budget.min_crap = Some(parse_floor(args.get(index), "--min-crap")?);
                     has_budget = true;
                 }
-                "--cache-dir" => {
+                "--index" => {
                     index += 1;
-                    cache_dir =
+                    index_dir =
                         Some(PathBuf::from(args.get(index).ok_or_else(|| {
-                            CliError::usage("--cache-dir requires a directory")
+                            CliError::usage("--index requires a directory")
                         })?));
                 }
                 "--lcov" => {
@@ -3466,9 +3433,9 @@ impl CommonOptions {
                 "budget flags (--top, --sort-by, --min-crap) require --format agent-json",
             ));
         }
-        if cache_dir.is_some() && command != "analyze" && command != "check" {
+        if index_dir.is_some() && command != "analyze" && command != "check" {
             return Err(CliError::usage(format!(
-                "--cache-dir is only supported on analyze and check, not {command}"
+                "--index is only supported on analyze and check, not {command}"
             )));
         }
         Ok(Self {
@@ -3480,7 +3447,7 @@ impl CommonOptions {
             pretty: command == "analyze",
             coverage: has_coverage.then_some(coverage),
             budget,
-            cache_dir,
+            index_dir,
         })
     }
 
@@ -3736,7 +3703,7 @@ fn load_coverage(path: &str, format: CoverageFormat) -> Result<CoverageMap, CliE
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--sarif FILE] [--baseline-sarif FILE] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--osv FILE] [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--sql] [--sql-fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]
+    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--index DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--sarif FILE] [--baseline-sarif FILE] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--osv FILE] [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--sql] [--sql-fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--index DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]
   leadline security [PATH] --sarif FILE [--baseline-sarif FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--json] [--format agent-json|sarif] [--top N]\n  leadline risk [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]
   leadline dependencies [PATH] [--json] [--format agent-json]
   leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline sql [PATH] [--large-offset N] [--migration-root DIR] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline vulnerabilities [PATH] --osv FILE [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline sql-plan --current DIR --baseline DIR [--max-cost-increase-percent N] [--max-plan-rows-ratio N] [--max-estimate-error-ratio N] [--json] [--format agent-json|sarif] [--top N]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp [--port [N] [--host ADDR]]\n  leadline index [PATH] [--output DIR] [--verify] [--json]\n  leadline skill\n  leadline update\n  leadline version\n  leadline --version"

@@ -5,9 +5,9 @@ Binary: `leadline`. Every command prints terminal text by default, JSON with `--
 ## Commands
 
 ```console
-leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by KEY] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]
+leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by KEY] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--index DIR]
 leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by KEY] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]
-leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json|sarif] [--top N] [--sort-by KEY] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR] [--sarif FILE] [--baseline-sarif FILE] [--fail-on-severity LEVEL] [--new-only] [--changed-only] [--osv FILE] [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--sql] [--sql-fail-on-severity LEVEL]
+leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--json] [--format agent-json|sarif] [--top N] [--sort-by KEY] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--index DIR] [--sarif FILE] [--baseline-sarif FILE] [--fail-on-severity LEVEL] [--new-only] [--changed-only] [--osv FILE] [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--sql] [--sql-fail-on-severity LEVEL]
 leadline security [PATH] --sarif FILE [--baseline-sarif FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--json] [--format agent-json|sarif] [--top N]
 leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by KEY] [--min-crap X] [--min-delta D]
 leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by KEY] [--min-crap X] [--min-delta D]
@@ -74,7 +74,7 @@ leadline skill
 | `--min-crap X` | analyze, function, check, changed, diff | Drop entries below CRAP `X`. Only with `--format agent-json`. |
 | `--min-delta D` | changed, diff | Drop entries whose max before/after delta is below `D`. Only with `--format agent-json`. |
 | `--explain` | function, changed, diff | Add contribution details to function agent JSON, or multiset-added causes to changed regression rows. |
-| `--cache-dir DIR` | analyze, check | Reuse per-file analysis from `DIR/file-cache.json` across runs; saved at end only when its contents change. Bypassed when any coverage flag is passed (cached functions are pre-coverage, so CRAP would go stale). Cache I/O failures warn on stderr, never fail. |
+| `--index DIR` | analyze, check | Reuse content-keyed per-file analysis and HEAD-keyed Git history facts from `DIR/index.json` across runs; also settable per repository with `[index] path`. Bypassed when any coverage flag is passed (coverage merges after analysis, so indexed CRAP would go stale). Any version, configuration, or scope mismatch falls back to a full analysis; index write failures warn on stderr, never fail. |
 | `--limit N` | hotspots, risk | Keep at most `N` ranked files (`N >= 1`, default 10). On `hotspots` caps terminal, JSON, and agent JSON (`truncated` signals the cap); on `risk` caps terminal and agent JSON only — `--json` is always the full ranking with no `truncated` field. |
 | `--since WINDOW` | hotspots, risk, project, debt, snapshot | Rank changes over `30d`, `90d`, or `365d` (default `90d`). |
 | `--lcov FILE` | analyze, function, check, hotspots, risk, project, test-targets, baseline | Merge LCOV line coverage. Repeatable. Required on `test-targets` (one coverage flag at minimum). |

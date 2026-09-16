@@ -588,27 +588,47 @@ fn agent_json_top_marks_truncated() {
 }
 
 #[test]
-fn cache_dir_reuses_results_across_runs() {
+fn analyze_index_output_is_identical_to_a_cold_run() {
     let root = temporary_directory();
     std::fs::write(root.join("sample.ts"), "function alpha() { return 1; }\n").unwrap();
-    let cache = root.join("cache");
-    let run = |cache: &Path| {
-        Command::new(env!("CARGO_BIN_EXE_leadline"))
-            .arg("analyze")
-            .arg(&root)
-            .arg("--cache-dir")
-            .arg(cache)
-            .arg("--json")
-            .output()
-            .unwrap()
+    let index = root.join("index");
+    let run = |index: Option<&Path>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_leadline"));
+        command.arg("analyze").arg(&root).arg("--json");
+        if let Some(index) = index {
+            command.arg("--index").arg(index);
+        }
+        command.output().unwrap()
     };
-    let first = run(&cache);
+
+    let cold = run(None);
+    assert!(cold.status.success());
+    let first = run(Some(&index));
     assert!(first.status.success());
-    assert!(cache.join("file-cache.json").is_file());
-    let second = run(&cache);
+    assert!(index.join("index.json").is_file());
+    let second = run(Some(&index));
     assert!(second.status.success());
-    assert_eq!(first.stdout, second.stdout);
+
+    assert_eq!(
+        cold.stdout, first.stdout,
+        "warm output must equal cold output"
+    );
+    assert_eq!(
+        first.stdout, second.stdout,
+        "repeated warm output must equal itself"
+    );
+
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cache_dir_is_no_longer_accepted() {
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["analyze", ".", "--cache-dir", ".leadline"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--cache-dir"));
 }
 
 #[test]

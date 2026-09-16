@@ -2,6 +2,16 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## Unreleased
+
+### Changed (breaking)
+
+- `--cache-dir DIR` on `analyze` and `check` is replaced by `--index DIR`. The
+  index stores content-keyed file metrics plus HEAD-keyed Git history facts and
+  is enabled per repository with a new `[index] path` section. Warm `analyze`
+  and `check` output is byte-identical to a cold run; any version,
+  configuration, or scope mismatch falls back to a full analysis.
+
 ## 0.6.1 - 2026-09-16
 
 ### Fixed
