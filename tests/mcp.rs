@@ -1,6 +1,6 @@
 use leadline::mcp::handle_request;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn request(method: &str, params: Value) -> String {
@@ -73,6 +73,34 @@ impl Drop for Fixture {
     }
 }
 
+fn git_fixture(name: &str) -> Fixture {
+    let root = Fixture::create(std::env::temp_dir().join(format!(
+        "leadline-mcp-{name}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )));
+    run_git(&root, &["init"]);
+    run_git(&root, &["config", "user.email", "test@example.com"]);
+    run_git(&root, &["config", "user.name", "Test"]);
+    root
+}
+
+fn run_git(root: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn envelope_ok(result: &Value) {
     assert_eq!(result["schema_version"], 2);
     assert!(result["analyzer_version"].is_string());
@@ -112,8 +140,17 @@ fn initialize_and_tools_list() {
             "analyze_changed",
             "analyze_function",
             "check",
+            "coupling",
+            "debt",
+            "dependencies",
+            "duplication",
             "explain_metric",
+            "hotspots",
+            "impact",
+            "policy",
+            "project",
             "repo_summary",
+            "risk",
             "security_findings",
             "sql_plan",
             "sql_risks",
@@ -939,6 +976,27 @@ fn remaining_tools_reject_unknown_arguments() {
             "test_targets",
             serde_json::json!({ "path": path, "coverage": lcov.to_str().unwrap(), "bogus": 1 }),
         ),
+        (
+            "dependencies",
+            serde_json::json!({ "path": path, "bogus": 1 }),
+        ),
+        (
+            "impact",
+            serde_json::json!({ "target": "sample.ts", "bogus": 1 }),
+        ),
+        (
+            "coupling",
+            serde_json::json!({ "target": "sample.ts", "bogus": 1 }),
+        ),
+        ("hotspots", serde_json::json!({ "path": path, "bogus": 1 })),
+        (
+            "duplication",
+            serde_json::json!({ "path": path, "bogus": 1 }),
+        ),
+        ("policy", serde_json::json!({ "path": path, "bogus": 1 })),
+        ("risk", serde_json::json!({ "path": path, "bogus": 1 })),
+        ("debt", serde_json::json!({ "path": path, "bogus": 1 })),
+        ("project", serde_json::json!({ "path": path, "bogus": 1 })),
     ] {
         let response = call_tool(tool, arguments);
         let message = error_of(&response)["message"]
@@ -947,6 +1005,208 @@ fn remaining_tools_reject_unknown_arguments() {
             .to_owned();
         assert!(message.contains("unknown"), "{tool}: {response}");
     }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn graph_analytics_tools_registered_with_schema() {
+    let response: Value = serde_json::from_str(
+        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    let tools = result_of(&response)["tools"].as_array().unwrap().clone();
+    for name in ["dependencies", "impact", "coupling"] {
+        assert!(
+            tools.iter().any(|tool| tool["name"] == name),
+            "{name} missing"
+        );
+    }
+    let impact = tools.iter().find(|tool| tool["name"] == "impact").unwrap();
+    assert_eq!(impact["inputSchema"]["required"][0], "target");
+    assert_eq!(impact["inputSchema"]["properties"]["top"]["default"], 20);
+    let coupling = tools
+        .iter()
+        .find(|tool| tool["name"] == "coupling")
+        .unwrap();
+    assert_eq!(
+        coupling["inputSchema"]["properties"]["min_cochanges"]["default"],
+        2
+    );
+    let instructions = handle_request(&request("initialize", serde_json::json!({}))).unwrap();
+    for name in ["dependencies", "impact", "coupling"] {
+        assert!(instructions.contains(name), "instructions must name {name}");
+    }
+}
+
+#[test]
+fn history_and_report_tools_registered_with_schema() {
+    let response: Value = serde_json::from_str(
+        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    let tools = result_of(&response)["tools"].as_array().unwrap().clone();
+    for name in ["hotspots", "duplication", "policy"] {
+        assert!(
+            tools.iter().any(|tool| tool["name"] == name),
+            "{name} missing"
+        );
+    }
+    let hotspots = tools
+        .iter()
+        .find(|tool| tool["name"] == "hotspots")
+        .unwrap();
+    assert_eq!(
+        hotspots["inputSchema"]["properties"]["since"]["default"],
+        "90d"
+    );
+    assert_eq!(hotspots["inputSchema"]["properties"]["top"]["default"], 10);
+}
+
+#[test]
+fn dependencies_reports_the_graph() {
+    let dir = fixture_dir("function calc(x: boolean) { if (x) return 1; return 0; }\n");
+    std::fs::write(
+        dir.join("helper.ts"),
+        "export function helper() { return 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("sample.ts"),
+        "import { helper } from './helper';\nfunction calc(x: boolean) { return helper(); }\n",
+    )
+    .unwrap();
+    let response = call_tool(
+        "dependencies",
+        serde_json::json!({ "path": dir.to_str().unwrap() }),
+    );
+    let result = result_of(&response);
+    envelope_ok(result);
+    assert_eq!(result["summary"]["files"], 2);
+    assert_eq!(result["summary"]["edges"], 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn impact_reports_dependents_and_rejects_a_missing_target() {
+    let dir = fixture_dir("export function helper() { return 1; }\n");
+    std::fs::write(
+        dir.join("helper.ts"),
+        "export function helper() { return 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("sample.ts"),
+        "import { helper } from './helper';\nfunction calc(x: boolean) { return helper(); }\n",
+    )
+    .unwrap();
+    let response = call_tool(
+        "impact",
+        serde_json::json!({ "target": "helper.ts", "path": dir.to_str().unwrap() }),
+    );
+    let result = result_of(&response);
+    envelope_ok(result);
+    let dependents = result["dependents"].as_array().unwrap();
+    assert!(
+        dependents.iter().any(|row| row["path"] == "sample.ts"),
+        "{response}"
+    );
+
+    let missing = call_tool(
+        "impact",
+        serde_json::json!({ "target": "nope.ts", "path": dir.to_str().unwrap() }),
+    );
+    assert_eq!(error_of(&missing)["code"], -32602);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn coupling_reports_related_files() {
+    // Git fixture: two files committed together twice.
+    let root = git_fixture("coupling");
+    for (message, left, right) in [("one", "a", "b"), ("two", "a2", "b2")] {
+        std::fs::write(root.join("a.ts"), format!("export const a = '{left}';\n")).unwrap();
+        std::fs::write(root.join("b.ts"), format!("export const b = '{right}';\n")).unwrap();
+        run_git(&root, &["add", "."]);
+        run_git(&root, &["commit", "-m", message]);
+    }
+    let response = call_tool(
+        "coupling",
+        serde_json::json!({ "target": "a.ts", "path": root.to_str().unwrap(), "min_cochanges": 2 }),
+    );
+    let result = result_of(&response);
+    envelope_ok(result);
+    let related = result["related"].as_array().unwrap();
+    assert!(
+        related.iter().any(|row| row["path"] == "b.ts"),
+        "{response}"
+    );
+
+    let escape = root.parent().unwrap().join(format!(
+        "{}-escape.ts",
+        root.file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::write(&escape, "export const escape = 1;\n").unwrap();
+    let outside = call_tool(
+        "coupling",
+        serde_json::json!({ "target": escape.to_str().unwrap(), "path": root.to_str().unwrap() }),
+    );
+    assert_eq!(error_of(&outside)["code"], -32602);
+    std::fs::remove_file(&escape).unwrap();
+}
+
+#[test]
+fn hotspots_ranks_files_and_rejects_a_bad_window() {
+    let dir = fixture_dir("function calc(x: boolean) { if (x) return 1; return 0; }\n");
+    let response = call_tool(
+        "hotspots",
+        serde_json::json!({ "path": dir.to_str().unwrap() }),
+    );
+    let result = result_of(&response);
+    envelope_ok(result);
+    assert!(
+        !result["hotspots"].as_array().unwrap().is_empty(),
+        "{response}"
+    );
+    let bad = call_tool(
+        "hotspots",
+        serde_json::json!({ "path": dir.to_str().unwrap(), "since": "7d" }),
+    );
+    assert_eq!(error_of(&bad)["code"], -32602);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn duplication_reports_clones() {
+    let dir = fixture_dir("function alpha(x: boolean) { if (x) { return 1; } return 0; }\n");
+    std::fs::write(
+        dir.join("twin.ts"),
+        "function beta(x: boolean) { if (x) { return 1; } return 0; }\n",
+    )
+    .unwrap();
+    let response = call_tool(
+        "duplication",
+        serde_json::json!({ "path": dir.to_str().unwrap() }),
+    );
+    let result = result_of(&response);
+    envelope_ok(result);
+    assert_eq!(result["tool"], "duplication");
+    assert_eq!(result["mode"], "single");
+    assert!(result["groups"].is_array(), "{response}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn policy_reports_violations_without_config() {
+    let dir = fixture_dir("function calc(x: boolean) { if (x) return 1; return 0; }\n");
+    let response = call_tool(
+        "policy",
+        serde_json::json!({ "path": dir.to_str().unwrap() }),
+    );
+    let result = result_of(&response);
+    envelope_ok(result);
+    assert_eq!(result["tool"], "policy");
+    assert!(result["violations"].as_array().is_some(), "{response}");
+    assert!(result["rules"].is_number(), "{response}");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -1230,7 +1490,7 @@ fn tools_list_marks_every_tool_read_only() {
     )
     .unwrap();
     let tools = result_of(&response)["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 11);
+    assert_eq!(tools.len(), 20);
     for tool in tools {
         let name = tool["name"].as_str().unwrap();
         assert!(
@@ -2481,4 +2741,62 @@ fn analyze_tool_reuses_a_repository_index_for_a_file_target() {
 fn non_string_index_argument_is_rejected() {
     let response = call_tool("analyze", serde_json::json!({ "path": ".", "index": 7 }));
     assert_eq!(error_of(&response)["code"], -32602);
+}
+
+#[test]
+fn risk_reports_components() {
+    let dir = fixture_dir("function calc(x: boolean) { if (x) { return 1; } return 0; }\n");
+    let response = call_tool("risk", serde_json::json!({ "path": dir.to_str().unwrap() }));
+    let result = result_of(&response);
+    envelope_ok(result);
+    assert!(
+        !result["risks"].as_array().unwrap().is_empty(),
+        "{response}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn debt_and_project_compare_a_git_repo() {
+    let root = git_fixture("debt");
+    std::fs::write(
+        root.join("sample.ts"),
+        "function calc(x: boolean) { return 1; }\n",
+    )
+    .unwrap();
+    run_git(&root, &["add", "."]);
+    run_git(&root, &["commit", "-m", "base"]);
+    // Leave a more complex uncommitted state for the comparison.
+    std::fs::write(
+        root.join("sample.ts"),
+        "function calc(x: boolean) { if (x) { return 1; } return 0; }\n",
+    )
+    .unwrap();
+
+    let debt = call_tool(
+        "debt",
+        serde_json::json!({ "path": root.to_str().unwrap(), "base": "HEAD" }),
+    );
+    let result = result_of(&debt);
+    envelope_ok(result);
+    assert_eq!(result["tool"], "debt");
+    assert!(result["summary"].is_object(), "{debt}");
+
+    let project = call_tool(
+        "project",
+        serde_json::json!({ "path": root.to_str().unwrap() }),
+    );
+    let result = result_of(&project);
+    envelope_ok(result);
+    assert_eq!(result["tool"], "project");
+    assert!(
+        result["summary"]["files"].as_u64().unwrap() >= 1,
+        "{project}"
+    );
+
+    let missing = call_tool(
+        "project",
+        serde_json::json!({ "path": root.to_str().unwrap(), "pit": ["missing-pit.json"] }),
+    );
+    assert_eq!(error_of(&missing)["code"], -32602);
 }

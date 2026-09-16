@@ -4,6 +4,14 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Added
+
+- MCP exposes nine more read-only tools mirroring the CLI analytics commands:
+  `hotspots`, `risk`, `dependencies`, `impact`, `coupling`, `duplication`,
+  `policy`, `debt`, and `project`. Arguments are validated as strictly as the
+  existing tools; `risk`'s pipeline and scoped-target resolution for
+  `coupling`/`impact` are shared with the CLI.
+
 ### Fixed
 
 - MCP tool arguments are validated strictly: `analyze_changed.explain`,

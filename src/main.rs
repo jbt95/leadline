@@ -738,24 +738,20 @@ fn risk_command(args: &[String]) -> Result<ExitCode, CliError> {
         .map(|selected| selected.analysis_excludes.as_slice())
         .unwrap_or(&[]);
     let coverage = has_coverage.then_some(coverage);
-    let (analysis, scope) = if path.is_file() {
+    let analysis = if path.is_file() {
         let scope = config_dir(&path);
         let analyzed = leadline::analyze_file(&path, &scope, coverage.as_ref())
             .map_err(|error| CliError::incomplete(error.to_string()))?;
-        (
-            AnalysisReport {
-                schema_version: OUTPUT_SCHEMA_VERSION,
-                metric_profile: METRIC_PROFILE,
-                analyzer_version: env!("CARGO_PKG_VERSION"),
-                metric_specs: MetricSpecs::default(),
-                files: vec![analyzed],
-            },
-            scope,
-        )
+        AnalysisReport {
+            schema_version: OUTPUT_SCHEMA_VERSION,
+            metric_profile: METRIC_PROFILE,
+            analyzer_version: env!("CARGO_PKG_VERSION"),
+            metric_specs: MetricSpecs::default(),
+            files: vec![analyzed],
+        }
     } else {
         // The warm path is scoped to analyze and check in this phase.
-        let analyzed = analyze_with_index(&path, coverage.as_ref(), excludes, None)?;
-        (analyzed, path.clone())
+        analyze_with_index(&path, coverage.as_ref(), excludes, None)?
     };
     if analysis.files.is_empty() {
         return Err(CliError::incomplete(format!(
@@ -763,47 +759,8 @@ fn risk_command(args: &[String]) -> Result<ExitCode, CliError> {
             path.display()
         )));
     }
-    let graph = leadline::graph::analyze_dependencies(&scope, excludes)
+    let mut report = leadline::analytics::analyze_risk(&analysis, &path, excludes, window)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
-    // ponytail: snapshot entries are loaded only for repo context (root,
-    // config, mailmap); function metrics come from the analysis above.
-    let (snapshot_context, snapshot) =
-        leadline::source_snapshot::load(&path, SnapshotTarget::Worktree)
-            .map_err(|error| CliError::incomplete(error.to_string()))?;
-    let revision = snapshot.commit.clone().unwrap_or_else(|| "HEAD".to_owned());
-    let (history, touches) = match snapshot_context.repo_root {
-        Some(_) => {
-            let git = leadline::history::analyze_git_at_with_mailmap(
-                &snapshot_context,
-                &revision,
-                snapshot.mailmap_bytes.as_deref(),
-            )
-            .map_err(|error| CliError::incomplete(error.to_string()))?;
-            (git.history, git.touches)
-        }
-        None => (
-            leadline::history::HistoryReport {
-                schema_version: leadline::history::HISTORY_SCHEMA_VERSION,
-                analyzer_version: env!("CARGO_PKG_VERSION"),
-                available: false,
-                reference: "head-commit-time",
-                head_commit: None,
-                head_timestamp: None,
-                files: Vec::new(),
-            },
-            Vec::new(),
-        ),
-    };
-    let source_paths: Vec<String> = analysis
-        .files
-        .iter()
-        .map(|file| file.path.clone())
-        .collect();
-    let ownership =
-        leadline::ownership::build(&touches, &source_paths, OwnershipMode::AggregateOnly);
-    let policy = leadline::policy::evaluate(&graph, &snapshot_context.config.architecture_rules);
-    let mut report =
-        leadline::risk::build(&analysis, &history, &graph, &ownership, &policy, window);
     if agent_json {
         report.risks.truncate(limit);
         println!(
@@ -2031,7 +1988,10 @@ fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
             root.display()
         )));
     }
-    let key = resolve_scoped_target(&root, &target, "coupling")?;
+    let key = leadline::resolve_scoped_target(&root, &target).map_err(|error| match error {
+        leadline::ScopedTargetError::Io(message) => CliError::incomplete(message),
+        other => CliError::usage(other.to_string()),
+    })?;
     let options = CouplingOptions {
         min_co_changes,
         limit: top,
@@ -2054,42 +2014,6 @@ fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
         print!("{}", leadline::report::terminal_coupling(&report));
     }
     Ok(ExitCode::SUCCESS)
-}
-
-/// Resolve a user-supplied target to a scope-relative normalized path.
-///
-/// Validates the file exists, then canonicalizes both sides so symlinks and
-/// Windows verbatim prefixes cannot split the join. Shared by `coupling` and
-/// `impact` so canonical containment validation is implemented once.
-fn resolve_scoped_target(root: &Path, target: &str, command: &str) -> Result<String, CliError> {
-    let requested = Path::new(target);
-    let absolute_target = if requested.is_absolute() {
-        requested.to_path_buf()
-    } else {
-        root.join(requested)
-    };
-    if !absolute_target.is_file() {
-        return Err(CliError::usage(format!(
-            "{command} target '{target}' was not found under {}",
-            root.display()
-        )));
-    }
-    // Join keys are scope-relative; canonicalize both sides so symlinks and
-    // Windows verbatim prefixes cannot split the join.
-    let canonical_root =
-        std::fs::canonicalize(root).map_err(|error| CliError::incomplete(error.to_string()))?;
-    let canonical_target = std::fs::canonicalize(&absolute_target)
-        .map_err(|error| CliError::incomplete(error.to_string()))?;
-    if !canonical_target.starts_with(&canonical_root) {
-        return Err(CliError::usage(format!(
-            "{command} target '{target}' is outside the scope {}",
-            root.display()
-        )));
-    }
-    Ok(leadline::normalized_relative_path(
-        &canonical_target,
-        &canonical_root,
-    ))
 }
 
 /// Static dependency graph with fan-in/fan-out and cycles.
@@ -2219,7 +2143,10 @@ fn impact_command(args: &[String]) -> Result<ExitCode, CliError> {
             root.display()
         )));
     }
-    let key = resolve_scoped_target(&root, &target, "impact")?;
+    let key = leadline::resolve_scoped_target(&root, &target).map_err(|error| match error {
+        leadline::ScopedTargetError::Io(message) => CliError::incomplete(message),
+        other => CliError::usage(other.to_string()),
+    })?;
     let config = load_config_for(&root)?;
     let excludes: &[String] = config
         .as_ref()

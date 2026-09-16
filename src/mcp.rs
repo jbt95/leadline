@@ -30,11 +30,11 @@ const MAX_RESPONSE_BYTES: usize = 32 << 20;
 
 /// Usage guidance returned by `initialize`. Hosts may inject this into the
 /// system prompt, so it doubles as the server's self-advertisement.
-const SERVER_INSTRUCTIONS: &str = "leadline reports deterministic function-level complexity metrics (Java, JavaScript, TypeScript, TSX) without executing code or touching the network. Use analyze_changed after substantial edits to spot regressions, repo_summary for a first look at unfamiliar code, analyze_function with explain:true to see which lines drive complexity, check to gate thresholds or regressions (pass coverage for CRAP gates), test_targets to rank uncovered decision lines, sql_plan to compare checked-in PostgreSQL EXPLAIN artifacts for plan regressions, security_findings to triage scanner SARIF with code context, vulnerabilities to prioritize vulnerable dependencies with changed-import evidence, and sql_risks to flag static PostgreSQL query risks. The analyze and check tools accept an optional index directory and only ever read it. Metrics are evidence, not objectives: do not refactor solely to lower a number. security_findings/vulnerabilities need pre-generated SARIF/OSV/Trivy; secrets use native leadline_secret_check.";
+const SERVER_INSTRUCTIONS: &str = "leadline reports deterministic function-level complexity metrics (Java, JavaScript, TypeScript, TSX) without executing code or touching the network. Use analyze_changed after substantial edits to spot regressions, repo_summary for a first look at unfamiliar code, analyze_function with explain:true to see which lines drive complexity, check to gate thresholds or regressions (pass coverage for CRAP gates), test_targets to rank uncovered decision lines, sql_plan to compare checked-in PostgreSQL EXPLAIN artifacts for plan regressions, security_findings to triage scanner SARIF with code context, vulnerabilities to prioritize vulnerable dependencies with changed-import evidence, and sql_risks to flag static PostgreSQL query risks. The analyze and check tools accept an optional index directory and only ever read it. Metrics are evidence, not objectives: do not refactor solely to lower a number. security_findings/vulnerabilities need pre-generated SARIF/OSV/Trivy; secrets use native leadline_secret_check. For structure, dependencies maps the static graph, impact computes one target's blast radius, and coupling finds files that historically change together. hotspots ranks churn, duplication finds token clones, and policy evaluates architecture rules from configuration. risk ranks explainable change risk, debt compares full state against a base revision, and project builds the canonical repository summary.";
 
-/// The eleven tools this server exposes. Fixed set; keep in sync with
+/// The twenty tools this server exposes. Fixed set; keep in sync with
 /// [`tools_list`] and [`dispatch_tool`].
-const TOOL_NAMES: [&str; 11] = [
+const TOOL_NAMES: [&str; 20] = [
     "analyze",
     "analyze_changed",
     "analyze_function",
@@ -46,6 +46,15 @@ const TOOL_NAMES: [&str; 11] = [
     "test_targets",
     "vulnerabilities",
     "sql_risks",
+    "dependencies",
+    "impact",
+    "coupling",
+    "hotspots",
+    "duplication",
+    "policy",
+    "risk",
+    "debt",
+    "project",
 ];
 
 /// Serve JSON-RPC requests from stdin, writing responses to stdout.
@@ -941,6 +950,15 @@ fn dispatch_tool(
         "vulnerabilities" => tool_vulnerabilities(params),
         "sql_risks" => tool_sql_risks(params),
         "test_targets" => tool_test_targets(params),
+        "dependencies" => tool_dependencies(params),
+        "impact" => tool_impact(params),
+        "coupling" => tool_coupling(params),
+        "hotspots" => tool_hotspots(params),
+        "duplication" => tool_duplication(params),
+        "policy" => tool_policy(params),
+        "risk" => tool_risk(params),
+        "debt" => tool_debt(params),
+        "project" => tool_project(params),
         _ => Err((-32602, format!("unknown tool '{name}'"))),
     }
 }
@@ -968,6 +986,30 @@ fn envelope(
     );
     fields.insert("metric_specs".to_owned(), metric_specs()?);
     Ok(serde_json::Value::Object(fields))
+}
+
+/// Serialize a report struct into an envelope object.
+fn report_object<T: serde::Serialize>(
+    report: &T,
+) -> Result<serde_json::Map<String, serde_json::Value>, (i64, String)> {
+    match serde_json::to_value(report).map_err(|error| (-32603, error.to_string()))? {
+        serde_json::Value::Object(fields) => Ok(fields),
+        _ => Err((-32603, "report did not serialize to an object".to_owned())),
+    }
+}
+
+/// Copy named agent-json fields into envelope fields. The envelope's own
+/// version fields overwrite the report's duplicates afterwards.
+fn merge_agent_fields(
+    fields: &mut serde_json::Map<String, serde_json::Value>,
+    agent: &serde_json::Value,
+    keys: &[&str],
+) {
+    for key in keys {
+        if let Some(value) = agent.get(key) {
+            fields.insert((*key).to_owned(), value.clone());
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1866,6 +1908,361 @@ fn tool_test_targets(params: &serde_json::Value) -> Result<serde_json::Value, (i
     envelope(fields)
 }
 
+fn tool_dependencies(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(params, "dependencies", &["path"])?;
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let config = load_config(path)?;
+    let excludes = config_excludes(config.as_ref());
+    let report = crate::graph::analyze_dependencies(Path::new(path), &excludes)
+        .map_err(|error| (-32602, error.to_string()))?;
+    if report.files.is_empty() {
+        return Err((-32602, format!("no supported files found under {path}")));
+    }
+    let agent = crate::agent::dependencies_agent_json(&report);
+    let mut fields = serde_json::Map::new();
+    fields.insert("tool".to_owned(), serde_json::json!("dependencies"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    merge_agent_fields(
+        &mut fields,
+        &agent,
+        &[
+            "summary",
+            "files",
+            "edges",
+            "cycles",
+            "unresolved",
+            "truncated",
+        ],
+    );
+    envelope(fields)
+}
+
+fn tool_impact(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(params, "impact", &["target", "path", "top"])?;
+    let target = req_str(params, "target")?;
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let top = parse_top_param(params, 20)?;
+    let root = Path::new(path);
+    if !root.is_dir() {
+        return Err((-32602, format!("impact path '{path}' is not a directory")));
+    }
+    let key =
+        crate::resolve_scoped_target(root, target).map_err(|error| (-32602, error.to_string()))?;
+    let config = load_config(path)?;
+    let excludes = config_excludes(config.as_ref());
+    let graph = crate::graph::analyze_dependencies(root, &excludes)
+        .map_err(|error| (-32602, error.to_string()))?;
+    let Some(report) = crate::impact::analyze_impact(&graph, &key, top) else {
+        return Err((
+            -32602,
+            format!("impact target '{target}' was not found in the dependency graph under {path}"),
+        ));
+    };
+    let agent = crate::agent::impact_agent_json(&report);
+    let mut fields = serde_json::Map::new();
+    fields.insert("tool".to_owned(), serde_json::json!("impact"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    merge_agent_fields(
+        &mut fields,
+        &agent,
+        &[
+            "model",
+            "target",
+            "files_analyzed",
+            "fan_in",
+            "fan_out",
+            "direct_dependents",
+            "blast_radius",
+            "blast_radius_percent",
+            "dependents",
+            "cycles",
+            "truncated",
+        ],
+    );
+    envelope(fields)
+}
+
+fn tool_coupling(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(
+        params,
+        "coupling",
+        &["target", "path", "top", "min_cochanges"],
+    )?;
+    let target = req_str(params, "target")?;
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let top = parse_top_param(params, 20)?;
+    let min_cochanges = match params.get("min_cochanges") {
+        None | Some(serde_json::Value::Null) => 2_u64,
+        Some(value) => {
+            let count = value.as_u64().ok_or((
+                -32602,
+                "min_cochanges must be a positive integer".to_owned(),
+            ))?;
+            if count == 0 {
+                return Err((-32602, "min_cochanges must be at least 1".to_owned()));
+            }
+            count
+        }
+    };
+    let root = Path::new(path);
+    if !root.is_dir() {
+        return Err((-32602, format!("coupling path '{path}' is not a directory")));
+    }
+    let key =
+        crate::resolve_scoped_target(root, target).map_err(|error| (-32602, error.to_string()))?;
+    let options = crate::coupling::CouplingOptions {
+        min_co_changes: min_cochanges,
+        limit: top,
+    };
+    let report = crate::coupling::analyze_coupling(root, &key, &options)
+        .map_err(|error| (-32602, error.to_string()))?;
+    let agent = crate::agent::coupling_agent_json(&report);
+    let mut fields = serde_json::Map::new();
+    fields.insert("tool".to_owned(), serde_json::json!("coupling"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    merge_agent_fields(
+        &mut fields,
+        &agent,
+        &[
+            "target",
+            "git_available",
+            "target_commits",
+            "related",
+            "truncated",
+        ],
+    );
+    envelope(fields)
+}
+
+fn tool_hotspots(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(params, "hotspots", &["path", "top", "since", "coverage"])?;
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let top = parse_top_param(params, 10)?;
+    let window = parse_since(params, crate::history::HistoryWindow::Days90)?;
+    let (analysis, _) = analyze_optional_coverage(params, path)?;
+    let history = crate::history::analyze_history(&config_dir(path))
+        .map_err(|error| (-32602, error.to_string()))?;
+    let report = crate::hotspots::build(&analysis, &history, window, top);
+    let agent = crate::agent::hotspots_agent_json(&report);
+    let mut fields = serde_json::Map::new();
+    fields.insert("tool".to_owned(), serde_json::json!("hotspots"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    merge_agent_fields(
+        &mut fields,
+        &agent,
+        &[
+            "model",
+            "window",
+            "git_available",
+            "summary",
+            "hotspots",
+            "truncated",
+        ],
+    );
+    envelope(fields)
+}
+
+fn tool_duplication(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(params, "duplication", &["path", "base"])?;
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let base = opt_str(params, "base")?;
+    let outcome = crate::analytics::analyze_duplication(
+        Path::new(path),
+        crate::source_snapshot::SnapshotTarget::Worktree,
+        base,
+    )
+    .map_err(|error| (-32602, error.to_string()))?;
+    let (mode, mut fields) = match &outcome {
+        crate::analytics::DuplicationOutcome::Single(report) => ("single", report_object(report)?),
+        crate::analytics::DuplicationOutcome::Drift(report) => ("drift", report_object(report)?),
+    };
+    fields.insert("tool".to_owned(), serde_json::json!("duplication"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    fields.insert("base".to_owned(), serde_json::json!(base));
+    fields.insert("mode".to_owned(), serde_json::json!(mode));
+    envelope(fields)
+}
+
+fn tool_policy(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(params, "policy", &["path", "base"])?;
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let base = opt_str(params, "base")?;
+    let report = crate::analytics::analyze_policy(
+        Path::new(path),
+        crate::source_snapshot::SnapshotTarget::Worktree,
+        base,
+    )
+    .map_err(|error| (-32602, error.to_string()))?;
+    let mut fields = report_object(&report)?;
+    fields.insert("tool".to_owned(), serde_json::json!("policy"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    fields.insert("base".to_owned(), serde_json::json!(base));
+    envelope(fields)
+}
+
+fn tool_risk(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(params, "risk", &["path", "top", "since", "coverage"])?;
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let top = parse_top_param(params, 10)?;
+    let window = parse_since(params, crate::history::HistoryWindow::Days90)?;
+    let (analysis, excludes) = analyze_optional_coverage(params, path)?;
+    let mut report = crate::analytics::analyze_risk(&analysis, Path::new(path), &excludes, window)
+        .map_err(|error| (-32602, error.to_string()))?;
+    report.risks.truncate(top);
+    let agent = crate::agent::risk_agent_json(&report);
+    let mut fields = serde_json::Map::new();
+    fields.insert("tool".to_owned(), serde_json::json!("risk"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    merge_agent_fields(
+        &mut fields,
+        &agent,
+        &["model", "window", "git_available", "summary", "risks"],
+    );
+    envelope(fields)
+}
+
+fn analyze_optional_coverage(
+    params: &serde_json::Value,
+    path: &str,
+) -> Result<(crate::core::AnalysisReport, Vec<String>), (i64, String)> {
+    let coverage = opt_str(params, "coverage")?
+        .map(load_coverage_file)
+        .transpose()
+        .map_err(|message| (-32602, message))?;
+    let config = load_config(path)?;
+    let excludes = config_excludes(config.as_ref());
+    let analysis = crate::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
+        .map_err(|error| (-32602, error.to_string()))?;
+    if analysis.files.is_empty() {
+        return Err((-32602, format!("no supported files found under {path}")));
+    }
+    Ok((analysis, excludes))
+}
+
+fn tool_debt(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(
+        params,
+        "debt",
+        &["path", "base", "target", "renames", "since"],
+    )?;
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let base = opt_str(params, "base")?.unwrap_or("HEAD~1");
+    let target = match opt_str(params, "target")? {
+        None | Some("worktree") => crate::source_snapshot::SnapshotTarget::Worktree,
+        Some("index") => crate::source_snapshot::SnapshotTarget::Index,
+        Some(revision) => crate::source_snapshot::SnapshotTarget::Revision(revision.to_owned()),
+    };
+    let renames = opt_flag(params, "renames", "debt")?;
+    let window = parse_since(params, crate::history::HistoryWindow::Days90)?;
+    let report = crate::analytics::analyze_debt(&crate::analytics::DebtRequest {
+        path: std::path::PathBuf::from(path),
+        base: base.to_owned(),
+        target,
+        detect_renames: renames,
+        window,
+        fail_on_regression: false,
+    })
+    .map_err(|error| (-32602, error.to_string()))?;
+    let agent = crate::agent::debt_agent_json(&report);
+    let mut fields = serde_json::Map::new();
+    fields.insert("tool".to_owned(), serde_json::json!("debt"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    fields.insert("base".to_owned(), serde_json::json!(base));
+    merge_agent_fields(
+        &mut fields,
+        &agent,
+        &[
+            "model",
+            "target_commit",
+            "summary",
+            "findings",
+            "risk_changes",
+            "truncated",
+        ],
+    );
+    envelope(fields)
+}
+
+fn tool_project(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(
+        params,
+        "project",
+        &[
+            "path",
+            "target",
+            "since",
+            "coverage",
+            "ownership",
+            "pit",
+            "stryker",
+            "test_map",
+            "snapshots",
+        ],
+    )?;
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    let target = match opt_str(params, "target")? {
+        None => crate::source_snapshot::SnapshotTarget::Worktree,
+        Some(revision) => crate::source_snapshot::SnapshotTarget::Revision(revision.to_owned()),
+    };
+    let window = parse_since(params, crate::history::HistoryWindow::Days90)?;
+    let coverage = opt_str(params, "coverage")?
+        .map(load_coverage_file)
+        .transpose()
+        .map_err(|message| (-32602, message))?;
+    let ownership_mode = match opt_str(params, "ownership")? {
+        None | Some("aggregate") => crate::ownership::OwnershipMode::AggregateOnly,
+        Some("include_authors") => crate::ownership::OwnershipMode::IncludeAuthors,
+        Some("anonymize_authors") => crate::ownership::OwnershipMode::AnonymizeAuthors,
+        Some(other) => {
+            return Err((
+                -32602,
+                format!(
+                    "unknown ownership '{other}': expected 'aggregate', 'include_authors', or 'anonymize_authors'"
+                ),
+            ));
+        }
+    };
+    let mut mutation_inputs = Vec::new();
+    for pit in artifact_paths(params, "project", "pit", false)? {
+        mutation_inputs.push(crate::mutation::MutationInput::Pit(pit));
+    }
+    for stryker in artifact_paths(params, "project", "stryker", false)? {
+        mutation_inputs.push(crate::mutation::MutationInput::Stryker(stryker));
+    }
+    let test_maps = artifact_paths(params, "project", "test_map", false)?;
+    let snapshots_path = opt_str(params, "snapshots")?
+        .map(|file| artifact_path("project", "snapshots", file))
+        .transpose()?;
+    let report = crate::analytics::build(&crate::analytics::ProjectRequest {
+        path: std::path::PathBuf::from(path),
+        target,
+        window,
+        mutation_inputs,
+        test_maps,
+        ownership_mode,
+        snapshots_path,
+        coverage,
+    })
+    .map_err(|error| (-32602, error.to_string()))?;
+    let agent = crate::agent::project_agent_json(&report);
+    let mut fields = serde_json::Map::new();
+    fields.insert("tool".to_owned(), serde_json::json!("project"));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    merge_agent_fields(
+        &mut fields,
+        &agent,
+        &[
+            "generated_from",
+            "git_available",
+            "head_commit",
+            "summary",
+            "risk",
+            "truncated",
+        ],
+    );
+    envelope(fields)
+}
+
 // ---------------------------------------------------------------------------
 // Coverage
 // ---------------------------------------------------------------------------
@@ -1972,6 +2369,20 @@ fn parse_top_param(params: &serde_json::Value, default: usize) -> Result<usize, 
             }
             Ok(count)
         }
+    }
+}
+
+/// One `since` window: `30d`, `90d`, or `365d`.
+fn parse_since(
+    params: &serde_json::Value,
+    default: crate::history::HistoryWindow,
+) -> Result<crate::history::HistoryWindow, (i64, String)> {
+    match opt_str(params, "since")? {
+        None => Ok(default),
+        Some(raw) => crate::history::HistoryWindow::parse(raw).ok_or((
+            -32602,
+            format!("unknown since '{raw}': expected '30d', '90d', or '365d'"),
+        )),
     }
 }
 
@@ -2762,6 +3173,132 @@ fn tools_list_result() -> serde_json::Value {
                     },
                     "required": ["coverage"],
                 },
+            },
+            {
+                "name": "dependencies",
+                "description": "Static dependency graph for a path: per-file fan-in/fan-out, edges, cycles, and unresolved imports. Use impact for one target's blast radius.",
+                "annotations": { "title": "Dependency graph", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." }
+                    }
+                },
+            },
+            {
+                "name": "impact",
+                "description": "Transitive dependents and blast radius for one file. The target must exist under path. Use dependencies for the whole graph.",
+                "annotations": { "title": "Impact blast radius", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target": { "type": "string", "description": "Target file path relative to path." },
+                        "path": { "type": "string", "default": "." },
+                        "top": { "type": "integer", "minimum": 1, "maximum": 200, "default": 20, "description": "Keep at most this many dependents." }
+                    },
+                    "required": ["target"]
+                },
+            },
+            {
+                "name": "coupling",
+                "description": "Files that historically change together with one target (`git log` co-changes). Use before editing a target to find hidden contracts the static graph cannot see.",
+                "annotations": { "title": "Change coupling", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target": { "type": "string", "description": "Target file path relative to path." },
+                        "path": { "type": "string", "default": "." },
+                        "top": { "type": "integer", "minimum": 1, "maximum": 200, "default": 20, "description": "Keep at most this many related files." },
+                        "min_cochanges": { "type": "integer", "minimum": 1, "default": 2, "description": "Ignore pairs that co-changed fewer times." }
+                    },
+                    "required": ["target"]
+                },
+            },
+            {
+                "name": "hotspots",
+                "description": "Rank files by churn, complexity, and CRAP. Use for a first look at a repository; use repo_summary for a flat function list. Coverage adds the CRAP dimension.",
+                "annotations": { "title": "Churn hotspots", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." },
+                        "top": { "type": "integer", "minimum": 1, "maximum": 200, "default": 10, "description": "Keep at most this many hotspots." },
+                        "since": { "type": "string", "enum": ["30d", "90d", "365d"], "default": "90d", "description": "Git history window for churn." },
+                        "coverage": { "type": ["string", "null"], "description": "Coverage file path (.info for LCOV, .xml for JaCoCo)." }
+                    }
+                }
+            },
+            {
+                "name": "duplication",
+                "description": "Token-clone detection. With base, reports new/existing/resolved drift against that revision; without it, one current-state report.",
+                "annotations": { "title": "Duplication", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." },
+                        "base": { "type": "string", "description": "Git base revision for new/existing/resolved drift." }
+                    }
+                }
+            },
+            {
+                "name": "policy",
+                "description": "Architecture-rule evaluation from leadline.toml. With base, reports new/existing/resolved violations; without it, one current-state evaluation.",
+                "annotations": { "title": "Architecture policy", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." },
+                        "base": { "type": "string", "description": "Git base revision for policy drift." }
+                    }
+                }
+            },
+            {
+                "name": "risk",
+                "description": "Explainable change-risk ranking: score plus complexity, CRAP, churn, impact, ownership, and policy components. Coverage enables the CRAP component.",
+                "annotations": { "title": "Change risk", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." },
+                        "top": { "type": "integer", "minimum": 1, "maximum": 200, "default": 10, "description": "Keep at most this many ranked files." },
+                        "since": { "type": "string", "enum": ["30d", "90d", "365d"], "default": "90d", "description": "Git history window for churn." },
+                        "coverage": { "type": ["string", "null"], "description": "Coverage file path (.info for LCOV, .xml for JaCoCo)." }
+                    }
+                }
+            },
+            {
+                "name": "debt",
+                "description": "Full-state comparison against a base revision: threshold findings and risk-score changes, with new/existing/resolved status. Reports state; use check to gate.",
+                "annotations": { "title": "Debt comparison", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." },
+                        "base": { "type": "string", "default": "HEAD~1" },
+                        "target": { "type": "string", "default": "worktree", "description": "'worktree', 'index', or a revision to compare against base." },
+                        "renames": { "type": "boolean", "default": false, "description": "Detect Git file renames and pair old-path content with new-path content." },
+                        "since": { "type": "string", "enum": ["30d", "90d", "365d"], "default": "90d" }
+                    }
+                }
+            },
+            {
+                "name": "project",
+                "description": "Canonical project build: summary KPIs, top risk rows, and optional mutation/test-map inputs. The heaviest tool; prefer targeted tools first.",
+                "annotations": { "title": "Project summary", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "default": "." },
+                        "target": { "type": "string", "description": "Git revision to snapshot instead of the worktree." },
+                        "since": { "type": "string", "enum": ["30d", "90d", "365d"], "default": "90d" },
+                        "coverage": { "type": ["string", "null"], "description": "Coverage file path (.info for LCOV, .xml for JaCoCo)." },
+                        "ownership": { "type": "string", "enum": ["aggregate", "include_authors", "anonymize_authors"], "default": "aggregate" },
+                        "pit": { "type": "array", "items": { "type": "string" }, "description": "PIT mutation report paths (root-relative, inside the working directory)." },
+                        "stryker": { "type": "array", "items": { "type": "string" }, "description": "Stryker mutation report paths (root-relative, inside the working directory)." },
+                        "test_map": { "type": "array", "items": { "type": "string" }, "description": "Test-map report paths (root-relative, inside the working directory)." },
+                        "snapshots": { "type": "string", "description": "Snapshot store path (root-relative, inside the working directory)." }
+                    }
+                }
             },
         ],
     })

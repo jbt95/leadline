@@ -79,7 +79,7 @@ leadline changed --base origin/main --format agent-json
    "before": {"cognitive": 12}, "after": {"cognitive": 24}}]}
 ```
 
-**MCP server** (read-only: stdio by default, HTTP with `--port`; eleven tools: `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `test_targets`, `sql_plan`, `security_findings`, `vulnerabilities`, `sql_risks`):
+**MCP server** (read-only: stdio by default, HTTP with `--port`; twenty tools: `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `test_targets`, `sql_plan`, `security_findings`, `vulnerabilities`, `sql_risks`, `hotspots`, `risk`, `dependencies`, `impact`, `coupling`, `duplication`, `policy`, `debt`, `project`):
 
 ```console
 leadline mcp
@@ -106,7 +106,7 @@ leadline check . --cognitive 15 --cyclomatic 10 --max-nesting 4
 flowchart TD
     CLI["CLI: analyze, function, changed, check, hotspots, risk, project, security, vulnerabilities, sql, sql-plan, ..."]
     CLI --> Human["Humans and CI: terminal, JSON, SARIF, exit codes 0-5"]
-    CLI --> MCP["MCP server, read-only stdio or HTTP: eleven tools"]
+    CLI --> MCP["MCP server, read-only stdio or HTTP: twenty tools"]
     MCP --> Harnesses["Claude Code, Pi, OMP, OpenCode, Codex, Gemini, Cursor, Cline, Windsurf, Copilot"]
     CLI --> Skill["Skill and hooks: SKILL.md, changed agent-json, check warn mode"]
     Skill --> Harnesses

@@ -5,18 +5,21 @@
 //! and future frontends share one pipeline.
 
 use crate::Result;
+use crate::core::AnalysisReport;
 use crate::debt::{
     DEBT_SCHEMA_VERSION, DebtReport, RISK_CHANGE_MODEL, classify, compare_risks, summarize,
 };
 use crate::duplication::detect;
 use crate::external::InputBudget;
-use crate::graph::analyze_dependencies_from_sources;
-use crate::history::{HistoryWindow, analyze_git_at_with_mailmap};
+use crate::graph::{analyze_dependencies, analyze_dependencies_from_sources};
+use crate::history::{
+    HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow, analyze_git_at_with_mailmap,
+};
 use crate::mutation::{MutationInput, ingest as ingest_mutation};
 use crate::ownership::{OwnershipMode, OwnershipReport, build as build_ownership};
 use crate::policy::{PolicyReport, evaluate as evaluate_policy};
 use crate::project::{Project, ProjectInputs, build as build_project};
-use crate::risk::build as build_risk;
+use crate::risk::{RiskReport, build as build_risk};
 use crate::snapshots::{SnapshotOutcome, TrendPoint, TrendStore};
 use crate::source_snapshot::{SnapshotContext, SnapshotTarget, SourceSnapshot, load};
 use crate::test_relationships::ingest as ingest_test_relationships;
@@ -370,6 +373,57 @@ pub fn policy_for(request: &ProjectRequest) -> Result<PolicyReport> {
     let (context, snapshot) = load(&request.path, request.target.clone())?;
     let graph = analyze_dependencies_from_sources(&snapshot.entries)?;
     Ok(evaluate_policy(&graph, &context.config.architecture_rules))
+}
+
+/// Explainable change-risk ranking for one analysis, matching the CLI
+/// `risk` command: static graph, Git history at the current revision,
+/// ownership, and policy all feed `risk::build`.
+pub fn analyze_risk(
+    analysis: &AnalysisReport,
+    path: &Path,
+    excludes: &[String],
+    window: HistoryWindow,
+) -> Result<RiskReport> {
+    let scope = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().unwrap_or(Path::new(".")).to_path_buf()
+    };
+    let graph = analyze_dependencies(&scope, excludes)?;
+    let (snapshot_context, snapshot) = load(path, SnapshotTarget::Worktree)?;
+    let revision = snapshot.commit.clone().unwrap_or_else(|| "HEAD".to_owned());
+    let (history, touches) = match snapshot_context.repo_root {
+        Some(_) => {
+            let git = analyze_git_at_with_mailmap(
+                &snapshot_context,
+                &revision,
+                snapshot.mailmap_bytes.as_deref(),
+            )?;
+            (git.history, git.touches)
+        }
+        None => (
+            HistoryReport {
+                schema_version: HISTORY_SCHEMA_VERSION,
+                analyzer_version: env!("CARGO_PKG_VERSION"),
+                available: false,
+                reference: "head-commit-time",
+                head_commit: None,
+                head_timestamp: None,
+                files: Vec::new(),
+            },
+            Vec::new(),
+        ),
+    };
+    let source_paths: Vec<String> = analysis
+        .files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect();
+    let ownership = build_ownership(&touches, &source_paths, OwnershipMode::AggregateOnly);
+    let policy = evaluate_policy(&graph, &snapshot_context.config.architecture_rules);
+    Ok(build_risk(
+        analysis, &history, &graph, &ownership, &policy, window,
+    ))
 }
 
 /// Evaluates policy for one state, or `new`/`existing`/`resolved` drift when

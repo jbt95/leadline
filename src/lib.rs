@@ -132,6 +132,63 @@ pub fn normalized_relative_path(path: &Path, root: &Path) -> String {
     normalize_path(relative)
 }
 
+/// Why a scoped target could not be resolved.
+#[derive(Debug)]
+pub enum ScopedTargetError {
+    /// The target path does not exist under the scope root.
+    Missing(String),
+    /// The target path resolves outside the scope root.
+    Outside(String),
+    /// The root or target could not be canonicalized.
+    Io(String),
+}
+
+impl std::fmt::Display for ScopedTargetError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing(message) | Self::Outside(message) | Self::Io(message) => {
+                formatter.write_str(message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ScopedTargetError {}
+
+/// Resolve a user-supplied target to a scope-relative normalized path.
+///
+/// Validates the file exists, then canonicalizes both sides so symlinks and
+/// Windows verbatim prefixes cannot split the join. Shared by the CLI and MCP
+/// `coupling`/`impact` so containment validation is implemented once.
+pub fn resolve_scoped_target(
+    root: &Path,
+    target: &str,
+) -> std::result::Result<String, ScopedTargetError> {
+    let requested = Path::new(target);
+    let absolute_target = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
+    if !absolute_target.is_file() {
+        return Err(ScopedTargetError::Missing(format!(
+            "target '{target}' was not found under {}",
+            root.display()
+        )));
+    }
+    let canonical_root =
+        std::fs::canonicalize(root).map_err(|error| ScopedTargetError::Io(error.to_string()))?;
+    let canonical_target = std::fs::canonicalize(&absolute_target)
+        .map_err(|error| ScopedTargetError::Io(error.to_string()))?;
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err(ScopedTargetError::Outside(format!(
+            "target '{target}' is outside the scope {}",
+            root.display()
+        )));
+    }
+    Ok(normalized_relative_path(&canonical_target, &canonical_root))
+}
+
 pub fn normalize_path(path: &Path) -> String {
     let mut parts = Vec::new();
     for part in path.components() {
