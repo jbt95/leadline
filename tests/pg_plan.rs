@@ -210,6 +210,7 @@ fn rejects_too_many_files_and_oversized_and_deep_inputs() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn rejects_control_character_stems() {
     let root = temporary_directory();
