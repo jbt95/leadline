@@ -1215,6 +1215,25 @@ fn baseline_write_and_check_regression_gate() {
         "{}",
         String::from_utf8_lossy(&passed.stderr)
     );
+
+    let index = root.join("index");
+    let warm = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("check")
+        .arg(&root)
+        .arg("--baseline")
+        .arg(&snapshot)
+        .args(["--regressions", "--json"])
+        .arg("--index")
+        .arg(&index)
+        .output()
+        .unwrap();
+    assert!(
+        warm.status.success(),
+        "{}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+    assert_eq!(warm.stdout, passed.stdout);
+    assert!(index.join("index.json").exists());
     std::fs::remove_dir_all(root).unwrap();
 }
 
