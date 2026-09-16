@@ -2,6 +2,14 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## 0.7.1 - 2026-09-16
+
+### Fixed
+
+- Claude Code plugin manifest version now tracks the release version, so
+  `claude plugin update` detects new releases instead of reporting an
+  unchanged 0.1.0.
+
 ## 0.7.0 - 2026-09-16
 
 ### Added
