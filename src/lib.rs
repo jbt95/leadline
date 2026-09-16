@@ -16,6 +16,7 @@ pub mod graph;
 pub mod history;
 pub mod hotspots;
 pub mod impact;
+pub mod index;
 pub mod mcp;
 pub mod mutation;
 pub mod ownership;

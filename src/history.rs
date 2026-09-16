@@ -87,7 +87,7 @@ impl HistoryWindow {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
 pub struct FileHistory {
     pub path: String,
     pub commits: u64,
