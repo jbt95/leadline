@@ -1913,7 +1913,7 @@ fn analyze_and_test_targets_reject_over_limit_top() {
 }
 
 #[test]
-fn artifact_paths_reject_parent_and_symlink_escapes() {
+fn artifact_paths_accept_native_separators_and_reject_escapes() {
     let (root, proj, sarif) = security_findings_fixture();
     // Parent traversal out of the working directory.
     let response = call_tool(
@@ -1928,6 +1928,31 @@ fn artifact_paths_reject_parent_and_symlink_escapes() {
         serde_json::json!({ "path": proj, "sarif": [interior], "minimum_severity": "low" }),
     );
     assert!(response.get("error").is_none(), "{response}");
+    // JSON clients on Windows naturally send root-relative paths with `\`.
+    let native = sarif.replace('/', "\\");
+    let response = call_tool(
+        "security_findings",
+        serde_json::json!({ "path": proj, "sarif": [native], "minimum_severity": "low" }),
+    );
+    assert!(response.get("error").is_none(), "{response}");
+    // Normalizing separators must not turn drive-qualified input into a
+    // root-relative path.
+    let response = call_tool(
+        "security_findings",
+        serde_json::json!({ "path": proj, "sarif": ["C:\\outside.sarif"] }),
+    );
+    assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    let response = call_tool(
+        "security_findings",
+        serde_json::json!({ "path": proj, "sarif": [".\\C:outside.sarif"] }),
+    );
+    assert!(
+        error_of(&response)["message"]
+            .as_str()
+            .unwrap()
+            .contains("root-relative"),
+        "{response}"
+    );
     // sql_plan directories are validated the same way.
     let response = call_tool(
         "sql_plan",

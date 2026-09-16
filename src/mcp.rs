@@ -1948,15 +1948,20 @@ fn path_arguments(
         .collect()
 }
 
-/// Lexically normalize one root-relative path: absolute paths, parent
-/// escapes, backslashes, and control characters are rejected.
+/// Lexically normalize one root-relative path: native separators are accepted;
+/// absolute paths, parent escapes, and control characters are rejected.
 fn relative_path(tool: &str, key: &str, path: &str) -> Result<String, (i64, String)> {
-    crate::external::strict_relative_path(path).map_err(|error| {
-        (
-            -32602,
-            format!("{tool} '{key}' must be root-relative: {error}"),
-        )
-    })
+    let validate = |path| {
+        crate::external::strict_relative_path(path).map_err(|error| {
+            (
+                -32602,
+                format!("{tool} '{key}' must be root-relative: {error}"),
+            )
+        })
+    };
+    let native = path.replace('\\', "/");
+    let normalized = validate(&native)?;
+    validate(&normalized)
 }
 
 /// Required-or-optional array of artifact paths that must stay inside the

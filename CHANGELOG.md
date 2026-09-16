@@ -7,6 +7,7 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 ### Fixed
 
 - Windows checksum verification accepts GNU `sha256sum`'s escaped output marker for paths containing backslashes.
+- MCP artifact arguments accept Windows path separators while still rejecting absolute paths and parent-directory escapes.
 
 ## 0.6.0 - 2026-09-15
 
