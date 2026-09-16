@@ -8,7 +8,7 @@ One static binary, no runtime. Pick one block, then verify.
 curl -fsSL https://raw.githubusercontent.com/jbt95/leadline/main/install.sh | sh
 ```
 
-Options: `LEADLINE_VERSION=v0.6.1` pins a release, `LEADLINE_INSTALL_DIR` changes the destination (default `~/.local/bin`), `LEADLINE_SKIP_CHECKSUM=1` skips SHA256 verification (not recommended). `install.sh --help` prints the same.
+Options: `LEADLINE_VERSION=v0.7.0` pins a release, `LEADLINE_INSTALL_DIR` changes the destination (default `~/.local/bin`), `LEADLINE_SKIP_CHECKSUM=1` skips SHA256 verification (not recommended). `install.sh --help` prints the same.
 
 If `~/.local/bin` is not on `PATH`, the script says so; enable it for your shell:
 
@@ -24,7 +24,7 @@ Expand-Archive -Path "$env:TEMP\leadline.zip" -DestinationPath "$env:USERPROFILE
 & "$env:USERPROFILE\.local\bin\leadline.exe" --version
 ```
 
-Then add `%USERPROFILE%\.local\bin` to `Path` (System Properties → Environment Variables) and reopen the terminal. Pin a version by replacing `latest/download` with `download/v0.6.1`.
+Then add `%USERPROFILE%\.local\bin` to `Path` (System Properties → Environment Variables) and reopen the terminal. Pin a version by replacing `latest/download` with `download/v0.7.0`.
 
 ## From source
 
