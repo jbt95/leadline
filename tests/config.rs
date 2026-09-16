@@ -361,3 +361,28 @@ fn sql_section_rejects_bad_values() {
         assert!(parse_str(body).is_err(), "{body:?}");
     }
 }
+
+#[test]
+fn config_fingerprint_tracks_file_bytes() {
+    let dir = std::env::temp_dir().join(format!(
+        "leadline-config-fingerprint-{}-{:?}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    assert_eq!(leadline::config::fingerprint(&dir), "none");
+
+    let config = dir.join("leadline.toml");
+    std::fs::write(&config, "[thresholds.function]\ncognitive = 15\n").unwrap();
+    let first = leadline::config::fingerprint(&dir);
+    assert_ne!(first, "none");
+
+    std::fs::write(&config, "[thresholds.function]\ncognitive = 20\n").unwrap();
+    assert_ne!(first, leadline::config::fingerprint(&dir));
+
+    std::fs::remove_dir_all(dir).unwrap();
+}

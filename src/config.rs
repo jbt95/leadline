@@ -365,6 +365,26 @@ pub fn load_from(dir: &Path) -> Result<Option<Config>, ConfigError> {
     parse_str(&text).map(Some)
 }
 
+/// Fingerprint of the repository's configuration file bytes.
+///
+/// The analysis index reuses entries only when this value is unchanged.
+/// Missing configuration is a stable `"none"`; unreadable or oversized
+/// configuration also falls back to `"none"`, which over-invalidates the index
+/// instead of serving metrics derived from different rules.
+pub fn fingerprint(dir: &Path) -> String {
+    let path = dir.join(CONFIG_FILE);
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return "none".to_owned();
+    };
+    if metadata.len() > CONFIG_BYTES_LIMIT {
+        return "none".to_owned();
+    }
+    match std::fs::read(&path) {
+        Ok(bytes) => blake3::hash(&bytes).to_hex().to_string(),
+        Err(_) => "none".to_owned(),
+    }
+}
+
 /// Parses and validates a `leadline.toml` document.
 pub fn parse_str(text: &str) -> Result<Config, ConfigError> {
     let table: toml::Table = text
