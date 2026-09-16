@@ -625,8 +625,8 @@ fn read_index(value: &Value) -> Result<Option<IndexConfig>, ConfigError> {
     }))
 }
 
-/// Index paths are analysis-root-relative: no absolute paths, no parent
-/// escapes, no empty value.
+/// Index paths are analysis-root-relative: no absolute paths or drive
+/// prefixes, no parent escapes, no empty value.
 fn normalize_index_path(raw: &str) -> Result<String, ConfigError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -636,6 +636,15 @@ fn normalize_index_path(raw: &str) -> Result<String, ConfigError> {
     if path.is_absolute() || trimmed.contains('\\') {
         return Err(ConfigError::new(format!(
             "[index].path must be a relative path: '{raw}'"
+        )));
+    }
+    // Windows drive-relative forms ("C:", "C:x") are neither absolute nor
+    // parent-relative, so they would escape the analysis root on Windows.
+    // Reject any drive prefix, exactly as `normalize_migration_root` does.
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        return Err(ConfigError::new(format!(
+            "[index].path must not start with a drive prefix: '{raw}'"
         )));
     }
     if path

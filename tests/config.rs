@@ -396,7 +396,12 @@ fn index_section_defaults_to_dot_leadline() {
 
 #[test]
 fn index_path_must_stay_inside_the_repository() {
-    for text in ["[index]\npath = \"/tmp/x\"\n", "[index]\npath = \"../x\"\n"] {
+    for text in [
+        "[index]\npath = \"/tmp/x\"\n",
+        "[index]\npath = \"../x\"\n",
+        "[index]\npath = \"C:x\"\n",
+        "[index]\npath = \"C:\"\n",
+    ] {
         assert!(
             leadline::config::parse_str(text).is_err(),
             "{text} must be rejected"
