@@ -42,7 +42,7 @@ fn run_runner(root: &Path, mode: &str, extra_env: &[(&str, &str)]) -> Output {
     let mut env: HashMap<String, String> = HashMap::new();
     env.insert(
         "PATH".to_owned(),
-        format!("{}:/usr/bin:/bin", bin.display()),
+        format!("{}:{}:/usr/bin:/bin", bin.display(), git_directory()),
     );
     env.insert("TMPDIR".to_owned(), root.join("tmp").display().to_string());
     env.insert("LEADLINE_SECRET_MODE".to_owned(), mode.to_owned());
@@ -79,6 +79,52 @@ fn fixture_bin(root: &Path) -> PathBuf {
     bin
 }
 
+/// Directory holding the real `git`, so worktree-mode runner tests exercise
+/// the preflight rather than a missing executable.
+fn git_directory() -> String {
+    let output = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let path = String::from_utf8(output.stdout).unwrap();
+    let path = path.trim();
+    assert!(
+        !path.is_empty(),
+        "git is required for worktree runner tests"
+    );
+    Path::new(path).parent().unwrap().display().to_string()
+}
+
+/// Turn `root` into a repository with one commit so the worktree preflight
+/// (which needs a HEAD to diff against) passes.
+fn init_repository(root: &Path) {
+    let run = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run(&["init", "-q"]);
+    run(&[
+        "-c",
+        "user.name=leadline-test",
+        "-c",
+        "user.email=leadline-test@example.com",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "init",
+    ]);
+}
+
 #[test]
 fn secret_runner_uses_redacted_staged_scan() {
     let root = temporary_directory();
@@ -107,6 +153,7 @@ fn secret_runner_uses_redacted_staged_scan() {
 fn secret_runner_uses_worktree_scan_with_base_target() {
     let root = temporary_directory();
     fixture_bin(&root);
+    init_repository(&root);
     let output = run_runner(&root, "worktree", &[]);
     assert_eq!(output.status.code(), Some(1));
     let gitleaks_args = std::fs::read_to_string(root.join("gitleaks.args")).unwrap();
@@ -118,9 +165,81 @@ fn secret_runner_uses_worktree_scan_with_base_target() {
 }
 
 #[test]
+fn secret_runner_skips_worktree_gate_outside_a_repository() {
+    let root = temporary_directory();
+    fixture_bin(&root);
+    let output = run_runner(&root, "worktree", &[]);
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not a git repository"), "{stderr}");
+    assert!(stderr.contains("worktree secret gate skipped"), "{stderr}");
+    assert!(
+        !root.join("gitleaks.args").exists(),
+        "the preflight must skip the scanner"
+    );
+    assert!(
+        !root.join("leadline.args").exists(),
+        "the preflight must skip the gate"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn secret_runner_skips_worktree_gate_without_commits() {
+    let root = temporary_directory();
+    fixture_bin(&root);
+    let init = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["init", "-q"])
+        .output()
+        .unwrap();
+    assert!(init.status.success());
+    let output = run_runner(&root, "worktree", &[]);
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no commits"), "{stderr}");
+    assert!(stderr.contains("worktree secret gate skipped"), "{stderr}");
+    assert!(
+        !root.join("gitleaks.args").exists(),
+        "the preflight must skip the scanner"
+    );
+    assert!(
+        !root.join("leadline.args").exists(),
+        "the preflight must skip the gate"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn secret_runner_reports_missing_git_in_worktree_mode() {
+    let root = temporary_directory();
+    let bin = fixture_bin(&root);
+    // PATH without git: the preflight must stop before gitleaks runs.
+    let output = Command::new(runner())
+        .env("PATH", &bin)
+        .env("TMPDIR", root.join("tmp"))
+        .env("LEADLINE_SECRET_MODE", "worktree")
+        .env("LEADLINE_BIN", bin.join("leadline"))
+        .env("LEADLINE_EXIT", "1")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(127));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("git not found"), "{stderr}");
+    assert!(
+        !root.join("gitleaks.args").exists(),
+        "the preflight must skip the scanner"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn secret_runner_never_prints_raw_report() {
     let root = temporary_directory();
     fixture_bin(&root);
+    init_repository(&root);
     for mode in ["staged", "worktree"] {
         let output = run_runner(&root, mode, &[("LEADLINE_EXIT", "0")]);
         assert_eq!(output.status.code(), Some(0));
@@ -407,11 +526,12 @@ exit "$RUNNER_EXIT"
         );
         // Findings (runner exit 1) reach the host as exit 2, the only
         // blocking status in the shared hook protocol. Clean runs exit 0;
-        // an unavailable scanner (127) or failed scan (4) stays visible and
-        // non-blocking (exit 1).
+        // an unavailable scanner (127), a failed scan (4), or a missing git
+        // comparison target (3) stays visible and non-blocking (exit 1).
         for (exit, wrapper_exit, mode_file) in [
             (0, 0, "mode_zero"),
             (1, 2, "mode_one"),
+            (3, 1, "mode_three"),
             (4, 1, "mode_four"),
             (127, 1, "mode_unavailable"),
         ] {

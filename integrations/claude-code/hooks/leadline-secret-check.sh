@@ -1,9 +1,10 @@
 #!/bin/sh
 # Secret-gate wrapper for host hooks where exit 2 blocks the action or turn
 # (Claude Code, Gemini CLI, Cline). Only findings block: the shared runner's
-# exit 1 becomes exit 2. An unavailable runner or scanner, a scan failure, or
-# a bad mode exits 1 with the runner's redacted diagnostics on stderr, so an
-# environment miss warns visibly without trapping the turn.
+# exit 1 becomes exit 2. An unavailable runner or scanner, a scan failure, a
+# bad mode, or a missing git comparison target exits 1 with the runner's
+# redacted diagnostics on stderr, so an environment miss warns visibly
+# without trapping the turn.
 set -eu
 here="$(CDPATH='' cd -- "$(dirname "$0")" && pwd)"
 runner="${LEADLINE_SECRET_RUNNER:-}"
@@ -49,6 +50,6 @@ if [ "$status" -eq 1 ]; then
   # Findings are the only blocking status in the host hook protocol.
   exit 2
 fi
-# Scanner/runner unavailable (127), scan failure (4), bad mode (2): visible
-# but non-blocking.
+# Scanner/runner unavailable (127), scan failure (4), bad mode (2), no git
+# comparison target (3): visible but non-blocking.
 exit 1

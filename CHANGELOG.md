@@ -2,6 +2,17 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## Unreleased
+
+### Fixed
+
+- The worktree secret gate preflights the git HEAD it needs to diff against
+  before scanning: a directory that is not a repository, or a repository with
+  no commits, skips the gate with a visible non-blocking diagnostic instead
+  of running a full-tree `gitleaks` scan and then failing with a raw
+  `fatal: not a git repository` from the changed-path comparison. The TS
+  adapters report the runner's exit `3` as `unavailable` instead of throwing.
+
 ## 0.8.2 - 2026-09-16
 
 ### Fixed

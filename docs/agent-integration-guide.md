@@ -188,9 +188,13 @@ honors exit `2` as blocking is unverified); Pi's and Cline's post-edit hooks
 only warn; and the OpenCode `leadline_secret_check` tool runs on demand in
 warn mode. Claude and Gemini only block on exit `2`, so the shared wrapper
 maps findings to exit `2` with the runner's redacted diagnostics on stderr;
-an unavailable scanner or runner, a scan failure, or a bad mode exits `1`
-(visible to the user, non-blocking) so an environment miss cannot loop a
-Stop hook. The wrapper resolves
+an unavailable scanner or runner, a scan failure, a bad mode, or a missing
+git comparison target exits `1` (visible to the user, non-blocking) so an
+environment miss cannot loop a Stop hook. Worktree mode checks the git HEAD
+it needs to diff against before scanning: a directory that is not a
+repository, or a repository with no commits, skips the gate without running
+gitleaks and reports exit `3` through the same visible, non-blocking path.
+The wrapper resolves
 `integrations/common/leadline-secret-check.sh` from the packaged extension
 (a vendored `common/` copy ships with the Claude Code plugin), from the
 checkout, from the host project directory

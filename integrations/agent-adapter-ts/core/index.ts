@@ -515,6 +515,12 @@ export async function runSecretGate(root: string, mode: SecretGateMode): Promise
       const hint = stderr.trim().length > 0 ? stderr.trim() : "secret scanner unavailable";
       return { status: "unavailable", detail: capDetail(hint) };
     }
+    // Exit 3 is the runner's "no git comparison target": the worktree gate
+    // skipped before scanning, so report it like any other environment miss.
+    if (code === 3) {
+      const hint = stderr.trim().length > 0 ? stderr.trim() : "no git comparison target";
+      return { status: "unavailable", detail: capDetail(hint) };
+    }
     const detail = stderr.trim().length > 0 ? stderr.trim() : `secret gate failed with exit ${code}`;
     throw new Error(capDetail(detail));
   }
