@@ -3272,24 +3272,22 @@ fn analyze_with_index(
         return leadline::analyze_path_with_excludes(path, coverage, excludes)
             .map_err(|error| CliError::incomplete(error.to_string()));
     };
-    let entries = if path.is_file() {
-        let bytes = std::fs::read(path).map_err(|error| CliError::incomplete(error.to_string()))?;
-        vec![leadline::source_snapshot::SourceEntry {
-            path: leadline::normalize_path(path),
-            bytes,
-        }]
-    } else {
-        leadline::index::load_entries(path, excludes)
-            .map_err(|error| CliError::incomplete(error.to_string()))?
-    };
     let previous = leadline::index::AnalysisIndex::open(dir);
-    let (report, index, reuse) = leadline::index::refresh_files(
-        Some(&previous),
-        &leadline::index::scope_label(path),
-        &leadline::config::fingerprint(&config_dir(path)),
-        &entries,
-    )
-    .map_err(|error| CliError::incomplete(error.to_string()))?;
+    let fingerprint = leadline::config::fingerprint(&config_dir(path));
+    let (report, index, reuse) = if path.is_file() {
+        leadline::index::refresh_file_index(path, &previous, &fingerprint)
+            .map_err(|error| CliError::incomplete(error.to_string()))?
+    } else {
+        let entries = leadline::index::load_entries(path, excludes)
+            .map_err(|error| CliError::incomplete(error.to_string()))?;
+        leadline::index::refresh_files(
+            Some(&previous),
+            &leadline::index::scope_label(path),
+            &fingerprint,
+            &entries,
+        )
+        .map_err(|error| CliError::incomplete(error.to_string()))?
+    };
     if let Err(error) = index.save(dir) {
         eprintln!(
             "leadline: index warning: cannot save index in {}: {error}",

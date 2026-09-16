@@ -568,6 +568,13 @@ fn read_sql(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// True for Windows drive prefixes (`C:`, `C:/x`): neither absolute nor
+/// parent-relative, so they would escape the analysis root on Windows.
+fn has_drive_prefix(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
+}
+
 /// Normalize one migration root: relative, `/`-separated, no escapes.
 ///
 /// Shared by `[sql]` parsing and the `sql` command's `--migration-root` flag.
@@ -583,8 +590,7 @@ pub fn normalize_migration_root(raw: &str) -> Result<String, ConfigError> {
     if raw.starts_with('/') || raw.starts_with('\\') || raw.contains('\\') {
         return Err(reject("must be relative with `/` separators"));
     }
-    let bytes = raw.as_bytes();
-    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+    if has_drive_prefix(raw) {
         return Err(reject("drive prefix"));
     }
     // `.` and empty components are dropped: `./migrations` and `db/./schema`
@@ -640,9 +646,7 @@ fn normalize_index_path(raw: &str) -> Result<String, ConfigError> {
     }
     // Windows drive-relative forms ("C:", "C:x") are neither absolute nor
     // parent-relative, so they would escape the analysis root on Windows.
-    // Reject any drive prefix, exactly as `normalize_migration_root` does.
-    let bytes = trimmed.as_bytes();
-    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+    if has_drive_prefix(trimmed) {
         return Err(ConfigError::new(format!(
             "[index].path must not start with a drive prefix: '{raw}'"
         )));

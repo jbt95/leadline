@@ -622,6 +622,57 @@ fn analyze_index_output_is_identical_to_a_cold_run() {
 }
 
 #[test]
+fn analyze_file_reuses_repository_index_without_clobbering_it() {
+    let root = index_fixture();
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_leadline"))
+            .arg("index")
+            .arg(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let index_file = root.join(".leadline").join("index.json");
+    let file = root.join("alpha.ts");
+    let cold = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("analyze")
+        .arg(&file)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(cold.status.success());
+
+    let warm = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("analyze")
+        .arg(&file)
+        .arg("--index")
+        .arg(root.join(".leadline"))
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(warm.status.success());
+    assert_eq!(
+        warm.stdout, cold.stdout,
+        "warm file output must equal cold output"
+    );
+    assert!(
+        String::from_utf8_lossy(&warm.stderr).contains("1 reused"),
+        "expected reuse, got: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&index_file).unwrap()).unwrap();
+    assert_eq!(
+        after["files"].as_object().unwrap().len(),
+        2,
+        "file-target warm must not clobber the repository index"
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cache_dir_is_no_longer_accepted() {
     let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
         .args(["analyze", ".", "--cache-dir", ".leadline"])

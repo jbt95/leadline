@@ -1,17 +1,7 @@
 use leadline::index::{AnalysisIndex, IndexedFile, content_key};
 
-fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "leadline-index-{}-{}-{name}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
+mod common;
+use common::temporary_directory;
 
 #[test]
 fn content_key_is_stable_and_content_sensitive() {
@@ -29,17 +19,17 @@ fn index_is_unusable_after_config_or_scope_change() {
 
 #[test]
 fn missing_and_corrupt_indexes_open_empty() {
-    let missing = temp_dir("missing");
+    let missing = temporary_directory();
     assert!(AnalysisIndex::open(&missing).files.is_empty());
 
-    let corrupt = temp_dir("corrupt");
+    let corrupt = temporary_directory();
     std::fs::write(corrupt.join("index.json"), b"{ not json").unwrap();
     assert!(AnalysisIndex::open(&corrupt).files.is_empty());
 }
 
 #[test]
 fn index_round_trips_and_saves_deterministically() {
-    let dir = temp_dir("round-trip");
+    let dir = temporary_directory();
     let mut index = AnalysisIndex::empty(".", "cfg");
     index.files.insert(
         "b.ts".to_owned(),

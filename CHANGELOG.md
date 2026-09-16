@@ -29,10 +29,6 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
   and `check` output is byte-identical to a cold run; any version,
   configuration, or scope mismatch falls back to a full analysis.
 
-### Fixed
-
-- MCP guidance: `check` errors name the correct `thresholds`/`regressions` form, `security_findings` rejects an empty `sarif` list, and tool descriptions state coverage limits, `min_delta` churn filtering, pre-generated scanner files, and native `leadline_secret_check` for secrets.
-
 ## 0.6.1 - 2026-09-16
 
 ### Fixed

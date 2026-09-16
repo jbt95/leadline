@@ -2139,17 +2139,15 @@ fn analyze_tool_reuses_an_index_without_writing_one() {
 }
 
 #[test]
-fn analyze_tool_reuses_an_index_for_a_file_target() {
+fn analyze_tool_reuses_a_repository_index_for_a_file_target() {
     let dir = fixture_dir("function alpha(a: number) { return a + 1; }\n");
     let file = dir.join("sample.ts");
     let index = dir.join(".leadline");
-    // Build the index through the CLI for the same single-file target.
+    // Documented workflow: build the repository index once with
+    // `leadline index`, then reuse it for a single-file analysis.
     let built = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .arg("analyze")
-        .arg(&file)
-        .arg("--index")
-        .arg(&index)
-        .arg("--json")
+        .arg("index")
+        .arg(&dir)
         .output()
         .unwrap();
     assert!(built.status.success());

@@ -77,12 +77,7 @@ impl AnalysisIndex {
 
     /// True when every version input still matches, so entries may be reused.
     pub fn is_usable(&self, scope: &str, config_fingerprint: &str) -> bool {
-        self.schema_version == INDEX_SCHEMA_VERSION
-            && self.analyzer_version == env!("CARGO_PKG_VERSION")
-            && self.metric_profile == METRIC_PROFILE
-            && self.parser_versions == PARSER_VERSIONS
-            && self.config_fingerprint == config_fingerprint
-            && self.scope == scope
+        file_reusable(self, config_fingerprint) && self.scope == scope
     }
 
     pub fn save(&self, dir: &Path) -> std::io::Result<()> {
@@ -390,6 +385,10 @@ pub fn refresh_files(
         .collect();
 
     let mut index = AnalysisIndex::empty(scope, config_fingerprint);
+    // Warm runs must not evict stored Git facts: `leadline index` reuses
+    // history when HEAD is unchanged, so dropping it here would force a
+    // full Git walk on the next index build.
+    index.history = reusable.and_then(|previous| previous.history.clone());
     let mut files = Vec::with_capacity(ordered.len());
     let mut reuse = Reuse::default();
     for (entry, outcome) in ordered.iter().zip(outcomes) {
@@ -517,6 +516,104 @@ pub fn build(request: &IndexRequest<'_>) -> crate::Result<IndexOutcome> {
     })
 }
 
+/// Version and configuration match ignoring scope, so a stored entry may be
+/// reused for a file target even when the index was built for a directory.
+fn file_reusable(previous: &AnalysisIndex, config_fingerprint: &str) -> bool {
+    previous.schema_version == INDEX_SCHEMA_VERSION
+        && previous.analyzer_version == env!("CARGO_PKG_VERSION")
+        && previous.metric_profile == METRIC_PROFILE
+        && previous.parser_versions == PARSER_VERSIONS
+        && previous.config_fingerprint == config_fingerprint
+}
+
+/// Storage key for `display` (the cold `normalize_path` of the file) inside
+/// `previous`: the display key itself for file-specific indexes, else the
+/// repository-relative suffix for indexes built by `leadline index`.
+fn resolve_file_key(display: &str, previous: &AnalysisIndex) -> String {
+    if previous.files.contains_key(display) {
+        return display.to_owned();
+    }
+    // Normalized paths never start with `./`, so the scope-"." prefix
+    // match fails on its own without a special case.
+    if let Some(relative) = display.strip_prefix(&format!("{}/", previous.scope)) {
+        return relative.to_owned();
+    }
+    // Display keys are already ruled out above, so only `/`-separated
+    // suffixes remain; the longest one is the most specific match.
+    previous
+        .files
+        .keys()
+        .filter(|key| display.ends_with(&format!("/{key}")))
+        .max_by_key(|key| key.len())
+        .cloned()
+        .unwrap_or_else(|| display.to_owned())
+}
+
+/// Point `analysis` at the cold display path, re-deriving function ids so a
+/// repository-relative entry reports exactly what a cold file analysis would.
+fn retarget_to_display(analysis: &mut crate::core::FileAnalysis, display: &str) {
+    analysis.path = display.to_owned();
+    for function in &mut analysis.functions {
+        function.id = crate::core::function_id(
+            display,
+            function.kind,
+            function.start_byte,
+            function.end_byte,
+        );
+    }
+}
+
+/// Warm a single file against `previous`, reusing a repository index built by
+/// `leadline index` as well as file-specific indexes.
+///
+/// A usable index stores the file under its repository key, so the refresh
+/// goes through [`refresh_files`] with that one entry: the stored metrics are
+/// reused when the content key matches, and the refreshed entry is merged back
+/// so every other file and the stored history survive. The report is retargeted
+/// to the cold display path. Without a usable index the file is analyzed cold
+/// into a fresh, file-scoped index.
+pub fn refresh_file_index(
+    file: &Path,
+    previous: &AnalysisIndex,
+    config_fingerprint: &str,
+) -> crate::Result<(crate::core::AnalysisReport, AnalysisIndex, Reuse)> {
+    let display = crate::normalize_path(file);
+    let bytes = std::fs::read(file)?;
+    let usable = file_reusable(previous, config_fingerprint);
+    let key = if usable {
+        resolve_file_key(&display, previous)
+    } else {
+        display.clone()
+    };
+    let scope = if usable {
+        previous.scope.clone()
+    } else {
+        scope_label(file)
+    };
+    let entry = crate::source_snapshot::SourceEntry {
+        path: key.clone(),
+        bytes,
+    };
+    let (mut report, refreshed, reuse) = refresh_files(
+        usable.then_some(previous),
+        &scope,
+        config_fingerprint,
+        std::slice::from_ref(&entry),
+    )?;
+    for analysis in &mut report.files {
+        retarget_to_display(analysis, &display);
+    }
+    if !usable {
+        return Ok((report, refreshed, reuse));
+    }
+    // Merge the one refreshed entry back; an entry dropped by a parse error
+    // must remove the stale stored metrics instead of reusing them.
+    let mut merged = previous.clone();
+    merged.files.remove(&key);
+    merged.files.extend(refreshed.files);
+    Ok((report, merged, reuse))
+}
+
 /// Read-only warm report: reuse the stored index, never write, never walk Git.
 ///
 /// A missing or unusable index degrades to a full analysis. This is the entry
@@ -529,14 +626,11 @@ pub fn warm_report(
     excludes: &[String],
 ) -> crate::Result<(crate::core::AnalysisReport, Reuse)> {
     let previous = AnalysisIndex::open(index_dir);
-    let entries = if root.is_file() {
-        vec![crate::source_snapshot::SourceEntry {
-            path: crate::normalize_path(root),
-            bytes: std::fs::read(root)?,
-        }]
-    } else {
-        load_entries(root, excludes)?
-    };
+    if root.is_file() {
+        let (report, _, reuse) = refresh_file_index(root, &previous, config_fingerprint)?;
+        return Ok((report, reuse));
+    }
+    let entries = load_entries(root, excludes)?;
     let (report, _, reuse) = refresh_files(Some(&previous), scope, config_fingerprint, &entries)?;
     Ok((report, reuse))
 }

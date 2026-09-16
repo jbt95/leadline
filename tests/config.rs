@@ -365,15 +365,7 @@ fn sql_section_rejects_bad_values() {
 
 #[test]
 fn config_fingerprint_tracks_file_bytes() {
-    let dir = std::env::temp_dir().join(format!(
-        "leadline-config-fingerprint-{}-{:?}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temporary_directory();
 
     assert_eq!(leadline::config::fingerprint(&dir), "none");
 
