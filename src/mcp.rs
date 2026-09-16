@@ -1918,8 +1918,9 @@ fn config_excludes(config: Option<&crate::config::Config>) -> Vec<String> {
 }
 
 /// Index directory a read-only tool should warm from: the explicit `index`
-/// argument when given, else `[index].path` from configuration joined onto
-/// the tool's `path`, else nothing. These callers only ever read it.
+/// argument when given (used verbatim), else `[index].path` from
+/// configuration joined onto the analysis root like the CLI, else nothing.
+/// These callers only ever read it.
 fn index_directory(
     params: &serde_json::Value,
     config: Option<&crate::config::Config>,
@@ -1930,7 +1931,7 @@ fn index_directory(
     }
     Ok(config
         .and_then(|selected| selected.index.as_ref())
-        .map(|configured| Path::new(path).join(&configured.path)))
+        .map(|configured| config_dir(path).join(&configured.path)))
 }
 
 /// Report for `analyze` and `check`: reuse a stored index when one is

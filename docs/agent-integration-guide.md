@@ -143,7 +143,7 @@ HTTP limits apply to every request: 32 MiB body, 64 KiB of headers, an 8 KiB lin
 | `vulnerabilities` | `leadline vulnerabilities` | `osv?`/`trivy?`, `baseline_osv?`/`baseline_trivy?`, `path?`, `base?`/`staged?`/`target?`, `minimum_severity?`, `top?` | Vulnerable deps with changed-import evidence. |
 | `sql_risks` | `leadline sql` | `path?`, `large_offset?`, `migration_roots?`, `minimum_severity?`, `top?` | Static PostgreSQL query risks. |
 
-The `analyze` and `check` tools accept an optional `index` directory pointing at a repository index built by `leadline index`. Repeated post-edit calls then reuse unchanged file metrics and Git facts instead of recomputing them. The server only ever reads the index and will never create or modify one. When the argument is absent the configured `[index].path` is used, and an unusable or missing index silently degrades to a full analysis.
+The `analyze` and `check` tools accept an optional `index` directory pointing at a repository index built by `leadline index`. Repeated post-edit calls then reuse unchanged file metrics instead of recomputing them. The server only ever reads the index and will never create or modify one. When the argument is absent the configured `[index].path` is used, and an unusable or missing index silently degrades to a full analysis.
 
 ## Skill principles
 
