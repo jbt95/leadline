@@ -766,7 +766,7 @@ fn risk_command(args: &[String]) -> Result<ExitCode, CliError> {
     let graph = leadline::graph::analyze_dependencies(&scope, excludes)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     // ponytail: snapshot entries are loaded only for repo context (root,
-    // config, mailmap); analysis still goes through the cache above.
+    // config, mailmap); function metrics come from the analysis above.
     let (snapshot_context, snapshot) =
         leadline::source_snapshot::load(&path, SnapshotTarget::Worktree)
             .map_err(|error| CliError::incomplete(error.to_string()))?;
@@ -2782,8 +2782,14 @@ fn check_baseline(
         .as_ref()
         .map(|selected| selected.analysis_excludes.as_slice())
         .unwrap_or(&[]);
+    let index_dir = resolve_index_dir(&options.path, options.index_dir.as_deref(), config.as_ref());
     // The warm path is scoped to analyze and check in this phase.
-    let report = analyze_with_index(&options.path, options.coverage.as_ref(), excludes, None)?;
+    let report = analyze_with_index(
+        &options.path,
+        options.coverage.as_ref(),
+        excludes,
+        index_dir.as_deref(),
+    )?;
     if report.files.is_empty() {
         return Err(CliError::incomplete(format!(
             "no supported files found under {}",
