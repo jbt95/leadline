@@ -19,7 +19,7 @@ post-edit feedback. No metric logic lives here.
    ```
 
 3. Restart Pi and confirm the tools are listed: `leadline_changed`,
-   `leadline_function`, `leadline_check`, `leadline_secret_check`.
+   `leadline_function`, `leadline_gate`, `leadline_secret_check`.
 
 ## Uninstall
 

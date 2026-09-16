@@ -2,8 +2,10 @@
 // adapter core: binary discovery, argument building, decoding, and
 // formatting all live in ../../agent-adapter-ts/core/index.js, so the V1 and
 // V2 tools behave identically. The `leadline` binary owns every metric.
-// Tool names are stable: leadline_changed, leadline_function, leadline_check,
-// leadline_secret_check.
+// Tool names are stable: leadline_changed, leadline_function, leadline_gate,
+// leadline_secret_check. `leadline_gate` (not `leadline_check`) because MCP
+// clients expose the `leadline` server's `check` tool as `leadline_check`,
+// and that namespaced tool silently shadows a native tool with the same name.
 import {
   runChanged,
   runCheck,
@@ -48,7 +50,7 @@ export const tools = [
     },
   },
   {
-    name: "leadline_check",
+    name: "leadline_gate",
     description: "Quality-gate check over changed code (warn mode, never blocks).",
     parameters: {},
     execute() {

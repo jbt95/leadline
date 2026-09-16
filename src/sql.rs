@@ -654,22 +654,46 @@ fn ident_name(token: &Token) -> Option<&str> {
     }
 }
 
-/// First depth-zero statement keyword among the four query kinds.
+/// The statement's verb when it is a real `SELECT`/`INSERT`/`UPDATE`/`DELETE`.
+///
+/// The verb must be the first depth-zero keyword: `ON DELETE` inside an
+/// `ALTER TABLE`/`CREATE TABLE` foreign-key clause is a clause, not a DELETE
+/// statement. A `WITH` keyword seen before any other depth-zero keyword (an
+/// `EXPLAIN` prefix may precede it) switches to CTE scanning: CTE bodies are
+/// parenthesized, so the first depth-zero verb after it is the main
+/// statement's.
 fn statement_kind(statement: &Statement) -> Option<&str> {
-    statement.tokens.iter().find_map(|token| {
-        if token.depth == 0 {
-            match &token.kind {
-                TokenKind::Keyword(found)
-                    if matches!(found.as_str(), "select" | "insert" | "update" | "delete") =>
-                {
-                    Some(found.as_str())
-                }
-                _ => None,
-            }
-        } else {
-            None
+    let mut cte = false;
+    for token in &statement.tokens {
+        if token.depth != 0 {
+            continue;
         }
-    })
+        let TokenKind::Keyword(found) = &token.kind else {
+            continue;
+        };
+        if let Some(verb) = dml_verb(found) {
+            return Some(verb);
+        }
+        if !cte && keyword_is(token, "with") {
+            cte = true;
+            continue;
+        }
+        if !cte {
+            return None;
+        }
+    }
+    None
+}
+
+/// The four statement verbs, or `None` for any other keyword.
+fn dml_verb(word: &str) -> Option<&str> {
+    match word {
+        "select" => Some("select"),
+        "insert" => Some("insert"),
+        "update" => Some("update"),
+        "delete" => Some("delete"),
+        _ => None,
+    }
 }
 
 /// Top-level `UPDATE`/`DELETE` with no top-level `WHERE`.
@@ -1170,10 +1194,12 @@ fn plain_word(token: &Token, words: &[&str]) -> bool {
     }
 }
 
-/// Collect `CREATE TABLE` declarations across migration files.
+/// Collect `CREATE TABLE` declarations and `ALTER TABLE ... RENAME TO`
+/// targets across migration files.
 ///
 /// Duplicate declarations collapse; the result holds normalized
-/// `schema.name` entries.
+/// `schema.name` entries. Rename targets stay declared so references after a
+/// rename resolve instead of reading as unknown tables.
 pub fn collect_declared_tables(files: &[SqlFile]) -> crate::Result<BTreeSet<String>> {
     let mut declared = BTreeSet::new();
     for file in files {
@@ -1215,12 +1241,56 @@ pub fn collect_declared_tables(files: &[SqlFile]) -> crate::Result<BTreeSet<Stri
                             continue;
                         }
                     }
+                } else if let Some((target, next)) = read_rename_target(tokens, index) {
+                    declared.insert(target);
+                    index = next;
+                    continue;
                 }
                 index += 1;
             }
         }
     }
     Ok(declared)
+}
+
+/// `ALTER TABLE [IF EXISTS] [ONLY] old RENAME TO new` → `new` and the index
+/// past it. Column and constraint renames (`RENAME COLUMN|CONSTRAINT`) do not
+/// match, and neither do non-table `ALTER ... RENAME TO` forms.
+fn read_rename_target(tokens: &[Token], index: usize) -> Option<(String, usize)> {
+    if !plain_word(tokens.get(index)?, &["alter"]) {
+        return None;
+    }
+    let mut cursor = index + 1;
+    if !tokens
+        .get(cursor)
+        .is_some_and(|token| plain_word(token, &["table"]))
+    {
+        return None;
+    }
+    cursor += 1;
+    while tokens
+        .get(cursor)
+        .is_some_and(|token| plain_word(token, &["if", "exists", "only"]))
+    {
+        cursor += 1;
+    }
+    let (_, mut cursor) = read_table_name(tokens, cursor)?;
+    if !tokens
+        .get(cursor)
+        .is_some_and(|token| plain_word(token, &["rename"]))
+    {
+        return None;
+    }
+    cursor += 1;
+    if !tokens
+        .get(cursor)
+        .is_some_and(|token| plain_word(token, &["to"]))
+    {
+        return None;
+    }
+    cursor += 1;
+    let (target, next) = read_table_name(tokens, cursor)?;
+    Some((target, next))
 }
 
 /// CTE names defined by one statement: depth-zero identifiers after `WITH`

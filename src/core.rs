@@ -241,18 +241,41 @@ pub struct Thresholds {
 }
 
 impl Thresholds {
-    pub fn violates(&self, metrics: &FunctionMetrics) -> bool {
-        self.cognitive
+    /// Threshold names this function fails, in gate order. `crap_unavailable`
+    /// marks a CRAP gate with no coverage record for the function, which fails
+    /// closed the same way an exceeded CRAP does.
+    pub fn violation_reasons(&self, metrics: &FunctionMetrics) -> Vec<&'static str> {
+        let mut reasons = Vec::new();
+        if self
+            .cognitive
             .is_some_and(|limit| metrics.cognitive > limit)
-            || self
-                .cyclomatic
-                .is_some_and(|limit| metrics.cyclomatic > limit)
-            || self
-                .max_nesting
-                .is_some_and(|limit| metrics.max_nesting > limit)
-            || self
-                .crap
-                .is_some_and(|limit| metrics.crap.is_none_or(|value| value > limit))
+        {
+            reasons.push("cognitive");
+        }
+        if self
+            .cyclomatic
+            .is_some_and(|limit| metrics.cyclomatic > limit)
+        {
+            reasons.push("cyclomatic");
+        }
+        if self
+            .max_nesting
+            .is_some_and(|limit| metrics.max_nesting > limit)
+        {
+            reasons.push("max_nesting");
+        }
+        if let Some(limit) = self.crap {
+            match metrics.crap {
+                Some(value) if value > limit => reasons.push("crap"),
+                Some(_) => {}
+                None => reasons.push("crap_unavailable"),
+            }
+        }
+        reasons
+    }
+
+    pub fn violates(&self, metrics: &FunctionMetrics) -> bool {
+        !self.violation_reasons(metrics).is_empty()
     }
 
     pub fn is_empty(&self) -> bool {

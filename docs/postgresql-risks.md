@@ -11,7 +11,7 @@ syntactic heuristic with documented boundaries.
 
 | Rule | Severity | Contract | Remediation |
 |---|---|---|---|
-| `sql/update-delete-without-where` | high | top-level `UPDATE`/`DELETE` with no top-level `WHERE` | Add a `WHERE` clause to bound the rows this statement touches. |
+| `sql/update-delete-without-where` | high | statement is a top-level `UPDATE`/`DELETE` with no top-level `WHERE` (the verb must be the statement's first keyword, so foreign-key `ON DELETE` clauses do not match) | Add a `WHERE` clause to bound the rows this statement touches. |
 | `sql/leading-wildcard` | medium | `LIKE`/`ILIKE` pattern is a literal beginning with unescaped `%` | Avoid a leading wildcard in `LIKE` patterns or back it with a trigram index. |
 | `sql/nonsargable-predicate` | medium | `lower`/`upper`/`trim`/`date`/`date_trunc`/`cast` or an explicit `::` cast wraps the filtered column side of a `WHERE` comparison | Compare the bare column so indexes stay usable; move functions and casts to the literal side. |
 | `sql/large-offset` | medium | numeric top-level `OFFSET` above `large_offset` (default 1000) | Replace large `OFFSET` pagination with keyset pagination. |
@@ -31,6 +31,10 @@ configurable via `[sql]` (`minimum_severity` gates, it never rescores).
   `LIMIT`, `OFFSET`, `RETURNING`, `UNION`, `INTERSECT`, or `EXCEPT`.
   Unknown or dynamic patterns (parameters, columns, non-listed functions)
   do not trigger statement rules.
+- `UPDATE`/`DELETE` count only when the verb is the statement's first
+  depth-zero keyword (after an optional leading `WITH`, whose CTE bodies are
+  parenthesized). `ALTER TABLE ... ON DELETE CASCADE` and other foreign-key
+  clauses are not unbounded DML.
 - Table references come from `FROM`/`JOIN`/`UPDATE`/`INSERT INTO` and
   `DELETE ... USING` at any depth (subqueries included); table functions, CTE
   aliases, derived-table aliases, and scalar-function `FROM` argument markers
@@ -58,7 +62,8 @@ past 1,000,000 tokens are input errors (exit `4`). E-string backslash escapes
 directly. `.sql` discovery honors fixed ignored directories plus configured
 excludes; symlinks are skipped. Every file is read once per analysis.
 Declared-table evidence covers `CREATE [OR REPLACE]
-[GLOBAL|LOCAL] [TEMP|TEMPORARY|UNLOGGED] TABLE [IF NOT EXISTS]`, and every CTE
+[GLOBAL|LOCAL] [TEMP|TEMPORARY|UNLOGGED] TABLE [IF NOT EXISTS]` and
+`ALTER TABLE [IF EXISTS] [ONLY] old RENAME TO new` targets, and every CTE
 alias in a statement counts as known.
 
 ## Output shapes

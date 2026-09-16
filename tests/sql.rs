@@ -156,6 +156,43 @@ fn detects_update_delete_without_where() {
     )
     .unwrap();
     assert_eq!(sub.findings.len(), 1);
+    // EXPLAIN prefixes, including an EXPLAIN-prefixed CTE, stay detected.
+    let explained = analyze_sql_bytes(
+        "q.sql",
+        b"EXPLAIN UPDATE users SET active = false;",
+        &options,
+    )
+    .unwrap();
+    assert_eq!(explained.findings.len(), 1);
+    let explained_cte = analyze_sql_bytes(
+        "q.sql",
+        b"EXPLAIN ANALYZE WITH old AS (SELECT id FROM users) DELETE FROM sessions;",
+        &options,
+    )
+    .unwrap();
+    assert_eq!(explained_cte.findings.len(), 1);
+}
+
+#[test]
+fn foreign_key_on_delete_clauses_are_not_unbounded_deletes() {
+    use leadline::sql::{SqlOptions, analyze_sql_bytes};
+    let options = SqlOptions::default();
+    for source in [
+        b"ALTER TABLE orders ADD CONSTRAINT orders_user_fk FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE RESTRICT;".as_slice(),
+        b"ALTER TABLE orders ADD COLUMN user_id UUID REFERENCES users (id) ON DELETE CASCADE;",
+        b"CREATE TABLE orders (user_id integer REFERENCES users (id) ON DELETE SET NULL);",
+        b"ALTER TABLE orders DROP CONSTRAINT orders_user_fk;",
+    ] {
+        let report = analyze_sql_bytes("m.sql", source, &options).unwrap();
+        assert!(
+            report.findings.is_empty(),
+            "a foreign-key or constraint clause must not read as a DELETE statement: {:?}",
+            report.findings
+        );
+    }
+    // A real unbounded update still fires.
+    let update = analyze_sql_bytes("m.sql", b"UPDATE orders SET state = 'x';", &options).unwrap();
+    assert_eq!(update.findings.len(), 1);
 }
 
 #[test]
@@ -309,6 +346,88 @@ fn migration_collects_declared_tables() {
     assert!(declared.contains("public.temp"));
     // Duplicates collapse; bare names default to the public schema.
     assert_eq!(declared.len(), 7);
+}
+
+#[test]
+fn renames_declare_the_new_table_name() {
+    use leadline::sql::collect_declared_tables;
+    let files = vec![
+        sql_file(
+            "migrations/001.sql",
+            b"CREATE TABLE locations (id integer); ALTER TABLE locations RENAME TO ilc_locations;",
+        ),
+        sql_file(
+            "migrations/002.sql",
+            b"ALTER TABLE IF EXISTS ilc_locations RENAME TO mdm_locations;",
+        ),
+        sql_file(
+            "migrations/003.sql",
+            b"ALTER TABLE ONLY mdm_locations RENAME TO canonical_locations;",
+        ),
+    ];
+    let declared = collect_declared_tables(&files).unwrap();
+    assert!(declared.contains("public.locations"));
+    assert!(declared.contains("public.ilc_locations"));
+    assert!(declared.contains("public.mdm_locations"));
+    assert!(declared.contains("public.canonical_locations"));
+
+    // Column and constraint renames, indexed renames, and other ALTER forms
+    // are not table declarations.
+    let others = vec![
+        sql_file(
+            "migrations/004.sql",
+            b"CREATE TABLE users (id integer); ALTER TABLE users RENAME COLUMN id TO user_id;",
+        ),
+        sql_file(
+            "migrations/005.sql",
+            b"CREATE TABLE orders (id integer); ALTER TABLE orders RENAME CONSTRAINT orders_pk TO orders_pkey;",
+        ),
+        sql_file(
+            "migrations/006.sql",
+            b"CREATE INDEX orders_idx ON orders (id); ALTER INDEX orders_idx RENAME TO orders_index;",
+        ),
+    ];
+    let declared = collect_declared_tables(&others).unwrap();
+    assert!(!declared.contains("public.user_id"));
+    assert!(!declared.contains("public.orders_pkey"));
+    assert!(!declared.contains("public.orders_index"));
+    assert_eq!(declared.len(), 2);
+}
+
+#[test]
+fn references_after_a_rename_are_known_tables() {
+    use leadline::sql::{
+        SqlOptions, add_unknown_table_findings, analyze_sql_bytes, collect_declared_tables,
+    };
+    let migration = sql_file(
+        "migrations/001.sql",
+        b"CREATE TABLE locations (id integer);\nALTER TABLE locations RENAME TO ilc_locations;",
+    );
+    let declared = collect_declared_tables(std::slice::from_ref(&migration)).unwrap();
+    let source = b"UPDATE ilc_locations SET id = 1;";
+    let mut report = analyze_sql_bytes("queries/002.sql", source, &SqlOptions::default()).unwrap();
+    add_unknown_table_findings(
+        &mut report,
+        &[sql_file("queries/002.sql", source)],
+        &declared,
+        true,
+    );
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|finding| finding.rule_id == "sql/unknown-table"),
+        "a renamed table stays declared: {:?}",
+        report.findings
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.rule_id == "sql/update-delete-without-where"),
+        "the unbounded update still fires: {:?}",
+        report.findings
+    );
 }
 
 #[test]

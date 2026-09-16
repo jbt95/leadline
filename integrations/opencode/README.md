@@ -27,7 +27,7 @@ same binary (identical behavior to the V2 plugin and Pi):
 
 - `leadline_changed` — changed functions vs git base
 - `leadline_function` — one function by file and name
-- `leadline_check` — quality-gate check (warn mode)
+- `leadline_gate` — quality-gate check (warn mode)
 - `leadline_secret_check` — shared secret gate (warn mode, on demand)
 
 MCP on V2 uses a nested shape (`mcp.servers`); the local-stdio

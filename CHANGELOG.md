@@ -2,6 +2,31 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## Unreleased
+
+### Fixed
+
+- `sql_risks` no longer reads a foreign-key `ON DELETE` clause as an unbounded
+  `DELETE` statement, and `ALTER TABLE ... RENAME TO` targets count as declared
+  tables, so references after a rename stop reporting `sql/unknown-table`.
+- `check` violation rows now carry a `reason` array naming the failed
+  thresholds; a CRAP gate with no coverage record reports `crap_unavailable`
+  instead of an unexplained `crap: null`. `repo_summary` accepts `coverage` and
+  omits the CRAP list without it, and every tool rejects unknown arguments and
+  unknown `thresholds`/`regressions` keys instead of silently ignoring them.
+- `leadline check` validates thresholds after loading `leadline.toml`, so a
+  `[thresholds.function]` section alone satisfies the gate instead of erroring
+  and (in the native adapters) falling back to hardcoded defaults. A
+  config-only `check` invocation therefore exits `0`/`1` instead of `2` (CLI
+  schema 1.5).
+
+### Changed (breaking)
+
+- The native OpenCode/Pi/OMP wrapper tool `leadline_check` is renamed
+  `leadline_gate`: harnesses that expose the `leadline` MCP server namespace a
+  `check` tool as `leadline_check`, which silently shadowed the native tool in
+  OpenCode V2. Integration docs and READMEs use the new name.
+
 ## 0.7.1 - 2026-09-16
 
 ### Fixed

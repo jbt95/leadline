@@ -17,7 +17,7 @@ dependencies; Node built-ins only.
   OMP vendors the same extension API, so `integrations/omp/` re-exports
   this registration instead of duplicating it.
 
-Tools: `leadline_changed`, `leadline_function`, `leadline_check`, and
+Tools: `leadline_changed`, `leadline_function`, `leadline_gate`, and
 `leadline_secret_check`. Analyzer failures return the error as tool text
 in every harness; only `leadline_secret_check` fails the call itself when
 the gate reports findings or an unavailable scanner. Post-edit feedback

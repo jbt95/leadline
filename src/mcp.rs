@@ -30,7 +30,7 @@ const MAX_RESPONSE_BYTES: usize = 32 << 20;
 
 /// Usage guidance returned by `initialize`. Hosts may inject this into the
 /// system prompt, so it doubles as the server's self-advertisement.
-const SERVER_INSTRUCTIONS: &str = "leadline reports deterministic function-level complexity metrics (Java, JavaScript, TypeScript, TSX) without executing code or touching the network. Use analyze_changed after substantial edits to spot regressions, repo_summary for a first look at unfamiliar code, analyze_function with explain:true to see which lines drive complexity, check to gate thresholds or regressions, test_targets to rank uncovered decision lines, sql_plan to compare checked-in PostgreSQL EXPLAIN artifacts for plan regressions, security_findings to triage scanner SARIF with code context, vulnerabilities to prioritize vulnerable dependencies with changed-import evidence, and sql_risks to flag static PostgreSQL query risks. The analyze and check tools accept an optional index directory and only ever read it. Metrics are evidence, not objectives: do not refactor solely to lower a number. security_findings/vulnerabilities need pre-generated SARIF/OSV/Trivy; secrets use native leadline_secret_check.";
+const SERVER_INSTRUCTIONS: &str = "leadline reports deterministic function-level complexity metrics (Java, JavaScript, TypeScript, TSX) without executing code or touching the network. Use analyze_changed after substantial edits to spot regressions, repo_summary for a first look at unfamiliar code, analyze_function with explain:true to see which lines drive complexity, check to gate thresholds or regressions (pass coverage for CRAP gates), test_targets to rank uncovered decision lines, sql_plan to compare checked-in PostgreSQL EXPLAIN artifacts for plan regressions, security_findings to triage scanner SARIF with code context, vulnerabilities to prioritize vulnerable dependencies with changed-import evidence, and sql_risks to flag static PostgreSQL query risks. The analyze and check tools accept an optional index directory and only ever read it. Metrics are evidence, not objectives: do not refactor solely to lower a number. security_findings/vulnerabilities need pre-generated SARIF/OSV/Trivy; secrets use native leadline_secret_check.";
 
 /// The eleven tools this server exposes. Fixed set; keep in sync with
 /// [`tools_list`] and [`dispatch_tool`].
@@ -990,6 +990,19 @@ fn compact_function(path: &str, function: &FunctionAnalysis) -> serde_json::Valu
     serde_json::Value::Object(fields)
 }
 
+/// `check` violation row: a compact function plus the reasons it failed.
+fn checked_function(
+    path: &str,
+    function: &FunctionAnalysis,
+    reasons: Vec<&'static str>,
+) -> serde_json::Value {
+    let mut row = compact_function(path, function);
+    if let serde_json::Value::Object(fields) = &mut row {
+        fields.insert("reason".to_owned(), serde_json::json!(reasons));
+    }
+    row
+}
+
 fn compact_metrics(value: &FunctionAnalysis) -> serde_json::Value {
     let mut fields = serde_json::Map::new();
     fields.insert("line".to_owned(), serde_json::json!(value.start_line));
@@ -1210,6 +1223,11 @@ fn sort_changed_rows(rows: &mut [serde_json::Value], key: SortKey) {
 // ---------------------------------------------------------------------------
 
 fn tool_analyze(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(
+        params,
+        "analyze",
+        &["path", "coverage", "top", "sort_by", "min_crap", "index"],
+    )?;
     let path = opt_str(params, "path")?.unwrap_or(".");
     let budget = parse_tool_budget(params, false)?;
     let coverage_path = opt_str(params, "coverage")?;
@@ -1247,6 +1265,21 @@ fn tool_analyze(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
 }
 
 fn tool_analyze_changed(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(
+        params,
+        "analyze_changed",
+        &[
+            "base",
+            "path",
+            "target",
+            "renames",
+            "explain",
+            "top",
+            "sort_by",
+            "min_crap",
+            "min_delta",
+        ],
+    )?;
     let base = opt_str(params, "base")?.unwrap_or("HEAD~1");
     let path = opt_str(params, "path")?.unwrap_or(".");
     let target = match opt_str(params, "target")? {
@@ -1346,6 +1379,7 @@ fn change_delta(
 }
 
 fn tool_analyze_function(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(params, "analyze_function", &["path", "function", "explain"])?;
     let path = req_str(params, "path")?;
     let function = req_str(params, "function")?;
     let file = PathBuf::from(path);
@@ -1393,6 +1427,19 @@ fn tool_analyze_function(params: &serde_json::Value) -> Result<serde_json::Value
 }
 
 fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(
+        params,
+        "check",
+        &[
+            "path",
+            "base",
+            "baseline",
+            "coverage",
+            "index",
+            "thresholds",
+            "regressions",
+        ],
+    )?;
     let path = opt_str(params, "path")?.unwrap_or(".");
     let config = load_config(path)?;
     let regression_limits = parse_regression_limits(params, config.as_ref())?;
@@ -1435,15 +1482,17 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
             let Some(after) = change.after.as_ref() else {
                 continue;
             };
-            let absolute = thresholds.violates(&after.metrics);
-            let delta = regression_limits.as_ref().is_some_and(|limits| {
+            let mut reasons = thresholds.violation_reasons(&after.metrics);
+            if regression_limits.as_ref().is_some_and(|limits| {
                 change
                     .before
                     .as_ref()
                     .is_some_and(|before| crate::diff::regression_violates(before, after, limits))
-            });
-            if absolute || delta {
-                rows.push(compact_function(&change.path, after));
+            }) {
+                reasons.push("regression");
+            }
+            if !reasons.is_empty() {
+                rows.push(checked_function(&change.path, after, reasons));
             }
         }
     } else if let Some(baseline_path) = baseline_path {
@@ -1462,11 +1511,14 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
         };
         for file in &report.files {
             for function in &file.functions {
-                let absolute = thresholds.violates(&function.metrics);
-                let delta = regression_limits.is_some()
-                    && regressed.contains(&(file.path.clone(), function.id.clone()));
-                if absolute || delta {
-                    rows.push(compact_function(&file.path, function));
+                let mut reasons = thresholds.violation_reasons(&function.metrics);
+                if regression_limits.is_some()
+                    && regressed.contains(&(file.path.clone(), function.id.clone()))
+                {
+                    reasons.push("regression");
+                }
+                if !reasons.is_empty() {
+                    rows.push(checked_function(&file.path, function, reasons));
                 }
             }
         }
@@ -1476,8 +1528,9 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
         reuse = warm;
         for file in &report.files {
             for function in &file.functions {
-                if thresholds.violates(&function.metrics) {
-                    rows.push(compact_function(&file.path, function));
+                let reasons = thresholds.violation_reasons(&function.metrics);
+                if !reasons.is_empty() {
+                    rows.push(checked_function(&file.path, function, reasons));
                 }
             }
         }
@@ -1566,6 +1619,7 @@ fn parse_regression_limits(
     let object = value
         .as_object()
         .ok_or((-32602, "regressions must be true or an object".to_owned()))?;
+    reject_unknown_gate_keys(object, "regressions")?;
     let mut limits = configured;
     for key in ["cognitive", "cyclomatic", "max_nesting"] {
         if let Some(value) = object.get(key) {
@@ -1578,7 +1632,8 @@ fn parse_regression_limits(
             match key {
                 "cognitive" => limits.cognitive = limit,
                 "cyclomatic" => limits.cyclomatic = limit,
-                _ => limits.max_nesting = limit,
+                "max_nesting" => limits.max_nesting = limit,
+                _ => unreachable!("regression key set and this match must stay in sync"),
             }
         }
     }
@@ -1617,7 +1672,8 @@ fn parse_thresholds(
         max_nesting: None,
     };
     if let Some(object) = object {
-        for key in ["cognitive", "cyclomatic", "crap", "max_nesting"] {
+        reject_unknown_gate_keys(object, "thresholds")?;
+        for key in GATE_KEYS {
             if let Some(value) = object.get(key) {
                 if value.is_null() {
                     continue;
@@ -1646,7 +1702,8 @@ fn parse_thresholds(
                         match key {
                             "cognitive" => thresholds.cognitive = Some(limit),
                             "cyclomatic" => thresholds.cyclomatic = Some(limit),
-                            _ => thresholds.max_nesting = Some(limit),
+                            "max_nesting" => thresholds.max_nesting = Some(limit),
+                            _ => unreachable!("GATE_KEYS and this match must stay in sync"),
                         }
                     }
                 }
@@ -1663,6 +1720,7 @@ fn parse_thresholds(
 }
 
 fn tool_explain_metric(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(params, "explain_metric", &["metric"])?;
     let metric = req_str(params, "metric")?;
     let name = metric.to_ascii_lowercase();
     let definition = match name.as_str() {
@@ -1699,6 +1757,7 @@ fn tool_explain_metric(params: &serde_json::Value) -> Result<serde_json::Value, 
 }
 
 fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(params, "repo_summary", &["path", "top", "coverage"])?;
     let path = opt_str(params, "path")?.unwrap_or(".");
     let top = match params.get("top") {
         None | Some(serde_json::Value::Null) => 5,
@@ -1714,10 +1773,14 @@ fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i
             count.min(50)
         }
     };
+    let coverage = opt_str(params, "coverage")?
+        .map(load_coverage_file)
+        .transpose()
+        .map_err(|message| (-32602, message))?;
     let report = {
         let config = load_config(path)?;
         let excludes = config_excludes(config.as_ref());
-        crate::analyze_path_with_excludes(Path::new(path), None, &excludes)
+        crate::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
             .map_err(|error| (-32602, error.to_string()))?
     };
     let files = report.files.len();
@@ -1737,6 +1800,21 @@ fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i
         selected.truncate(top);
         selected
     };
+    let mut top_fields = serde_json::Map::new();
+    if coverage.is_some() {
+        top_fields.insert(
+            "crap".to_owned(),
+            serde_json::json!(top_rows(SortKey::Crap)),
+        );
+    }
+    top_fields.insert(
+        "cognitive".to_owned(),
+        serde_json::json!(top_rows(SortKey::Cognitive)),
+    );
+    top_fields.insert(
+        "cyclomatic".to_owned(),
+        serde_json::json!(top_rows(SortKey::Cyclomatic)),
+    );
     let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("repo_summary"));
     fields.insert("path".to_owned(), serde_json::json!(path));
@@ -1748,14 +1826,7 @@ fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i
             "parse_errors": parse_errors,
         }),
     );
-    fields.insert(
-        "top".to_owned(),
-        serde_json::json!({
-            "crap": top_rows(SortKey::Crap),
-            "cognitive": top_rows(SortKey::Cognitive),
-            "cyclomatic": top_rows(SortKey::Cyclomatic),
-        }),
-    );
+    fields.insert("top".to_owned(), serde_json::Value::Object(top_fields));
     fields.insert(
         "truncated".to_owned(),
         serde_json::Value::from(functions > top),
@@ -1764,6 +1835,7 @@ fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i
 }
 
 fn tool_test_targets(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(params, "test_targets", &["path", "coverage", "top"])?;
     let path = opt_str(params, "path")?.unwrap_or(".");
     let coverage_path = opt_str(params, "coverage")?.ok_or((
         -32602,
@@ -1861,6 +1933,28 @@ fn reject_unknown(
             if !known.contains(&key.as_str()) {
                 return Err((-32602, format!("unknown {tool} argument '{key}'")));
             }
+        }
+    }
+    Ok(())
+}
+
+/// Gate names `thresholds` and `regressions` share.
+const GATE_KEYS: [&str; 4] = ["cognitive", "cyclomatic", "crap", "max_nesting"];
+
+/// Reject unknown gate names so a typo cannot silently weaken a gate.
+fn reject_unknown_gate_keys(
+    object: &serde_json::Map<String, serde_json::Value>,
+    section: &str,
+) -> Result<(), (i64, String)> {
+    for key in object.keys() {
+        if !GATE_KEYS.contains(&key.as_str()) {
+            return Err((
+                -32602,
+                format!(
+                    "unknown {section} key '{key}': expected one of {}",
+                    GATE_KEYS.join(", ")
+                ),
+            ));
         }
     }
     Ok(())
@@ -2531,7 +2625,7 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "check",
-                "description": "Quality gate for thresholds or regressions. Use in CI or before committing; pass coverage so CRAP gates are meaningful. Requires thresholds or regressions with base/baseline.",
+                "description": "Quality gate for thresholds or regressions. Use in CI or before committing; pass coverage so CRAP gates are meaningful. Requires thresholds or regressions with base/baseline. Violation rows carry `reason`: the threshold names that failed, `regression` for a delta gate, or `crap_unavailable` when a CRAP gate found no coverage record for the function (an unavailable CRAP fails closed).",
                 "annotations": { "title": "Run quality gate", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
@@ -2577,13 +2671,14 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "repo_summary",
-                "description": "Use as a first look at unfamiliar code: totals plus the top functions by CRAP, cognitive, and cyclomatic complexity. Result paths are relative to the `path` argument. (top.crap is meaningless without coverage.)",
+                "description": "Use as a first look at unfamiliar code: totals plus the top functions by CRAP, cognitive, and cyclomatic complexity. Result paths are relative to the `path` argument. Pass `coverage` for the CRAP list; without it the `crap` list is omitted because CRAP needs coverage.",
                 "annotations": { "title": "Repository summary", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "path": { "type": "string", "default": "." },
                         "top": { "type": "integer", "minimum": 1, "maximum": 50, "default": 5, "description": "Functions kept per metric list." },
+                        "coverage": { "type": "string", "description": "Coverage file path (.info for LCOV, .xml for JaCoCo) enabling the CRAP list." },
                     },
                 },
             },

@@ -295,6 +295,10 @@ fn check_reports_violations_and_pass_state() {
     envelope_ok(result);
     assert_eq!(result["passed"], false);
     assert_eq!(result["violations"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        result["violations"][0]["reason"],
+        serde_json::json!(["cyclomatic"])
+    );
 
     let passing = call_tool(
         "check",
@@ -606,7 +610,12 @@ fn check_accepts_regression_limits_without_absolute_thresholds() {
         "check",
         serde_json::json!({ "path": root.to_str().unwrap(), "base": "HEAD", "regressions": true }),
     );
-    assert_eq!(result_of(&response)["passed"], false);
+    let result = result_of(&response);
+    assert_eq!(result["passed"], false);
+    assert_eq!(
+        result["violations"][0]["reason"],
+        serde_json::json!(["regression"])
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -632,6 +641,15 @@ fn tools_list_includes_test_targets() {
     .unwrap();
     let tools = result_of(&response)["tools"].as_array().unwrap();
     assert!(tools.iter().any(|tool| tool["name"] == "test_targets"));
+    // The CRAP list in repo_summary needs coverage, so the schema must take it.
+    let repo_summary = tools
+        .iter()
+        .find(|tool| tool["name"] == "repo_summary")
+        .expect("repo_summary must be registered");
+    assert!(
+        repo_summary["inputSchema"]["properties"]["coverage"].is_object(),
+        "{repo_summary}"
+    );
 }
 
 #[test]
@@ -775,6 +793,253 @@ fn check_accepts_coverage_for_crap_gates() {
     );
     assert_eq!(result_of(&with)["passed"], true);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn check_reasons_distinguish_crap_from_unavailable_crap() {
+    let dir = fixture_dir(
+        "function covered(x: boolean) { if (x) { return 1; } return 0; }\nfunction uncovered(x: boolean) { if (x) { return 1; } return 0; }\n",
+    );
+    let path = dir.to_str().unwrap();
+    let lcov = dir.join("lcov.info");
+    std::fs::write(&lcov, "SF:sample.ts\nDA:1,1\nend_of_record\n").unwrap();
+
+    let with = call_tool(
+        "check",
+        serde_json::json!({
+            "path": path,
+            "coverage": lcov.to_str().unwrap(),
+            "thresholds": { "crap": 1.0 },
+        }),
+    );
+    let result = result_of(&with);
+    assert_eq!(result["passed"], false);
+    let violations = result["violations"].as_array().unwrap();
+    assert_eq!(violations.len(), 2, "{result}");
+    let covered = violations
+        .iter()
+        .find(|row| row["name"] == "covered")
+        .expect("covered function must be a violation");
+    let uncovered = violations
+        .iter()
+        .find(|row| row["name"] == "uncovered")
+        .expect("uncovered function must be a violation");
+    assert_eq!(covered["reason"], serde_json::json!(["crap"]));
+    assert_eq!(uncovered["reason"], serde_json::json!(["crap_unavailable"]));
+
+    // Without coverage every function fails closed with the same reason.
+    let without = call_tool(
+        "check",
+        serde_json::json!({ "path": path, "thresholds": { "crap": 1.0 } }),
+    );
+    let rows = result_of(&without)["violations"].as_array().unwrap();
+    assert!(!rows.is_empty());
+    for row in rows {
+        assert_eq!(row["reason"], serde_json::json!(["crap_unavailable"]));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn check_reasons_name_every_failed_threshold_in_gate_order() {
+    let dir = fixture_dir("function calc(x: boolean) { if (x) { return 1; } return 0; }\n");
+    let path = dir.to_str().unwrap();
+
+    let response = call_tool(
+        "check",
+        serde_json::json!({
+            "path": path,
+            "thresholds": { "cognitive": 0, "cyclomatic": 1 },
+        }),
+    );
+    let result = result_of(&response);
+    assert_eq!(
+        result["violations"][0]["reason"],
+        serde_json::json!(["cognitive", "cyclomatic"])
+    );
+
+    // A metric exactly at its limit is not above it.
+    let boundary = call_tool(
+        "check",
+        serde_json::json!({
+            "path": path,
+            "thresholds": { "cognitive": 1, "cyclomatic": 2 },
+        }),
+    );
+    assert_eq!(result_of(&boundary)["passed"], true);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn check_rejects_unknown_arguments_and_gate_keys() {
+    let dir = fixture_dir("function calc(x: boolean) { if (x) { return 1; } return 0; }\n");
+    let path = dir.to_str().unwrap();
+
+    let unknown_argument = call_tool(
+        "check",
+        serde_json::json!({
+            "path": path,
+            "thresholds": { "crap": 1.0 },
+            "coverage_file": "target/site/jacoco/jacoco.xml",
+        }),
+    );
+    let message = error_of(&unknown_argument)["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        message.contains("coverage_file"),
+        "unknown argument must be named: {unknown_argument}"
+    );
+
+    let unknown_threshold = call_tool(
+        "check",
+        serde_json::json!({ "path": path, "thresholds": { "maintainability": 20 } }),
+    );
+    let message = error_of(&unknown_threshold)["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(message.contains("maintainability"), "{message}");
+    assert!(message.contains("cognitive"), "{message}");
+
+    let unknown_regression = call_tool(
+        "check",
+        serde_json::json!({ "path": path, "base": "HEAD", "regressions": { "bogus": 1 } }),
+    );
+    assert_eq!(error_of(&unknown_regression)["code"], -32602);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn remaining_tools_reject_unknown_arguments() {
+    let dir = fixture_dir("function calc(x: boolean) { if (x) { return 1; } return 0; }\n");
+    let path = dir.to_str().unwrap();
+    let file = dir.join("sample.ts");
+    let lcov = dir.join("lcov.info");
+    std::fs::write(&lcov, "SF:sample.ts\nDA:1,1\nend_of_record\n").unwrap();
+
+    for (tool, arguments) in [
+        ("analyze", serde_json::json!({ "path": path, "bogus": 1 })),
+        (
+            "analyze_changed",
+            serde_json::json!({ "path": path, "bogus": 1 }),
+        ),
+        (
+            "analyze_function",
+            serde_json::json!({ "path": file.to_str().unwrap(), "function": "calc", "bogus": 1 }),
+        ),
+        (
+            "explain_metric",
+            serde_json::json!({ "metric": "crap", "bogus": 1 }),
+        ),
+        (
+            "repo_summary",
+            serde_json::json!({ "path": path, "bogus": 1 }),
+        ),
+        (
+            "test_targets",
+            serde_json::json!({ "path": path, "coverage": lcov.to_str().unwrap(), "bogus": 1 }),
+        ),
+    ] {
+        let response = call_tool(tool, arguments);
+        let message = error_of(&response)["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(message.contains("unknown"), "{tool}: {response}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn repo_summary_crap_list_requires_coverage() {
+    let dir = fixture_dir("function calc(x: boolean) { if (x) { return 1; } return 0; }\n");
+    let path = dir.to_str().unwrap();
+
+    let plain = call_tool("repo_summary", serde_json::json!({ "path": path }));
+    let result = result_of(&plain);
+    assert!(
+        result["top"].get("crap").is_none(),
+        "without coverage the crap list is omitted: {plain}"
+    );
+    assert!(result["top"]["cognitive"].is_array());
+
+    let lcov = dir.join("lcov.info");
+    std::fs::write(&lcov, "SF:sample.ts\nDA:1,0\nend_of_record\n").unwrap();
+    let covered = call_tool(
+        "repo_summary",
+        serde_json::json!({ "path": path, "coverage": lcov.to_str().unwrap() }),
+    );
+    let crap = result_of(&covered)["top"]["crap"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(crap.len(), 1, "{covered}");
+    assert_eq!(crap[0]["name"], "calc");
+    assert_eq!(crap[0]["crap"], 6.0);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Tool names registered by a TypeScript adapter (`name: "leadline_..."`).
+fn registered_tool_names(source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in source.lines() {
+        let Some(at) = line.find("name: \"") else {
+            continue;
+        };
+        let rest = &line[at + "name: \"".len()..];
+        let Some(end) = rest.find('"') else {
+            continue;
+        };
+        let name = &rest[..end];
+        if name.starts_with("leadline_") {
+            names.push(name.to_owned());
+        }
+    }
+    names
+}
+
+#[test]
+fn native_tool_names_do_not_collide_with_mcp_tool_names() {
+    use std::collections::BTreeSet;
+    let response: Value = serde_json::from_str(
+        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    let mcp: BTreeSet<String> = result_of(&response)["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_owned())
+        .collect();
+    // Harness MCP clients expose a server tool as `<server>_<tool>`, and the
+    // leadline server is keyed `leadline`; a native tool with the same name is
+    // silently shadowed, so the names must stay disjoint.
+    let namespaced: BTreeSet<String> = mcp.iter().map(|name| format!("leadline_{name}")).collect();
+    let expected = BTreeSet::from([
+        "leadline_changed".to_owned(),
+        "leadline_function".to_owned(),
+        "leadline_gate".to_owned(),
+        "leadline_secret_check".to_owned(),
+    ]);
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for plugin in [
+        "integrations/opencode/plugin/leadline.ts",
+        "integrations/opencode/plugin-v2/index.ts",
+        "integrations/agent-adapter-ts/pi/index.ts",
+    ] {
+        let source = std::fs::read_to_string(root.join(plugin)).unwrap();
+        let names: BTreeSet<String> = registered_tool_names(&source).into_iter().collect();
+        for name in &names {
+            assert!(
+                !namespaced.contains(name),
+                "{plugin} registers '{name}', which collides with a namespaced MCP tool"
+            );
+        }
+        assert_eq!(
+            names, expected,
+            "{plugin} must register the same four native tools"
+        );
+    }
 }
 
 #[test]

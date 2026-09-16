@@ -6,7 +6,10 @@
 //
 // Thin wrapper over the shared adapter core: the `leadline` binary owns all
 // metrics and formatting. Tool names stay stable:
-// leadline_changed, leadline_function, leadline_check, leadline_secret_check.
+// leadline_changed, leadline_function, leadline_gate, leadline_secret_check.
+// `leadline_gate` (not `leadline_check`) because MCP clients expose the
+// `leadline` server's `check` tool as `leadline_check`, and a native tool
+// with the same name is silently shadowed by that namespaced tool.
 import { Plugin } from "@opencode/plugin";
 import { runChanged, runCheck, runFunction, runSecretGate, secretGateMessage } from "../../agent-adapter-ts/core/index.js";
 
@@ -85,7 +88,7 @@ export default Plugin.define({
         },
       });
       editor.add({
-        name: "leadline_check",
+        name: "leadline_gate",
         description: "Run the leadline quality gate over the project and list functions above the thresholds.",
         input: { type: "object", properties: {}, additionalProperties: false },
         output: { type: "string" },

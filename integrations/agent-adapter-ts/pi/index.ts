@@ -44,8 +44,8 @@ export function registerLeadlineExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
-    name: "leadline_check",
-    label: "Leadline Check",
+    name: "leadline_gate",
+    label: "Leadline Gate",
     description: "Run the leadline quality gate over a path and list functions above the thresholds.",
     parameters: Type.Object({
       path: Type.Optional(Type.String({ description: "Path to check (default .)" })),

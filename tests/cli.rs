@@ -53,6 +53,38 @@ fn check_requires_a_threshold() {
 }
 
 #[test]
+fn check_reads_thresholds_from_project_config() {
+    let root = temporary_directory();
+    std::fs::write(
+        root.join("leadline.toml"),
+        "[thresholds.function]\ncyclomatic = 1\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("branch.ts"),
+        "function branch(x: boolean) { if (x) return 1; return 0; }\n",
+    )
+    .unwrap();
+
+    // No flags: the project config alone must satisfy the threshold check and
+    // gate the violating function.
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .current_dir(&root)
+        .args(["check", ".", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["files"][0]["functions"][0]["name"], "branch");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn version_and_subcommand_help_are_available() {
     let version = Command::new(env!("CARGO_BIN_EXE_leadline"))
         .arg("--version")

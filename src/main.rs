@@ -2508,17 +2508,17 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
         return Err(CliError::usage("--changed-only requires --base REV"));
     }
     let has_vuln_input = !artifacts.osv.is_empty() || !artifacts.trivy.is_empty();
-    if thresholds.is_empty() && !regressions && sarifs.is_empty() && !has_vuln_input && !sql_flag {
-        return Err(CliError::usage(
-            "check requires at least one metric threshold (e.g. --cognitive 15 --cyclomatic 10 --crap 30 --max-nesting 5), --regressions with --base/--baseline, --sarif FILE, --osv/--trivy FILE, or --sql",
-        ));
-    }
-
     let options = CommonOptions::parse(&common, "check")?;
     let config = load_config_for(&options.path)?;
     if let Some(config) = &config {
         apply_config(&mut thresholds, config);
     }
+    if thresholds.is_empty() && !regressions && sarifs.is_empty() && !has_vuln_input && !sql_flag {
+        return Err(CliError::usage(
+            "check requires at least one metric threshold (e.g. --cognitive 15 --cyclomatic 10 --crap 30 --max-nesting 5), a [thresholds.function] section in leadline.toml, --regressions with --base/--baseline, --sarif FILE, --osv/--trivy FILE, or --sql",
+        ));
+    }
+
     let regression_limits = config
         .as_ref()
         .map(|selected| selected.regressions.clone())

@@ -14,7 +14,7 @@ names are unchanged:
 
 - `leadline_changed` — changed functions vs git base
 - `leadline_function` — one function by file and name
-- `leadline_check` — quality-gate check (warn mode)
+- `leadline_gate` — quality-gate check (warn mode)
 - `leadline_secret_check` — shared secret gate (warn mode, on demand)
 
 ## Install
