@@ -399,7 +399,7 @@ pub fn refresh_files(
             files.push(analysis);
         }
     }
-    Ok((analysis_report(files), index, reuse))
+    Ok((crate::analysis_report(files), index, reuse))
 }
 
 fn rebuild(
@@ -418,14 +418,4 @@ fn rebuild(
             .collect(),
         parse_errors: Vec::new(),
     })
-}
-
-fn analysis_report(files: Vec<crate::core::FileAnalysis>) -> crate::core::AnalysisReport {
-    crate::core::AnalysisReport {
-        schema_version: OUTPUT_SCHEMA_VERSION,
-        metric_profile: METRIC_PROFILE,
-        analyzer_version: env!("CARGO_PKG_VERSION"),
-        metric_specs: crate::core::MetricSpecs::default(),
-        files,
-    }
 }

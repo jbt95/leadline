@@ -64,7 +64,7 @@ pub fn analyze_path_with_excludes(
         if let Some(coverage) = coverage {
             coverage.apply(&mut result);
         }
-        return Ok(report(vec![result]));
+        return Ok(analysis_report(vec![result]));
     }
     let paths = discovery::discover_with_excludes(path, excludes)?;
     let mut files = paths
@@ -72,7 +72,7 @@ pub fn analyze_path_with_excludes(
         .map(|file| analyze_file(file, path, coverage))
         .collect::<Result<Vec<_>>>()?;
     files.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(report(files))
+    Ok(analysis_report(files))
 }
 
 /// Analyzes in-memory source entries as if they were discovered under one root.
@@ -96,10 +96,10 @@ pub fn analyze_sources(
         })
         .collect::<Result<Vec<_>>>()?;
     files.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(report(files))
+    Ok(analysis_report(files))
 }
 
-fn report(files: Vec<FileAnalysis>) -> AnalysisReport {
+pub(crate) fn analysis_report(files: Vec<FileAnalysis>) -> AnalysisReport {
     AnalysisReport {
         schema_version: OUTPUT_SCHEMA_VERSION,
         metric_profile: METRIC_PROFILE,

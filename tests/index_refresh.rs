@@ -73,3 +73,21 @@ fn stale_config_or_scope_forces_full_reanalysis() {
 fn scope_label_of_the_current_directory_is_dot() {
     assert_eq!(scope_label(Path::new(".")), ".");
 }
+
+#[test]
+fn parse_error_files_are_never_stored_and_are_always_reanalyzed() {
+    let entries = vec![leadline::source_snapshot::SourceEntry {
+        path: "broken.ts".to_owned(),
+        bytes: b"function ( {".to_vec(),
+    }];
+    let (report, index, reuse) = refresh_files(None, ".", "cfg", &entries).unwrap();
+    assert!(!index.files.contains_key("broken.ts"));
+    assert_eq!(report.files.len(), 1);
+    assert!(!report.files[0].parse_errors.is_empty());
+    assert_eq!(reuse.analyzed, 1);
+
+    let (_, index, reuse) = refresh_files(Some(&index), ".", "cfg", &entries).unwrap();
+    assert!(!index.files.contains_key("broken.ts"));
+    assert_eq!(reuse.analyzed, 1);
+    assert_eq!(reuse.reused, 0);
+}
