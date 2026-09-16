@@ -30,7 +30,7 @@ const MAX_RESPONSE_BYTES: usize = 32 << 20;
 
 /// Usage guidance returned by `initialize`. Hosts may inject this into the
 /// system prompt, so it doubles as the server's self-advertisement.
-const SERVER_INSTRUCTIONS: &str = "leadline reports deterministic function-level complexity metrics (Java, JavaScript, TypeScript, TSX) without executing code or touching the network. Use analyze_changed after substantial edits to spot regressions, repo_summary for a first look at unfamiliar code, analyze_function with explain:true to see which lines drive complexity, check to gate thresholds or regressions, test_targets to rank uncovered decision lines, sql_plan to compare checked-in PostgreSQL EXPLAIN artifacts for plan regressions, security_findings to triage scanner SARIF with code context, vulnerabilities to prioritize vulnerable dependencies with changed-import evidence, and sql_risks to flag static PostgreSQL query risks. The analyze and check tools accept an optional index directory and only ever read it. Metrics are evidence, not objectives: do not refactor solely to lower a number.";
+const SERVER_INSTRUCTIONS: &str = "leadline reports deterministic function-level complexity metrics (Java, JavaScript, TypeScript, TSX) without executing code or touching the network. Use analyze_changed after substantial edits to spot regressions, repo_summary for a first look at unfamiliar code, analyze_function with explain:true to see which lines drive complexity, check to gate thresholds or regressions, test_targets to rank uncovered decision lines, sql_plan to compare checked-in PostgreSQL EXPLAIN artifacts for plan regressions, security_findings to triage scanner SARIF with code context, vulnerabilities to prioritize vulnerable dependencies with changed-import evidence, and sql_risks to flag static PostgreSQL query risks. The analyze and check tools accept an optional index directory and only ever read it. Metrics are evidence, not objectives: do not refactor solely to lower a number. security_findings/vulnerabilities need pre-generated SARIF/OSV/Trivy; secrets use native leadline_secret_check.";
 
 /// The eleven tools this server exposes. Fixed set; keep in sync with
 /// [`tools_list`] and [`dispatch_tool`].
@@ -1654,7 +1654,10 @@ fn parse_thresholds(
         }
     }
     if thresholds.is_empty() && !allow_empty {
-        return Err((-32602, "check requires at least one threshold".to_owned()));
+        return Err((
+            -32602,
+            "check requires at least one threshold (e.g. thresholds {cognitive:15, cyclomatic:10}) or regressions with base/baseline".to_owned(),
+        ));
     }
     Ok(thresholds)
 }
@@ -2114,6 +2117,12 @@ fn tool_security_findings(params: &serde_json::Value) -> Result<serde_json::Valu
     )?;
     let path = opt_str(params, "path")?.unwrap_or(".");
     let sarif = artifact_paths(params, "security_findings", "sarif", true)?;
+    if sarif.is_empty() {
+        return Err((
+            -32602,
+            "security_findings requires at least one 'sarif' file".to_owned(),
+        ));
+    }
     let baseline_sarif = artifact_paths(params, "security_findings", "baseline_sarif", false)?;
     let base = opt_str(params, "base")?;
     let staged = opt_flag(params, "staged", "security_findings")?;
@@ -2480,7 +2489,7 @@ fn tools_list_result() -> serde_json::Value {
                         "path": { "type": "string", "default": "." },
                         "coverage": { "type": ["string", "null"], "description": "Coverage file path (.info for LCOV, .xml for JaCoCo)." },
                         "top": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Keep at most this many rows." },
-                        "sort_by": { "type": "string", "enum": ["crap", "cognitive", "cyclomatic"], "description": "Sort rows by metric descending before capping." },
+                        "sort_by": { "type": "string", "enum": ["crap", "cognitive", "cyclomatic"], "description": "Sort rows by metric descending before capping. sort_by:crap is meaningless without coverage (CRAP null)." },
                         "min_crap": { "type": "number", "description": "Drop functions whose CRAP is below this floor; unknown CRAP is dropped." },
                         "index": { "type": "string", "description": "Directory containing index.json; reuse unchanged analysis. Read-only." },
                     },
@@ -2488,7 +2497,7 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "analyze_changed",
-                "description": "Use after editing code to see which functions regressed. Compares against a git base with before/after deltas.",
+                "description": "Use after editing code to see which functions regressed. Compares against a git base with before/after deltas. Use min_delta to hide line-shift churn (delta 0).",
                 "annotations": { "title": "Analyze changed functions", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
@@ -2522,7 +2531,7 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "check",
-                "description": "Quality gate for thresholds or regressions. Use in CI or before committing; pass coverage so CRAP gates are meaningful.",
+                "description": "Quality gate for thresholds or regressions. Use in CI or before committing; pass coverage so CRAP gates are meaningful. Requires thresholds or regressions with base/baseline.",
                 "annotations": { "title": "Run quality gate", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
@@ -2568,7 +2577,7 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "repo_summary",
-                "description": "Use as a first look at unfamiliar code: totals plus the top functions by CRAP, cognitive, and cyclomatic complexity. Result paths are relative to the `path` argument.",
+                "description": "Use as a first look at unfamiliar code: totals plus the top functions by CRAP, cognitive, and cyclomatic complexity. Result paths are relative to the `path` argument. (top.crap is meaningless without coverage.)",
                 "annotations": { "title": "Repository summary", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
@@ -2580,7 +2589,7 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "security_findings",
-                "description": "Triage scanner SARIF findings with function, risk, and changed-code context. Read-only: never runs scanners or touches the network.",
+                "description": "Triage scanner SARIF findings with function, risk, and changed-code context. Read-only: never runs scanners; provide pre-generated files, never touches the network.",
                 "annotations": { "title": "Triage security findings", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",
@@ -2618,7 +2627,7 @@ fn tools_list_result() -> serde_json::Value {
             },
             {
                 "name": "vulnerabilities",
-                "description": "Prioritize vulnerable dependencies from OSV-Scanner/Trivy reports with changed-import evidence. Read-only: never queries registries or the network.",
+                "description": "Prioritize vulnerable dependencies from OSV-Scanner/Trivy reports with changed-import evidence. Read-only: never runs scanners; provide pre-generated files, never queries registries or the network.",
                 "annotations": { "title": "Prioritize vulnerabilities", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",

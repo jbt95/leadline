@@ -304,6 +304,13 @@ fn check_reports_violations_and_pass_state() {
 
     let no_thresholds = call_tool("check", serde_json::json!({ "path": path }));
     assert_eq!(error_of(&no_thresholds)["code"], -32602);
+    assert!(
+        error_of(&no_thresholds)["message"]
+            .as_str()
+            .unwrap()
+            .contains("thresholds"),
+        "{no_thresholds}"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -1257,6 +1264,24 @@ fn security_findings_rejects_changed_only_without_comparison() {
         }),
     );
     assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn security_findings_rejects_empty_sarif() {
+    let (root, proj, _) = security_findings_fixture();
+    let response = call_tool(
+        "security_findings",
+        serde_json::json!({ "path": proj, "sarif": [] }),
+    );
+    assert_eq!(error_of(&response)["code"].as_i64(), Some(-32602));
+    assert!(
+        error_of(&response)["message"]
+            .as_str()
+            .unwrap()
+            .contains("sarif"),
+        "{response}"
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
