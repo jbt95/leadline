@@ -2311,3 +2311,94 @@ fn check_sql_combines_both_families() {
     assert_eq!(output.status.code(), Some(0));
     std::fs::remove_dir_all(root).unwrap();
 }
+
+fn index_fixture() -> PathBuf {
+    let root = temporary_directory();
+    std::fs::write(
+        root.join("alpha.ts"),
+        "function alpha(a: number) { return a + 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("beta.ts"),
+        "function beta(b: number) { let t = 0; for (let i = 0; i < b; i++) { t += i; } return t; }\n",
+    )
+    .unwrap();
+    root
+}
+
+#[test]
+fn index_builds_and_reuses_unchanged_files() {
+    let root = index_fixture();
+    let run = |extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_leadline"))
+            .arg("index")
+            .arg(&root)
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+
+    let first = run(&["--json"]);
+    assert!(first.status.success());
+    let first_json: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first_json["index"]["files"], 2);
+    assert_eq!(first_json["index"]["analyzed"], 2);
+    assert_eq!(first_json["index"]["reused"], 0);
+
+    let second = run(&["--json"]);
+    assert!(second.status.success());
+    let second_json: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(second_json["index"]["analyzed"], 0);
+    assert_eq!(second_json["index"]["reused"], 2);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn index_verify_detects_a_tampered_index() {
+    let root = index_fixture();
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_leadline"))
+            .arg("index")
+            .arg(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let path = root.join(".leadline").join("index.json");
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let first_key = json["files"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    json["files"][&first_key]["key"] = serde_json::json!("tampered");
+    std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+    let verified = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("index")
+        .arg(&root)
+        .arg("--verify")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(verified.status.success());
+    let verified_json: serde_json::Value = serde_json::from_slice(&verified.stdout).unwrap();
+    assert_eq!(verified_json["index"]["verified"], false);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn help_lists_the_index_command() {
+    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&output.stdout).contains("index [PATH]"));
+}

@@ -440,3 +440,56 @@ pub fn refresh_history(previous: Option<&AnalysisIndex>, scope: &Path) -> Option
         files: report.files,
     })
 }
+
+/// Everything one index build needs.
+pub struct IndexRequest<'a> {
+    pub root: &'a Path,
+    pub index_dir: &'a Path,
+    pub scope: &'a str,
+    pub config_fingerprint: &'a str,
+    pub excludes: &'a [String],
+    pub verify: bool,
+}
+
+pub struct IndexOutcome {
+    pub index: AnalysisIndex,
+    pub reuse: Reuse,
+    /// `Some(true)` when `--verify` re-derived an index byte-identical to the
+    /// stored one; `Some(false)` when it did not or none was stored.
+    pub verified: Option<bool>,
+    pub path: std::path::PathBuf,
+}
+
+/// Build or refresh the index, then write it.
+pub fn build(request: &IndexRequest<'_>) -> crate::Result<IndexOutcome> {
+    let stored = std::fs::read(request.index_dir.join(INDEX_FILE_NAME)).ok();
+    let previous = if request.verify {
+        None
+    } else {
+        Some(AnalysisIndex::open(request.index_dir))
+    };
+    let entries = load_entries(request.root, request.excludes)?;
+    let (_, mut index, reuse) = refresh_files(
+        previous.as_ref(),
+        request.scope,
+        request.config_fingerprint,
+        &entries,
+    )?;
+    let usable = previous
+        .as_ref()
+        .filter(|index| index.is_usable(request.scope, request.config_fingerprint));
+    index.history = refresh_history(usable, request.root);
+    let verified = request.verify.then(|| {
+        stored
+            .as_deref()
+            .and_then(|bytes| serde_json::from_slice::<AnalysisIndex>(bytes).ok())
+            .is_some_and(|previous| previous == index)
+    });
+    index.save(request.index_dir)?;
+    Ok(IndexOutcome {
+        path: request.index_dir.join(INDEX_FILE_NAME),
+        index,
+        reuse,
+        verified,
+    })
+}

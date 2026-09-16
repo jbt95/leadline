@@ -134,6 +134,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
         "doctor" => doctor_command(&args[1..]),
         "update" => update_command(&args[1..]),
         "mcp" => mcp_command(&args[1..]),
+        "index" => index_command(&args[1..]),
         "skill" | "--skill" => {
             print!("{SKILL_TEXT}");
             Ok(ExitCode::SUCCESS)
@@ -163,6 +164,93 @@ fn mcp_command(args: &[String]) -> Result<ExitCode, CliError> {
         Ok(()) => Ok(ExitCode::SUCCESS),
         Err(error) => Err(CliError::internal(error.to_string())),
     }
+}
+
+fn index_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut path: Option<String> = None;
+    let mut output: Option<String> = None;
+    let mut verify = false;
+    let mut json = false;
+    let mut position = 0;
+    while position < args.len() {
+        match args[position].as_str() {
+            "--output" => {
+                position += 1;
+                let value = args
+                    .get(position)
+                    .ok_or_else(|| CliError::usage("--output requires a value"))?;
+                output = Some(value.clone());
+            }
+            "--verify" => verify = true,
+            "--json" => json = true,
+            value if !value.starts_with('-') && path.is_none() => path = Some(value.to_owned()),
+            value => return Err(CliError::usage(format!("unknown index option '{value}'"))),
+        }
+        position += 1;
+    }
+    let root = PathBuf::from(path.unwrap_or_else(|| ".".to_owned()));
+    if !root.is_dir() {
+        return Err(CliError::usage(format!(
+            "index requires a directory: {}",
+            root.display()
+        )));
+    }
+    let config = load_config_for(&root)?;
+    let dir = match output {
+        Some(dir) => PathBuf::from(dir),
+        None => root.join(
+            config
+                .as_ref()
+                .and_then(|config| config.index.as_ref())
+                .map(|index| index.path.as_str())
+                .unwrap_or(leadline::index::DEFAULT_INDEX_DIR),
+        ),
+    };
+    let fingerprint = leadline::config::fingerprint(&config_dir(&root));
+    let excludes: Vec<String> = config
+        .as_ref()
+        .map(|selected| selected.analysis_excludes.clone())
+        .unwrap_or_default();
+    let outcome = leadline::index::build(&leadline::index::IndexRequest {
+        root: &root,
+        index_dir: &dir,
+        scope: &leadline::index::scope_label(&root),
+        config_fingerprint: &fingerprint,
+        excludes: &excludes,
+        verify,
+    })
+    .map_err(|error| CliError::incomplete(error.to_string()))?;
+    let payload = serde_json::json!({
+        "index": {
+            "path": outcome.path.to_string_lossy(),
+            "scope": outcome.index.scope,
+            "files": outcome.index.files.len(),
+            "analyzed": outcome.reuse.analyzed,
+            "reused": outcome.reuse.reused,
+            "history": outcome.index.history.is_some(),
+            "head_commit": outcome.index.history.as_ref().and_then(|facts| facts.head_commit.clone()),
+            "verified": outcome.verified,
+        }
+    });
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&payload)
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else {
+        let row = &payload["index"];
+        println!(
+            "index {}: {} files ({} analyzed, {} reused), history {}, verified {}",
+            row["path"].as_str().unwrap_or_default(),
+            row["files"],
+            row["analyzed"],
+            row["reused"],
+            row["history"],
+            row["verified"],
+        );
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn analyze_command(args: &[String]) -> Result<ExitCode, CliError> {
@@ -3651,5 +3739,5 @@ fn usage() -> &'static str {
     "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--sarif FILE] [--baseline-sarif FILE] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--osv FILE] [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--sql] [--sql-fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--cache-dir DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]
   leadline security [PATH] --sarif FILE [--baseline-sarif FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--json] [--format agent-json|sarif] [--top N]\n  leadline risk [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]
   leadline dependencies [PATH] [--json] [--format agent-json]
-  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline sql [PATH] [--large-offset N] [--migration-root DIR] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline vulnerabilities [PATH] --osv FILE [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline sql-plan --current DIR --baseline DIR [--max-cost-increase-percent N] [--max-plan-rows-ratio N] [--max-estimate-error-ratio N] [--json] [--format agent-json|sarif] [--top N]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp [--port [N] [--host ADDR]]\n  leadline skill\n  leadline update\n  leadline version\n  leadline --version"
+  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline sql [PATH] [--large-offset N] [--migration-root DIR] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline vulnerabilities [PATH] --osv FILE [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline sql-plan --current DIR --baseline DIR [--max-cost-increase-percent N] [--max-plan-rows-ratio N] [--max-estimate-error-ratio N] [--json] [--format agent-json|sarif] [--top N]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp [--port [N] [--host ADDR]]\n  leadline index [PATH] [--output DIR] [--verify] [--json]\n  leadline skill\n  leadline update\n  leadline version\n  leadline --version"
 }
