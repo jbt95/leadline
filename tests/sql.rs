@@ -18,12 +18,21 @@ fn discovery_sql_files_respect_excludes_ignores_and_symlinks() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(root.join("q.sql"), root.join("link.sql")).unwrap();
     let found = discover_matching(&root, &["gen/**".to_owned()], accepts_sql).unwrap();
-    let names: Vec<&str> = found
+    let names: Vec<String> = found
         .iter()
-        .map(|path| path.strip_prefix(&root).unwrap().to_str().unwrap())
+        .map(|path| {
+            path.strip_prefix(&root)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .replace('\\', "/")
+        })
         .collect();
-    assert!(names.contains(&"q.sql"), "{names:?}");
-    assert!(names.contains(&"sub/inner.sql"), "{names:?}");
+    assert!(names.iter().any(|name| name == "q.sql"), "{names:?}");
+    assert!(
+        names.iter().any(|name| name == "sub/inner.sql"),
+        "{names:?}"
+    );
     assert!(
         !names.iter().any(|name| name.contains("node_modules")),
         "{names:?}"
@@ -38,7 +47,7 @@ fn discovery_sql_files_respect_excludes_ignores_and_symlinks() {
     );
     #[cfg(unix)]
     assert!(
-        !names.contains(&"link.sql"),
+        !names.iter().any(|name| name == "link.sql"),
         "symlinks are skipped: {names:?}"
     );
     // Explicit files honor the predicate.
