@@ -52,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/jbt95/leadline/main/install.sh | sh
 leadline analyze .
 ```
 
-Pin a version with `LEADLINE_VERSION=v0.8.1`, or choose a destination with
+Pin a version with `LEADLINE_VERSION=v0.8.2`, or choose a destination with
 `LEADLINE_INSTALL_DIR`. Windows users can download the `.zip` from
 [GitHub Releases](https://github.com/jbt95/leadline/releases). Or build from
 source with Rust 1.90 or later:

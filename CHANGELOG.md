@@ -2,6 +2,14 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## 0.8.2 - 2026-09-16
+
+### Fixed
+
+- The secret-gate hook-wrapper test retries Linux's transient `ETXTBSY`
+  fork race, so the Ubuntu CI lane no longer flakes when a sibling test
+  thread holds a just-copied script's write descriptor.
+
 ## 0.8.1 - 2026-09-16
 
 ### Fixed

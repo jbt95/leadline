@@ -1,6 +1,6 @@
 {
   "name": "leadline-omp",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Native OMP extension for the leadline analyzer (warn-mode feedback, no metric logic)",
   "type": "module",
   "keywords": ["omp-plugin", "pi-extension"],
