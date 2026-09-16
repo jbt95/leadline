@@ -389,7 +389,10 @@ fn index_section_defaults_to_dot_leadline() {
 #[test]
 fn index_path_must_stay_inside_the_repository() {
     for text in [
+        // A rooted path is absolute on Unix and root-relative on Windows.
         "[index]\npath = \"/tmp/x\"\n",
+        // Windows separators are never accepted, rooted or not.
+        "[index]\npath = \"a\\\\b\"\n",
         "[index]\npath = \"../x\"\n",
         "[index]\npath = \"C:x\"\n",
         "[index]\npath = \"C:\"\n",

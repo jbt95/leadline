@@ -638,8 +638,10 @@ fn normalize_index_path(raw: &str) -> Result<String, ConfigError> {
     if trimmed.is_empty() {
         return Err(ConfigError::new("[index].path must not be empty"));
     }
-    let path = std::path::Path::new(trimmed);
-    if path.is_absolute() || trimmed.contains('\\') {
+    // Rooted and backslash forms are rejected with string checks, exactly as
+    // `normalize_migration_root` does: on Windows `Path::is_absolute` is
+    // false for `/x`, which still escapes the analysis root.
+    if trimmed.starts_with('/') || trimmed.contains('\\') {
         return Err(ConfigError::new(format!(
             "[index].path must be a relative path: '{raw}'"
         )));
@@ -651,7 +653,7 @@ fn normalize_index_path(raw: &str) -> Result<String, ConfigError> {
             "[index].path must not start with a drive prefix: '{raw}'"
         )));
     }
-    if path
+    if std::path::Path::new(trimmed)
         .components()
         .any(|component| matches!(component, std::path::Component::ParentDir))
     {
