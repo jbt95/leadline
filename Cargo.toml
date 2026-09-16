@@ -45,6 +45,10 @@ name = "source_snapshot"
 harness = false
 
 [[bench]]
+name = "index"
+harness = false
+
+[[bench]]
 name = "realworld"
 harness = false
 
