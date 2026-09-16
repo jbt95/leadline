@@ -48,6 +48,7 @@ pub struct Config {
     pub architecture_rules: Vec<ArchitectureRule>,
     pub vulnerabilities: VulnerabilityConfig,
     pub sql: SqlConfig,
+    pub index: Option<IndexConfig>,
 }
 
 /// Duplication detection settings.
@@ -88,6 +89,12 @@ impl Default for SqlConfig {
             migration_roots: Vec::new(),
         }
     }
+}
+
+/// Analysis index settings; `[index]` presence enables the warm path.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IndexConfig {
+    pub path: String,
 }
 
 /// Severity of an architecture rule violation, in ascending order.
@@ -172,6 +179,7 @@ impl Default for Config {
             architecture_rules: Vec::new(),
             vulnerabilities: VulnerabilityConfig::default(),
             sql: SqlConfig::default(),
+            index: None,
         }
     }
 }
@@ -400,6 +408,7 @@ pub fn parse_str(text: &str) -> Result<Config, ConfigError> {
             "regressions" => read_regressions(&mut config, value)?,
             "duplication" => read_duplication(&mut config, value)?,
             "sql" => read_sql(&mut config, value)?,
+            "index" => config.index = read_index(value)?,
             "vulnerabilities" => read_vulnerabilities(&mut config, value)?,
             "architecture" => read_architecture(&mut config, value)?,
             _ if !value.is_table() => {
@@ -593,6 +602,51 @@ pub fn normalize_migration_root(raw: &str) -> Result<String, ConfigError> {
         return Err(reject("empty"));
     }
     Ok(parts.join("/"))
+}
+
+fn read_index(value: &Value) -> Result<Option<IndexConfig>, ConfigError> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| ConfigError::new("[index] must be a table"))?;
+    let mut path = None;
+    for (key, value) in table {
+        match key.as_str() {
+            "path" => {
+                let raw = value
+                    .as_str()
+                    .ok_or_else(|| ConfigError::new("[index].path must be a string"))?;
+                path = Some(normalize_index_path(raw)?);
+            }
+            other => return Err(ConfigError::new(format!("unknown [index] key '{other}'"))),
+        }
+    }
+    Ok(Some(IndexConfig {
+        path: path.unwrap_or_else(|| crate::index::DEFAULT_INDEX_DIR.to_owned()),
+    }))
+}
+
+/// Index paths are analysis-root-relative: no absolute paths, no parent
+/// escapes, no empty value.
+fn normalize_index_path(raw: &str) -> Result<String, ConfigError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(ConfigError::new("[index].path must not be empty"));
+    }
+    let path = std::path::Path::new(trimmed);
+    if path.is_absolute() || trimmed.contains('\\') {
+        return Err(ConfigError::new(format!(
+            "[index].path must be a relative path: '{raw}'"
+        )));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(ConfigError::new(format!(
+            "[index].path must not contain '..': '{raw}'"
+        )));
+    }
+    Ok(trimmed.to_owned())
 }
 
 fn read_regressions(config: &mut Config, value: &Value) -> Result<(), ConfigError> {

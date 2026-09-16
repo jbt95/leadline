@@ -63,6 +63,12 @@ Absolute limits for `check`. Any subset of `cognitive`, `cyclomatic`, `max_nesti
 | `large_offset` | integer >= 1 | `1000` | Numeric top-level `OFFSET` above this fails `sql/large-offset`. `--large-offset` overrides it for one invocation. Zero is rejected. |
 | `migration_roots` | list of relative paths | empty (no schema evidence) | Migration directories declaring tables for `sql/unknown-table`. Roots must be relative with `/` separators; duplicates are rejected. `--migration-root` overrides the list for one invocation. |
 
+## `[index]`
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `path` | string | `.leadline` | Analysis-root-relative directory holding `index.json`. The warm path is enabled only when this section is present or `--index` is passed. Add the directory to `.gitignore`. |
+
 ## `[regressions]`
 
 Allowed positive deltas for `check --base REV --regressions` and `check --baseline FILE --regressions`. Values are non-negative. Missing values default to zero. Only paired functions are checked; added and removed functions are ignored. Absolute thresholds and regression limits can run together. A failure in either gate exits `1`.

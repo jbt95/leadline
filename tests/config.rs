@@ -39,6 +39,7 @@ fn parses_full_config() {
             architecture_rules: Vec::new(),
             vulnerabilities: VulnerabilityConfig::default(),
             sql: SqlConfig::default(),
+            index: None,
         }
     );
     config.validate().unwrap();
@@ -385,4 +386,25 @@ fn config_fingerprint_tracks_file_bytes() {
     assert_ne!(first, leadline::config::fingerprint(&dir));
 
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn index_section_defaults_to_dot_leadline() {
+    let config = leadline::config::parse_str("[index]\n").unwrap();
+    assert_eq!(config.index.unwrap().path, ".leadline");
+}
+
+#[test]
+fn index_path_must_stay_inside_the_repository() {
+    for text in ["[index]\npath = \"/tmp/x\"\n", "[index]\npath = \"../x\"\n"] {
+        assert!(
+            leadline::config::parse_str(text).is_err(),
+            "{text} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn unknown_index_key_is_rejected() {
+    assert!(leadline::config::parse_str("[index]\ncache = true\n").is_err());
 }
