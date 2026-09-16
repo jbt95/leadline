@@ -4,6 +4,19 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Added
+
+- Persistent analysis index: `leadline index [PATH] [--output DIR] [--verify] [--json]`
+  builds content-keyed file metrics and HEAD-keyed Git history facts under
+  `.leadline/` (configurable with `[index] path`). Warm `analyze` and `check`
+  output is byte-identical to a cold run; `--verify` re-derives the index and
+  reports whether the stored one was reproduced exactly.
+- Warm `analyze` and `check` through `--index DIR` or the configured
+  `[index].path`, and read-only index reuse in the MCP `analyze` and `check`
+  tools, which never create or modify an index.
+- `cargo bench --offline --bench index` measuring cold analysis against warm
+  refresh on a synthetic repository.
+
 ### Changed (breaking)
 
 - `--cache-dir DIR` on `analyze` and `check` is replaced by `--index DIR`. The

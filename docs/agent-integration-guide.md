@@ -131,10 +131,10 @@ HTTP limits apply to every request: 32 MiB body, 64 KiB of headers, an 8 KiB lin
 
 | Tool | Mirrors | Input | Output |
 | --- | --- | --- | --- |
-| `analyze` | `leadline analyze` | `path?`, `coverage?`, `top?`, `sort_by?`, `min_crap?` | Ranked function rows. |
+| `analyze` | `leadline analyze` | `path?`, `coverage?`, `top?`, `sort_by?`, `min_crap?`, `index?` | Ranked function rows. |
 | `analyze_changed` | `leadline changed` | `base?`, `path?`, `target?`, `renames?`, `explain?`, budget flags | Before/after changed rows. |
 | `analyze_function` | `leadline function` | `path`, `function`, `explain?` | One-function report, contributions with `explain`. |
-| `check` | `leadline check` | `path?`, `base?`/`baseline?`, `coverage?`, `thresholds?`, `regressions?` | Violations-only report. |
+| `check` | `leadline check` | `path?`, `base?`/`baseline?`, `coverage?`, `thresholds?`, `regressions?`, `index?` | Violations-only report. |
 | `explain_metric` | `docs/metrics.md` | `metric` | Definition of one metric. |
 | `repo_summary` | — | `path?`, `top?` | Totals plus top functions per metric. |
 | `test_targets` | `leadline test-targets` | `path?`, `coverage` (required), `top?` | Uncovered decision lines by CRAP. |

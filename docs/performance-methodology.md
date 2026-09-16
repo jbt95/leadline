@@ -73,3 +73,14 @@ Never compare runs across machines as one series. Never commit a benchmark resul
 | History analysis, 200 commits / 1,000 records | 324.32 ms | 616.67 commits/s |
 | Hotspot scoring, 2,000 files | 293.27 µs | 6.820 Mfiles/s |
 | Coupling analysis, 200 commits / 1,000 records | 366.77 ms | 545.30 commits/s |
+
+2026-09-16, leadline 0.6.1, Mac14,9, Apple M2 Pro (10 cores), 32 GiB, macOS 26.6.2, same toolchain as the baselines above:
+
+Repository: 120 synthetic TypeScript files x 12 functions each (`cargo bench --offline --bench index`).
+
+| Case | Median | 95% CI |
+| --- | ---: | ---: |
+| `index_refresh/cold_analyze` | 33.146 ms | 33.052–33.246 ms |
+| `index_refresh/warm_refresh` | 605.20 µs | 576.90–642.45 µs |
+
+Warm refresh is ~55x faster than cold analysis. Warm refresh of a repository this size must stay under 100 ms: a regression past that budget is a bug, not a trade-off.
