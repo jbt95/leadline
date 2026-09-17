@@ -1,9 +1,5 @@
 # leadline
 
-<p align="center">
-  <img src="assets/logo.svg" alt="leadline logo: a sounding line dropping into waves" width="160" />
-</p>
-
 <p>
   <a href="https://github.com/jbt95/leadline/actions/workflows/ci.yml"><img src="https://github.com/jbt95/leadline/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
   <a href="https://github.com/jbt95/leadline/releases"><img src="https://img.shields.io/github/v/release/jbt95/leadline" alt="latest release" /></a>
@@ -15,6 +11,14 @@
 Deterministic function-level complexity analysis for Java, JavaScript, TypeScript, and TSX — a fast feedback loop for humans, CI, and AI coding agents.
 
 `leadline` reports physical and logical LOC, parameters, nesting, cyclomatic and cognitive complexity, Halstead metrics, maintainability, coverage, and CRAP. It parses code with Tree-sitter and never executes it: no build runtime, no network, no project scripts.
+
+<p align="center">
+  <a href="assets/leadline-promo.mp4"><img src="assets/promo-poster.png" alt="Leadline 30-second promo video — click to play" width="720" /></a>
+</p>
+
+<p align="center">
+  <em>▶ <a href="assets/leadline-promo.mp4">Watch Leadline in 30 seconds</a> — an AI agent ships a change, Leadline measures it, the loop iterates.</em>
+</p>
 
 ## Contents
 
