@@ -2,8 +2,10 @@
 //!
 //! Read-only by construction: the only filesystem reads are source-file
 //! analysis input, an optional coverage file, and the `git` reads already
-//! performed inside [`crate::diff::analyze_changes`]. No writes, no shell,
-//! no network.
+//! performed inside [`crate::diff::analyze_changes`]. No shell, no network,
+//! and no writes except the opt-in local metrics store ([`crate::telemetry`]),
+//! which stays inside `LEADLINE_METRICS_DIR` and never touches the analyzed
+//! repository.
 //!
 //! Wire format: newline-delimited JSON-RPC 2.0 over stdin/stdout.
 //! Requests look like `{jsonrpc:"2.0", id, method, params}`; responses are
@@ -930,6 +932,27 @@ fn dispatch_tools_call(params: &serde_json::Value) -> Result<serde_json::Value, 
 }
 
 fn dispatch_tool(
+    name: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, (i64, String)> {
+    let started = std::time::Instant::now();
+    let result = dispatch_tool_inner(name, params);
+    let outcome = match &result {
+        Ok(payload)
+            if name == "check"
+                && payload.get("passed") == Some(&serde_json::Value::Bool(false)) =>
+        {
+            "gate_failed"
+        }
+        Ok(_) => "success",
+        Err((code, _)) if *code == -32602 => "usage_error",
+        Err(_) => "internal_error",
+    };
+    crate::telemetry::record_invocation("mcp", name, outcome, started.elapsed());
+    result
+}
+
+fn dispatch_tool_inner(
     name: &str,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, (i64, String)> {

@@ -2,6 +2,22 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## Unreleased
+
+### Added
+
+- Opt-in local metrics: with `LEADLINE_METRICS_DIR` set, every CLI
+  invocation and MCP tool call updates a bounded, schema-versioned store plus
+  a Prometheus text file (`leadline.prom`) that Grafana Alloy's textfile
+  collector or any text-format scraper can read. It records fixed-label
+  counts only — invocations by surface/operation/outcome, per-operation
+  durations, `check` findings by kind (function, parse error, and the
+  scanner families), `debt` new/resolved/risk counts, and the standing
+  `existing` function count — never paths, arguments, source, findings,
+  commits, or identities. Recording is best-effort and never changes output
+  or exit codes, and MCP writes go only to the configured metrics directory.
+  See `docs/telemetry.md`.
+
 ## 0.9.0 - 2026-09-16
 
 ### Added

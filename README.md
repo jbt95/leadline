@@ -79,7 +79,7 @@ leadline changed --base origin/main --format agent-json
    "before": {"cognitive": 12}, "after": {"cognitive": 24}}]}
 ```
 
-**MCP server** (read-only: stdio by default, HTTP with `--port`; twenty tools: `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `test_targets`, `sql_plan`, `security_findings`, `vulnerabilities`, `sql_risks`, `hotspots`, `risk`, `dependencies`, `impact`, `coupling`, `duplication`, `policy`, `debt`, `project`):
+**MCP server** (read-only; stdio by default, HTTP with `--port`; twenty tools: `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `test_targets`, `sql_plan`, `security_findings`, `vulnerabilities`, `sql_risks`, `hotspots`, `risk`, `dependencies`, `impact`, `coupling`, `duplication`, `policy`, `debt`, `project`). Its only writes are the opt-in local metrics store ([docs/telemetry.md](docs/telemetry.md)):
 
 ```console
 leadline mcp
@@ -310,6 +310,15 @@ leadline test-targets src/payment.ts --coverage coverage/lcov.info
 When a coverage path could match more than one file, leadline reports no coverage rather than guess. Nested functions can share covered lines.
 
 Source maps and Cobertura are not supported.
+
+## Local metrics (opt-in)
+
+Set `LEADLINE_METRICS_DIR` to a local directory and every CLI invocation and
+MCP tool call updates a bounded local metrics store plus a Prometheus text
+file that Grafana Alloy's textfile collector can scrape. Counters, durations,
+and fixed labels only: nothing is sent over the network, and no path,
+argument, finding, or identity is recorded. See
+[docs/telemetry.md](docs/telemetry.md).
 
 ## Development
 

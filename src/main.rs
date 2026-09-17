@@ -13,6 +13,7 @@ use leadline::source_snapshot::SnapshotTarget;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Instant;
 
 /// CLI failure carrying a stable exit code.
 ///
@@ -89,7 +90,90 @@ fn main() -> ExitCode {
     }
 }
 
+/// Runs one command with local metrics recorded when they are enabled.
+///
+/// Telemetry is best-effort and never changes the outcome. `mcp` is skipped
+/// here because its duration spans the whole server session; its tool calls
+/// are recorded individually.
 fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
+    let operation = args
+        .first()
+        .map_or("none", |raw| cli_operation(raw))
+        .to_owned();
+    let started = Instant::now();
+    let result = dispatch_command(args);
+    if operation != "mcp" {
+        leadline::telemetry::record_invocation(
+            "cli",
+            &operation,
+            outcome_label(&result),
+            started.elapsed(),
+        );
+    }
+    result
+}
+
+/// Every command [`dispatch_command`] accepts, so metric labels stay bounded.
+const CLI_OPERATIONS: [&str; 29] = [
+    "analyze",
+    "function",
+    "changed",
+    "diff",
+    "check",
+    "baseline",
+    "hotspots",
+    "risk",
+    "security",
+    "coupling",
+    "dependencies",
+    "impact",
+    "test-targets",
+    "project",
+    "debt",
+    "snapshot",
+    "mutation",
+    "duplication",
+    "policy",
+    "sql-plan",
+    "sql",
+    "vulnerabilities",
+    "doctor",
+    "update",
+    "mcp",
+    "index",
+    "skill",
+    "version",
+    "help",
+];
+
+/// Bounded operation label for one raw first argument.
+fn cli_operation(raw: &str) -> &str {
+    match raw {
+        "--version" | "-V" => "version",
+        "--skill" => "skill",
+        "--help" | "-h" => "help",
+        other if CLI_OPERATIONS.contains(&other) => other,
+        _ => "other",
+    }
+}
+
+/// Coarse outcome label for local metrics, mirroring the exit-code contract.
+fn outcome_label(result: &Result<ExitCode, CliError>) -> &'static str {
+    match result {
+        Ok(code) if *code == ExitCode::SUCCESS => "success",
+        Ok(code) if *code == ExitCode::from(1) => "gate_failed",
+        Ok(code) if *code == ExitCode::from(3) => "incomplete",
+        Ok(_) => "other",
+        Err(error) => match error.code {
+            2 => "usage_error",
+            3 => "incomplete",
+            4 => "input_error",
+            _ => "internal_error",
+        },
+    }
+}
+
+fn dispatch_command(args: Vec<String>) -> Result<ExitCode, CliError> {
     let Some(command) = args.first().map(String::as_str) else {
         return Err(CliError::usage(usage()));
     };
@@ -1050,6 +1134,7 @@ fn debt_command(args: &[String]) -> Result<ExitCode, CliError> {
     };
     let report = leadline::analytics::analyze_debt(&request)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
+    leadline::telemetry::record_debt("cli", &report.summary);
     if agent_json {
         println!(
             "{}",
@@ -3455,6 +3540,22 @@ impl CommonOptions {
             vulnerabilities,
             sql,
         } = scanners;
+        leadline::telemetry::record_check_findings(
+            "cli",
+            report
+                .files
+                .iter()
+                .map(|file| file.functions.len() as u64)
+                .sum(),
+            report
+                .files
+                .iter()
+                .map(|file| file.parse_errors.len() as u64)
+                .sum(),
+            security.map_or(0, |outcome| outcome.violations.len() as u64),
+            vulnerabilities.map_or(0, |outcome| outcome.violations.len() as u64),
+            sql.map_or(0, |outcome| outcome.violations.len() as u64),
+        );
         let internal = |error: serde_json::Error| CliError::internal(error.to_string());
         if self.agent_json {
             let mut value = serde_json::to_value(leadline::agent::analyze_agent_json_budgeted(
@@ -3638,4 +3739,91 @@ fn usage() -> &'static str {
   leadline security [PATH] --sarif FILE [--baseline-sarif FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--json] [--format agent-json|sarif] [--top N]\n  leadline risk [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]
   leadline dependencies [PATH] [--json] [--format agent-json]
   leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline sql [PATH] [--large-offset N] [--migration-root DIR] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline vulnerabilities [PATH] --osv FILE [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline sql-plan --current DIR --baseline DIR [--max-cost-increase-percent N] [--max-plan-rows-ratio N] [--max-estimate-error-ratio N] [--json] [--format agent-json|sarif] [--top N]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp [--port [N] [--host ADDR]]\n  leadline index [PATH] [--output DIR] [--verify] [--json]\n  leadline skill\n  leadline update\n  leadline version\n  leadline --version"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outcome_labels_follow_the_exit_code_contract() {
+        assert_eq!(outcome_label(&Ok(ExitCode::SUCCESS)), "success");
+        assert_eq!(outcome_label(&Ok(ExitCode::from(1))), "gate_failed");
+        assert_eq!(outcome_label(&Ok(ExitCode::from(3))), "incomplete");
+        assert_eq!(outcome_label(&Err(CliError::usage("x"))), "usage_error");
+        assert_eq!(outcome_label(&Err(CliError::incomplete("x"))), "incomplete");
+        assert_eq!(outcome_label(&Err(CliError::input("x"))), "input_error");
+        assert_eq!(
+            outcome_label(&Err(CliError::internal("x"))),
+            "internal_error"
+        );
+    }
+
+    #[test]
+    fn operation_labels_stay_bounded_to_known_commands() {
+        assert_eq!(cli_operation("analyze"), "analyze");
+        assert_eq!(cli_operation("sql-plan"), "sql-plan");
+        assert_eq!(cli_operation("--version"), "version");
+        assert_eq!(cli_operation("-V"), "version");
+        assert_eq!(cli_operation("--skill"), "skill");
+        assert_eq!(cli_operation("--help"), "help");
+        assert_eq!(cli_operation("-h"), "help");
+        assert_eq!(cli_operation("help"), "help");
+        assert_eq!(cli_operation("definitely-not-a-command"), "other");
+    }
+
+    /// The operation label list and the dispatch arms must stay in sync in
+    /// both directions: a missing entry would record a real command as
+    /// `other`, and a stale entry would label a usage error with a command
+    /// that no longer exists.
+    #[test]
+    fn cli_operations_stay_in_sync_with_dispatch() {
+        let source = include_str!("main.rs");
+        let body: String = source
+            .split_once("fn dispatch_command")
+            .expect("dispatch_command must exist")
+            .1
+            .lines()
+            .take_while(|line| *line != "}")
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut checked = 0;
+        for line in body.lines() {
+            let trimmed = line.trim_start();
+            if !trimmed.starts_with('"') || !trimmed.contains("=>") {
+                continue;
+            }
+            let (arms, _) = trimmed.split_once("=>").expect("arm must have =>");
+            for literal in arms.split('"').skip(1).step_by(2) {
+                assert_ne!(
+                    cli_operation(literal),
+                    "other",
+                    "dispatch arm '{literal}' has no CLI_OPERATIONS entry"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= CLI_OPERATIONS.len());
+        // A future arm wrapped across lines still yields a command-shaped
+        // literal, so scan the whole body as a second forward check.
+        for literal in body.split('"').skip(1).step_by(2) {
+            let command_shaped = !literal.is_empty()
+                && literal.chars().all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+                });
+            if command_shaped {
+                assert_ne!(
+                    cli_operation(literal),
+                    "other",
+                    "dispatch literal '{literal}' has no CLI_OPERATIONS entry"
+                );
+            }
+        }
+        for operation in CLI_OPERATIONS {
+            assert!(
+                body.contains(&format!("\"{operation}\"")),
+                "CLI_OPERATIONS entry '{operation}' has no dispatch arm"
+            );
+        }
+    }
 }

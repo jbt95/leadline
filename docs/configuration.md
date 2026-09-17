@@ -99,3 +99,17 @@ leadline check . --baseline .leadline-baseline.json --regressions
 ```
 
 `baseline` writes `schema_version`, `metric_profile`, and one row per function (path, stable id, name, line, gate metrics), sorted for deterministic diffs. Writes are atomic. `check --baseline` reuses the `[regressions]` limits above; new functions fail only on absolute thresholds.
+
+## Local metrics (environment)
+
+`leadline.toml` never configures metrics: repository configuration is strict,
+fingerprinted for index reuse, and parsed from historical revisions, so a
+runtime preference does not belong there. Opt in per environment instead:
+
+```console
+export LEADLINE_METRICS_DIR="$HOME/.leadline-metrics"
+```
+
+`state.json`, `leadline.prom`, and `state.lock` appear there. Unset or empty
+disables recording entirely. See [telemetry.md](telemetry.md) for the metric
+reference and the Grafana Alloy setup.

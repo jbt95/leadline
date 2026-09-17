@@ -19,3 +19,4 @@
   dependencies, impact, risk, project, debt, duplication, snapshots, and the
   scanner reports) versions independently and currently emits `1`.
 - The analyzer reports its own `analyzer_version` in every JSON envelope so results stay attributable.
+- The local metrics store ([telemetry.md](telemetry.md)) carries its own `schema_version` (`1`); it is not a report schema and never appears in report output.

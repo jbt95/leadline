@@ -61,7 +61,7 @@ leadline skill
 - `--version` / `-V` / `version`: print `leadline <version>`.
 - `doctor`: self-check parsers, coverage readers, `git`, and `leadline.toml`.
 - `update`: replace the running binary with the latest GitHub release. Reads the release `VERSION`, downloads the platform archive, verifies it against the release `SHA256SUMS`, and replaces the running executable (atomic rename on Unix, rename-swap on Windows). `LEADLINE_BASE_URL` points at a mirror. Never automatic, no `--json`/`--format`, never exposed over MCP; download, verification, or extraction failure exits `3` and leaves the installed binary untouched.
-- `mcp`: serve the read-only MCP tool API over stdio (default; request lines are bounded at 32 MiB). `--port [N]` serves the same tools over HTTP instead (`POST /mcp`, plus `GET /health` for status): a bare `--port` means 3000, `0` asks the OS for a free port, and a taken port falls back to a free one with the actual address printed to stderr. `--host ADDR` sets the bind address (default `127.0.0.1`) and requires `--port`, because it configures only the HTTP transport. HTTP mode bounds every request (bounded header lines, whole-request read and write deadlines, a 64 MiB in-flight body budget, a fixed worker ceiling that answers 503 when saturated) and rejects non-loopback browser `Origin` headers with 403 per the MCP Streamable HTTP spec; clients that send no `Origin` are unaffected. MCP tools read `leadline.toml` from the analysis root, so `[analysis].exclude`, `[sql]`, and `[vulnerabilities]` behave exactly as they do on the CLI.
+- `mcp`: serve the read-only MCP tool API over stdio (default; request lines are bounded at 32 MiB); the only writes are the opt-in local metrics store, confined to `LEADLINE_METRICS_DIR` ([telemetry.md](telemetry.md)). `--port [N]` serves the same tools over HTTP instead (`POST /mcp`, plus `GET /health` for status): a bare `--port` means 3000, `0` asks the OS for a free port, and a taken port falls back to a free one with the actual address printed to stderr. `--host ADDR` sets the bind address (default `127.0.0.1`) and requires `--port`, because it configures only the HTTP transport. HTTP mode bounds every request (bounded header lines, whole-request read and write deadlines, a 64 MiB in-flight body budget, a fixed worker ceiling that answers 503 when saturated) and rejects non-loopback browser `Origin` headers with 403 per the MCP Streamable HTTP spec; clients that send no `Origin` are unaffected. MCP tools read `leadline.toml` from the analysis root, so `[analysis].exclude`, `[sql]`, and `[vulnerabilities]` behave exactly as they do on the CLI.
 - `skill`: print the canonical agent skill (`integrations/common/leadline-skill/SKILL.md`, baked into the binary).
 
 ## Flags
@@ -129,3 +129,16 @@ Budget flags with `--json` or default terminal output are a usage error (exit `2
 `check` thresholds fail only when a value exceeds its limit. A `--crap` threshold also fails when coverage (and therefore CRAP) is unavailable for a function.
 
 `--format sarif` on `check` uses the command thresholds; on `analyze` it uses `leadline.toml` thresholds when present, else empty thresholds (rules listed, empty results).
+
+## Local metrics
+
+`LEADLINE_METRICS_DIR` enables opt-in local metrics: every CLI invocation and
+MCP tool call updates a bounded store and a Prometheus text file
+(`leadline.prom`) in that directory for Grafana Alloy or any text-format
+scraper. Counters, durations, and fixed labels only; nothing is sent over the
+network and nothing identifies a repository, path, argument, or person. Unset
+or empty disables recording entirely. See [telemetry.md](telemetry.md) for the
+metric reference and the Grafana setup. Metrics are deliberately not
+configurable through `leadline.toml`: repository configuration is strict,
+fingerprinted for index reuse, and parsed from historical revisions, so
+runtime preferences live in the environment.

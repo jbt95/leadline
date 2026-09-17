@@ -30,6 +30,7 @@ pub mod security;
 pub mod snapshots;
 pub mod source_snapshot;
 pub mod sql;
+pub mod telemetry;
 pub mod test_relationships;
 pub mod test_targets;
 pub mod update;
