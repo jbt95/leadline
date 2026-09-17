@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.11.0 - 2026-09-17
+
 ### Added
 
 - Telemetry v2: invocation durations render as a Prometheus histogram with
@@ -13,6 +15,13 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
   (`leadline_parse_errors_total`), and MCP `check`/`debt` calls record
   findings like CLI ones. Store schema is now `2`; existing stores reset
   once on first write.
+
+### Changed
+
+- Agent-facing wording: the MCP `initialize` instructions are trigger-first
+  (when to call each tool across edit, review, triage, and SQL/security
+  workflows), and the native OpenCode and Pi/OMP tool descriptions state
+  their call triggers. No tool, input, or output shape changes.
 
 ## 0.10.1 - 2026-09-17
 
