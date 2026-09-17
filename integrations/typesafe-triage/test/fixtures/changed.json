@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "metric_profile": "default",
-  "analyzer_version": "0.10.0",
+  "analyzer_version": "0.10.1",
   "base": "origin/main",
   "functions": [
     {

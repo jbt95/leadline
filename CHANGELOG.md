@@ -2,6 +2,14 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## 0.10.1 - 2026-09-17
+
+### Fixed
+
+- Release publishing: create the GitHub release before uploading assets and
+  retry asset uploads with backoff, so a transient `uploads.github.com`
+  500 no longer fails the whole release and re-runs resume with `--clobber`.
+
 ## 0.10.0 - 2026-09-17
 
 ### Added
