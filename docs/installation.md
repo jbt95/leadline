@@ -48,9 +48,18 @@ leadline analyze . --json | head -c 400
 
 ```console
 leadline update
+leadline update --integrations
 ```
 
-Downloads the latest release, verifies the archive against the release `SHA256SUMS`, and replaces the running binary in place. `LEADLINE_BASE_URL` points at a mirror. Harness integrations (Pi, OpenCode, Claude Code, and so on) update separately through their own installers.
+Downloads the latest release, verifies the archive against the release `SHA256SUMS`, and replaces the running binary in place. `LEADLINE_BASE_URL` points at a mirror.
+
+`--integrations` then probes installed harnesses and refreshes the official integration through that harness's own CLI:
+
+- `pi update git:github.com/jbt95/leadline`
+- `omp plugin install git:github.com/jbt95/leadline --force`
+- `claude plugin update leadline@leadline`
+
+OpenCode's supported native plugin is a local path or symlink: `--integrations` never modifies it and prints `opencode2 service restart` guidance instead. Restart each refreshed harness to load it. Failures do not stop later updates, and the command exits `3` if any integration fails.
 
 ## Uninstall
 

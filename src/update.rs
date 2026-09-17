@@ -403,6 +403,208 @@ pub fn run(base_url: &str) -> Result<Outcome> {
     })
 }
 
+/// What happened to one harness integration update.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntegrationState {
+    /// The harness updater ran successfully, whether it changed files or not.
+    Refreshed,
+    /// The integration is a local path that Leadline deliberately never mutates.
+    Manual,
+    /// The harness executable or its Leadline integration is not installed.
+    Skipped,
+    /// Detection or the update command failed.
+    Failed,
+}
+
+/// One harness's integration update result.
+#[derive(Debug)]
+pub struct IntegrationOutcome {
+    /// Display name used in the summary.
+    pub harness: &'static str,
+    /// What happened.
+    pub state: IntegrationState,
+    /// Human-readable detail; empty for ordinary skips.
+    pub detail: String,
+    /// Whether the harness must restart to load the refreshed integration.
+    pub restart: bool,
+}
+
+/// True when `pi list` shows Leadline installed from the official Git source.
+fn pi_has_leadline(listing: &str) -> bool {
+    listing
+        .lines()
+        .any(|line| line.trim() == "git:github.com/jbt95/leadline")
+}
+
+/// True when `omp plugin list --json` shows the npm plugin `leadline`.
+fn omp_has_leadline(json: &str) -> Result<bool> {
+    let listing: serde_json::Value = serde_json::from_str(json)?;
+    let npm = listing
+        .get("npm")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("omp plugin list did not return an 'npm' array")?;
+    Ok(npm
+        .iter()
+        .any(|plugin| plugin.get("name").and_then(serde_json::Value::as_str) == Some("leadline")))
+}
+
+/// True when `claude plugin list --json` shows `leadline@leadline`.
+fn claude_has_leadline(json: &str) -> Result<bool> {
+    let plugins: serde_json::Value = serde_json::from_str(json)?;
+    let plugins = plugins
+        .as_array()
+        .ok_or("claude plugin list did not return a JSON array")?;
+    Ok(plugins.iter().any(|plugin| {
+        plugin.get("id").and_then(serde_json::Value::as_str) == Some("leadline@leadline")
+    }))
+}
+
+/// True when the OpenCode global plugin path exists under `config_home`.
+fn opencode_plugin_present(config_home: &Path) -> bool {
+    config_home.join("opencode/plugins/leadline").exists()
+}
+
+/// Resolves the OpenCode global config directory (`$XDG_CONFIG_HOME`, else
+/// `~/.config`, with `USERPROFILE` as the Windows fallback).
+fn config_home() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        let dir = PathBuf::from(dir);
+        if dir.is_absolute() {
+            return Some(dir);
+        }
+    }
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|home| PathBuf::from(home).join(".config"))
+}
+
+/// Runs a harness probe, distinguishing a missing executable from a failure.
+fn probe_output(program: &str, args: &[&str], action: &str) -> Result<Option<String>> {
+    match output_of(program, args) {
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("cannot run {program}: {error}").into()),
+        Ok(output) => stdout_of(program, &output, action).map(Some),
+    }
+}
+
+fn skipped(harness: &'static str) -> IntegrationOutcome {
+    IntegrationOutcome {
+        harness,
+        state: IntegrationState::Skipped,
+        detail: String::new(),
+        restart: false,
+    }
+}
+
+fn failed(harness: &'static str, detail: String) -> IntegrationOutcome {
+    IntegrationOutcome {
+        harness,
+        state: IntegrationState::Failed,
+        detail,
+        restart: false,
+    }
+}
+
+/// Runs one harness updater and maps its result.
+fn run_updater(
+    harness: &'static str,
+    program: &str,
+    args: &[&str],
+    action: &str,
+) -> IntegrationOutcome {
+    let result = match output_of(program, args) {
+        Ok(output) => stdout_of(program, &output, action),
+        Err(error) => Err(format!("cannot run {program}: {error}").into()),
+    };
+    match result {
+        Ok(_) => IntegrationOutcome {
+            harness,
+            state: IntegrationState::Refreshed,
+            detail: "integration refreshed".into(),
+            restart: true,
+        },
+        Err(error) => failed(harness, error.to_string()),
+    }
+}
+
+fn pi_outcome() -> IntegrationOutcome {
+    match probe_output("pi", &["list"], "list packages") {
+        Ok(Some(listing)) if pi_has_leadline(&listing) => run_updater(
+            "Pi",
+            "pi",
+            &["update", "git:github.com/jbt95/leadline"],
+            "update the Leadline package",
+        ),
+        Ok(_) => skipped("Pi"),
+        Err(error) => failed("Pi", error.to_string()),
+    }
+}
+
+fn omp_outcome() -> IntegrationOutcome {
+    match probe_output("omp", &["plugin", "list", "--json"], "list plugins") {
+        Ok(Some(listing)) => match omp_has_leadline(&listing) {
+            Ok(true) => run_updater(
+                "OMP",
+                "omp",
+                &[
+                    "plugin",
+                    "install",
+                    "git:github.com/jbt95/leadline",
+                    "--force",
+                ],
+                "update the Leadline plugin",
+            ),
+            Ok(false) => skipped("OMP"),
+            Err(error) => failed("OMP", format!("detection failed: {error}")),
+        },
+        Ok(None) => skipped("OMP"),
+        Err(error) => failed("OMP", error.to_string()),
+    }
+}
+
+fn claude_outcome() -> IntegrationOutcome {
+    match probe_output("claude", &["plugin", "list", "--json"], "list plugins") {
+        Ok(Some(listing)) => match claude_has_leadline(&listing) {
+            Ok(true) => run_updater(
+                "Claude Code",
+                "claude",
+                &["plugin", "update", "leadline@leadline"],
+                "update the Leadline plugin",
+            ),
+            Ok(false) => skipped("Claude Code"),
+            Err(error) => failed("Claude Code", format!("detection failed: {error}")),
+        },
+        Ok(None) => skipped("Claude Code"),
+        Err(error) => failed("Claude Code", error.to_string()),
+    }
+}
+
+fn opencode_outcome() -> IntegrationOutcome {
+    match config_home() {
+        Some(home) if opencode_plugin_present(&home) => IntegrationOutcome {
+            harness: "OpenCode",
+            state: IntegrationState::Manual,
+            detail: "plugin is a local checkout; update it, then run 'opencode2 service restart'"
+                .into(),
+            restart: true,
+        },
+        _ => skipped("OpenCode"),
+    }
+}
+
+/// Probes and updates every harness integration in deterministic order.
+///
+/// Missing executables and absent integrations are skipped, and every
+/// detected harness is attempted even when an earlier update fails.
+pub fn update_integrations() -> Vec<IntegrationOutcome> {
+    vec![
+        pi_outcome(),
+        omp_outcome(),
+        claude_outcome(),
+        opencode_outcome(),
+    ]
+}
+
 /// Private temporary directory removed on drop.
 struct TempDir(PathBuf);
 
@@ -709,6 +911,44 @@ mod tests {
         std::fs::write(&target, b"old").unwrap();
         assert!(replace_at(&dir.join("missing"), &target).is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"old");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn pi_listing_matches_only_the_official_source() {
+        let listing = "User packages:\n  npm:pi-web-access\n    /tmp/x\n  git:github.com/jbt95/leadline\n    /tmp/leadline\n";
+        assert!(pi_has_leadline(listing));
+        assert!(!pi_has_leadline(
+            "User packages:\n  git:github.com/other/leadline\n"
+        ));
+        assert!(!pi_has_leadline("User packages:\n  npm:leadline\n"));
+        assert!(!pi_has_leadline(""));
+    }
+
+    #[test]
+    fn omp_listing_finds_the_leadline_plugin() {
+        let json = r#"{"npm":[{"name":"ponytail","version":"4.9.0"},{"name":"leadline","version":"0.9.0"}],"marketplace":[]}"#;
+        assert!(omp_has_leadline(json).unwrap());
+        assert!(!omp_has_leadline(r#"{"npm":[{"name":"ponytail"}],"marketplace":[]}"#).unwrap());
+        assert!(omp_has_leadline("not json").is_err());
+        assert!(omp_has_leadline("{}").is_err());
+    }
+
+    #[test]
+    fn claude_listing_finds_the_leadline_plugin() {
+        let json = r#"[{"id":"claude-hud@claude-hud","version":"0.8.0"},{"id":"leadline@leadline","version":"0.9.0"}]"#;
+        assert!(claude_has_leadline(json).unwrap());
+        assert!(!claude_has_leadline(r#"[{"id":"other@other"}]"#).unwrap());
+        assert!(claude_has_leadline("not json").is_err());
+        assert!(claude_has_leadline("{}").is_err());
+    }
+
+    #[test]
+    fn opencode_plugin_detection_checks_the_global_path() {
+        let dir = test_directory("opencode-plugin");
+        assert!(!opencode_plugin_present(&dir));
+        std::fs::create_dir_all(dir.join("opencode/plugins/leadline")).unwrap();
+        assert!(opencode_plugin_present(&dir));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

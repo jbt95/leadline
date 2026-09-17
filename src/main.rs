@@ -3202,24 +3202,62 @@ fn doctor_command(args: &[String]) -> Result<ExitCode, CliError> {
 }
 
 fn update_command(args: &[String]) -> Result<ExitCode, CliError> {
-    if let Some(argument) = args.first() {
-        return Err(CliError::usage(format!(
-            "unknown update option '{argument}'"
-        )));
+    use leadline::update::IntegrationState;
+
+    let mut integrations = false;
+    for argument in args {
+        match argument.as_str() {
+            "--integrations" => integrations = true,
+            _ => {
+                return Err(CliError::usage(format!(
+                    "unknown update option '{argument}'"
+                )));
+            }
+        }
     }
     let base_url = std::env::var("LEADLINE_BASE_URL")
         .unwrap_or_else(|_| leadline::update::DEFAULT_BASE_URL.to_owned());
     match leadline::update::run(&base_url) {
         Ok(leadline::update::Outcome::Current(version)) => {
             println!("leadline {version} is the latest release.");
-            Ok(ExitCode::SUCCESS)
         }
         Ok(leadline::update::Outcome::Updated { from, to, path }) => {
             println!("leadline {to} (updated from {from})");
             println!("Installed to {}", path.display());
-            Ok(ExitCode::SUCCESS)
         }
-        Err(error) => Err(CliError::incomplete(format!("update failed: {error}"))),
+        Err(error) => return Err(CliError::incomplete(format!("update failed: {error}"))),
+    }
+    if !integrations {
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let mut failed = Vec::new();
+    let mut restarts = Vec::new();
+    for outcome in &leadline::update::update_integrations() {
+        match outcome.state {
+            IntegrationState::Skipped => continue,
+            IntegrationState::Refreshed | IntegrationState::Manual => {
+                println!("{}: {}", outcome.harness, outcome.detail);
+            }
+            IntegrationState::Failed => {
+                eprintln!("{}: {}", outcome.harness, outcome.detail);
+                failed.push(outcome.harness);
+            }
+        }
+        if outcome.restart {
+            restarts.push(outcome.harness);
+        }
+    }
+    if !restarts.is_empty() {
+        println!("Restart required: {}.", restarts.join(", "));
+    }
+    if failed.is_empty() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Err(CliError::incomplete(format!(
+            "binary update succeeded; failed harness integrations: {}",
+            failed.join(", ")
+        )))
     }
 }
 
@@ -3796,7 +3834,7 @@ fn usage() -> &'static str {
     "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--index DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--sarif FILE] [--baseline-sarif FILE] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--osv FILE] [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--sql] [--sql-fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--index DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]
   leadline security [PATH] --sarif FILE [--baseline-sarif FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--json] [--format agent-json|sarif] [--top N]\n  leadline risk [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]
   leadline dependencies [PATH] [--json] [--format agent-json]
-  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline sql [PATH] [--large-offset N] [--migration-root DIR] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline vulnerabilities [PATH] --osv FILE [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline sql-plan --current DIR --baseline DIR [--max-cost-increase-percent N] [--max-plan-rows-ratio N] [--max-estimate-error-ratio N] [--json] [--format agent-json|sarif] [--top N]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp [--port [N] [--host ADDR]]\n  leadline index [PATH] [--output DIR] [--verify] [--json]\n  leadline skill\n  leadline update\n  leadline version\n  leadline --version"
+  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline sql [PATH] [--large-offset N] [--migration-root DIR] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline vulnerabilities [PATH] --osv FILE [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline sql-plan --current DIR --baseline DIR [--max-cost-increase-percent N] [--max-plan-rows-ratio N] [--max-estimate-error-ratio N] [--json] [--format agent-json|sarif] [--top N]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp [--port [N] [--host ADDR]]\n  leadline index [PATH] [--output DIR] [--verify] [--json]\n  leadline skill\n  leadline update [--integrations]\n  leadline version\n  leadline --version"
 }
 
 #[cfg(test)]

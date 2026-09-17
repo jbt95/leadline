@@ -65,7 +65,7 @@ source with Rust 1.90 or later:
 cargo install --path .
 ```
 
-Release artifacts support macOS ARM64, macOS x86-64, Linux ARM64, Linux x86-64, and Windows x86-64. Update an installed binary in place with `leadline update`. See [docs/installation.md](docs/installation.md) for per-OS install blocks, verification, updating, and uninstall.
+Release artifacts support macOS ARM64, macOS x86-64, Linux ARM64, Linux x86-64, and Windows x86-64. Update an installed binary in place with `leadline update`; `leadline update --integrations` also refreshes detected Pi, OMP, and Claude Code integrations through each harness's own CLI. See [docs/installation.md](docs/installation.md) for per-OS install blocks, verification, updating, and uninstall.
 
 ## AI-agent integration
 

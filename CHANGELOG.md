@@ -4,6 +4,13 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Added
+
+- `leadline update --integrations`: after the binary update, probe installed
+  Pi, OMP, and Claude Code integrations and refresh each through its own CLI;
+  OpenCode local plugin paths are reported with restart guidance and never
+  modified. Failures do not stop later updates and exit `3`.
+
 ## 0.11.0 - 2026-09-17
 
 ### Added

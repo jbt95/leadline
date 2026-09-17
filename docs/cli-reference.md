@@ -31,7 +31,7 @@ leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage
 leadline --version
 leadline version
 leadline doctor [PATH]
-leadline update
+leadline update [--integrations]
 leadline mcp [--port [N] [--host ADDR]]
 leadline skill
 ```
@@ -60,7 +60,7 @@ leadline skill
 - `baseline`: snapshot current function metrics to `FILE` (writes atomically via a sibling temp file, then rename). Review the file, commit it, and gate later edits with `check --baseline FILE --regressions`. Snapshot rows pair with current functions by path and name in same-name source order; parsing rejects unknown schemas, unknown metric profiles, and duplicate identities (exit `3`).
 - `--version` / `-V` / `version`: print `leadline <version>`.
 - `doctor`: self-check parsers, coverage readers, `git`, and `leadline.toml`.
-- `update`: replace the running binary with the latest GitHub release. Reads the release `VERSION`, downloads the platform archive, verifies it against the release `SHA256SUMS`, and replaces the running executable (atomic rename on Unix, rename-swap on Windows). `LEADLINE_BASE_URL` points at a mirror. Never automatic, no `--json`/`--format`, never exposed over MCP; download, verification, or extraction failure exits `3` and leaves the installed binary untouched.
+- `update`: replace the running binary with the latest GitHub release. Reads the release `VERSION`, downloads the platform archive, verifies it against the release `SHA256SUMS`, and replaces the running executable (atomic rename on Unix, rename-swap on Windows). `LEADLINE_BASE_URL` points at a mirror. Never automatic, no `--json`/`--format`, never exposed over MCP; download, verification, or extraction failure exits `3` and leaves the installed binary untouched. With `--integrations`, it then refreshes detected Pi, OMP, and Claude Code integrations through each harness's own CLI (`pi update git:github.com/jbt95/leadline`, `omp plugin install git:github.com/jbt95/leadline --force`, `claude plugin update leadline@leadline`); OpenCode local plugin paths are reported with `opencode2 service restart` guidance and never modified. Integration failures do not stop later updates and exit `3`.
 - `mcp`: serve the read-only MCP tool API over stdio (default; request lines are bounded at 32 MiB); the only writes are the opt-in local metrics store, confined to `LEADLINE_METRICS_DIR` ([telemetry.md](telemetry.md)). `--port [N]` serves the same tools over HTTP instead (`POST /mcp`, plus `GET /health` for status): a bare `--port` means 3000, `0` asks the OS for a free port, and a taken port falls back to a free one with the actual address printed to stderr. `--host ADDR` sets the bind address (default `127.0.0.1`) and requires `--port`, because it configures only the HTTP transport. HTTP mode bounds every request (bounded header lines, whole-request read and write deadlines, a 64 MiB in-flight body budget, a fixed worker ceiling that answers 503 when saturated) and rejects non-loopback browser `Origin` headers with 403 per the MCP Streamable HTTP spec; clients that send no `Origin` are unaffected. MCP tools read `leadline.toml` from the analysis root, so `[analysis].exclude`, `[sql]`, and `[vulnerabilities]` behave exactly as they do on the CLI.
 - `skill`: print the canonical agent skill (`integrations/common/leadline-skill/SKILL.md`, baked into the binary).
 
