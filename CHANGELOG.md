@@ -2,6 +2,18 @@
 
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
+## Unreleased
+
+### Added
+
+- Telemetry v2: invocation durations render as a Prometheus histogram with
+  fixed buckets (p50/p90/p99 via `histogram_quantile`), duration rows carry
+  `outcome`, scanner findings break down by `severity`
+  (`leadline_security_findings_total`), parse errors break down by `language`
+  (`leadline_parse_errors_total`), and MCP `check`/`debt` calls record
+  findings like CLI ones. Store schema is now `2`; existing stores reset
+  once on first write.
+
 ## 0.10.1 - 2026-09-17
 
 ### Fixed

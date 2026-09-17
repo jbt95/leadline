@@ -19,8 +19,10 @@ changes, no file is created, and no measurable work is performed.
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `leadline_invocations_total` | counter | `surface` (`cli`/`mcp`), `operation`, `outcome` | One per invocation or tool call. `outcome` is `success`, `gate_failed`, `usage_error`, `incomplete`, `input_error`, or `internal_error` (`gate_failed` mirrors exit `1`; `other` exists as a defensive fallback and no current command produces it). |
-| `leadline_invocation_duration_seconds` | summary | `surface`, `operation` | Wall-clock duration (`_count` and `_sum` samples). |
-| `leadline_findings_total` | counter | `surface`, `operation`, `kind`, `state` | What the gates report. `check`: one `kind` per family (`function`, `parse_error`, `security`, `vulnerability`, `sql`) with `state="violation"` (zero counts never create a row). `debt`: `kind="function"` with `state="new"`/`"resolved"`, and `kind="risk"` with `state="increased"`/`"added"`. |
+| `leadline_invocation_duration_seconds` | histogram | `surface`, `operation`, `outcome` | Wall-clock duration: cumulative `_bucket` samples over fixed bounds (`0.005`–`30` seconds, plus `+Inf`), with `_count` and `_sum`. Percentiles: `histogram_quantile(0.9, sum by (le, operation) (rate(leadline_invocation_duration_seconds_bucket[1h])))`; the mean is still `_sum` / `_count`. |
+| `leadline_findings_total` | counter | `surface`, `operation`, `kind`, `state` | What the gates report. `check`: one `kind` per family (`function`, `parse_error`, `security`, `vulnerability`, `sql`) with `state="violation"` (zero counts never create a row). `debt`: `kind="function"` with `state="new"`/`"resolved"`, and `kind="risk"` with `state="increased"`/`"added"`. Recorded on both surfaces. |
+| `leadline_security_findings_total` | counter | `surface`, `operation`, `kind` (`security`/`vulnerability`/`sql`), `severity` (`unknown`/`low`/`medium`/`high`/`critical`) | Scanner violations by family and severity, from `check` on either surface. |
+| `leadline_parse_errors_total` | counter | `surface`, `operation`, `language` (`java`/`javascript`/`typescript`/`tsx`) | Parse errors by language, from `check` on either surface. |
 | `leadline_debt_functions` | gauge | `surface`, `state` | Standing function debt (`state="existing"`) from the most recent `debt` run. |
 | `leadline_build_info` | gauge | `version`, `metrics_schema` | Constant `1`; identifies the analyzer version that rendered the file. |
 
@@ -34,9 +36,10 @@ person — only counters, durations, and the fixed labels above.
 
 The configured directory holds three files:
 
-- `state.json` — the bounded, schema-versioned store (`schema_version` `1`).
+- `state.json` — the bounded, schema-versioned store (`schema_version` `2`).
   Missing, corrupt, or version-mismatched files start a fresh store instead
-  of failing.
+  of failing. Upgrading from schema `1` resets existing counters once, which
+  Prometheus handles as counter resets.
 - `leadline.prom` — Prometheus text exposition rendered from the store after
   every event. This is what a scraper reads.
 - `state.lock` — the advisory lock file. It is never deleted and holds no
@@ -62,6 +65,7 @@ later improvement. The strongest valid claims are associational:
 - Gate pressure: `sum(increase(leadline_invocations_total{outcome="gate_failed"}[7d]))`
 - Debt flow — the closest thing to impact: `sum by (state) (increase(leadline_findings_total{operation="debt",kind="function",state=~"new|resolved"}[7d]))`
 - Mean invocation time: `sum(rate(leadline_invocation_duration_seconds_sum[1h])) / sum(rate(leadline_invocation_duration_seconds_count[1h]))`
+- Slow invocations (p90 by operation): `histogram_quantile(0.9, sum by (le, operation) (rate(leadline_invocation_duration_seconds_bucket[1h])))`
 - Standing debt: `max(leadline_debt_functions{state="existing"})`
 
 A falling `new` count beside a steady `resolved` count is the shape of
@@ -136,8 +140,9 @@ build panels from the queries above.
 ## MCP
 
 MCP tool calls record `surface="mcp"` invocations, and the `check` tool
-records `gate_failed` when its result reports `passed: false`. Finding counts
-(`leadline_findings_total`) are CLI-only in this version. The server keeps
+records `gate_failed` when its result reports `passed: false`. The `check`
+and `debt` tools record finding counts exactly like their CLI counterparts
+(`leadline_findings_total`, severity and language breakdowns included). The server keeps
 its read-only guarantee for the analyzed repository: when
 `LEADLINE_METRICS_DIR` is set it writes only inside that directory, so keep
 the directory outside the analyzed repository to keep the repository itself
