@@ -535,7 +535,7 @@ fn mcp_tool_calls_and_gate_failures_are_recorded() {
         ),
         1
     );
-    // Finding counts stay CLI-only in this phase.
+    // MCP check calls record findings exactly like CLI ones.
     assert_eq!(
         counter(
             &metrics,
@@ -547,7 +547,7 @@ fn mcp_tool_calls_and_gate_failures_are_recorded() {
                 ("state", "violation"),
             ]
         ),
-        0
+        1
     );
 
     std::fs::remove_dir_all(metrics).unwrap();

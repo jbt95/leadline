@@ -1521,6 +1521,20 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
     let excludes = config_excludes(config.as_ref());
     let mut rows = Vec::new();
     let mut reuse = None;
+    // Parse-error counts per language for metrics; paths never leave.
+    let mut parse_languages: Vec<(&'static str, u64)> = Vec::new();
+    let mut note_parse_errors = |language: &'static str, count: u64| {
+        if count == 0 {
+            return;
+        }
+        match parse_languages
+            .iter_mut()
+            .find(|(known, _)| *known == language)
+        {
+            Some(slot) => slot.1 += count,
+            None => parse_languages.push((language, count)),
+        }
+    };
     if let Some(base) = base {
         let mut report = crate::diff::analyze_changed(Path::new(path), base)
             .map_err(|error| (-32602, error.to_string()))?;
@@ -1551,6 +1565,11 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
                 rows.push(checked_function(&change.path, after, reasons));
             }
         }
+        for diagnostics in &report.parse_errors {
+            if let Some(language) = crate::telemetry::language_label(&diagnostics.path) {
+                note_parse_errors(language, diagnostics.after.len() as u64);
+            }
+        }
     } else if let Some(baseline_path) = baseline_path {
         let baseline = crate::baseline::Baseline::read(Path::new(baseline_path))
             .map_err(|error| (-32602, error.to_string()))?;
@@ -1578,6 +1597,9 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
                 }
             }
         }
+        for file in &report.files {
+            note_parse_errors(file.language.as_str(), file.parse_errors.len() as u64);
+        }
     } else {
         let (report, warm) =
             analyze_read_only(params, config.as_ref(), path, coverage.as_ref(), &excludes)?;
@@ -1590,9 +1612,26 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
                 }
             }
         }
+        for file in &report.files {
+            note_parse_errors(file.language.as_str(), file.parse_errors.len() as u64);
+        }
     }
     let passed = rows.is_empty();
     let (violations, truncated, total) = cap_with_limit(&mut rows, MAX_ENTRIES);
+    // MCP check runs no scanner gates, so only function and parse-error
+    // findings are recorded.
+    crate::telemetry::record_check_findings(
+        "mcp",
+        &crate::telemetry::CheckFindings {
+            functions: total as u64,
+            parse_errors: parse_languages.iter().map(|(_, count)| count).sum(),
+            security: 0,
+            vulnerabilities: 0,
+            sql: 0,
+            severity: &[],
+            languages: &parse_languages,
+        },
+    );
     let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("check"));
     fields.insert("path".to_owned(), serde_json::json!(path));
@@ -2187,6 +2226,7 @@ fn tool_debt(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Stri
     })
     .map_err(|error| (-32602, error.to_string()))?;
     let agent = crate::agent::debt_agent_json(&report);
+    crate::telemetry::record_debt("mcp", &report.summary);
     let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("debt"));
     fields.insert("path".to_owned(), serde_json::json!(path));

@@ -72,6 +72,18 @@ const FAMILIES: &[Family] = &[
         label_keys: &["surface", "operation", "kind", "state"],
     },
     Family {
+        name: "leadline_security_findings_total",
+        help: "Scanner finding violations by operation, family, and severity.",
+        kind: Kind::Counter,
+        label_keys: &["surface", "operation", "kind", "severity"],
+    },
+    Family {
+        name: "leadline_parse_errors_total",
+        help: "Parse errors by operation and language.",
+        kind: Kind::Counter,
+        label_keys: &["surface", "operation", "language"],
+    },
+    Family {
         name: "leadline_debt_functions",
         help: "Standing function debt in the most recent debt run, by state.",
         kind: Kind::Gauge,
@@ -117,6 +129,11 @@ const LABEL_VALUES: &[(&str, &[&str])] = &[
             "existing",
         ],
     ),
+    (
+        "severity",
+        &["unknown", "low", "medium", "high", "critical"],
+    ),
+    ("language", &["java", "javascript", "typescript", "tsx"]),
 ];
 
 /// Hard ceiling per series list; real usage stays in the low hundreds.
@@ -335,23 +352,31 @@ pub fn record_invocation(surface: &str, operation: &str, outcome: &str, duration
     });
 }
 
+/// Totals plus breakdowns for one `check` gate run. Counts only; paths
+/// never reach this struct. `severity` holds `(kind, severity, count)`
+/// triples for the scanner families; `languages` holds `(language, count)`
+/// pairs for parse errors.
+pub struct CheckFindings<'a> {
+    pub functions: u64,
+    pub parse_errors: u64,
+    pub security: u64,
+    pub vulnerabilities: u64,
+    pub sql: u64,
+    pub severity: &'a [(&'a str, &'a str, u64)],
+    pub languages: &'a [(&'a str, u64)],
+}
+
 /// Records the `check` gate's function, parse-error, and scanner finding
 /// counts. Families with no input contribute zero and never create a row.
-pub fn record_check_findings(
-    surface: &str,
-    functions: u64,
-    parse_errors: u64,
-    security: u64,
-    vulnerabilities: u64,
-    sql: u64,
-) {
+/// Unknown severity or language strings are dropped by pruning.
+pub fn record_check_findings(surface: &str, findings: &CheckFindings<'_>) {
     mutate(|state| {
         for (kind, count) in [
-            ("function", functions),
-            ("parse_error", parse_errors),
-            ("security", security),
-            ("vulnerability", vulnerabilities),
-            ("sql", sql),
+            ("function", findings.functions),
+            ("parse_error", findings.parse_errors),
+            ("security", findings.security),
+            ("vulnerability", findings.vulnerabilities),
+            ("sql", findings.sql),
         ] {
             state.increment(
                 "leadline_findings_total",
@@ -364,7 +389,35 @@ pub fn record_check_findings(
                 count,
             );
         }
+        for (kind, level, count) in findings.severity {
+            state.increment(
+                "leadline_security_findings_total",
+                &[
+                    ("surface", surface),
+                    ("operation", "check"),
+                    ("kind", kind),
+                    ("severity", level),
+                ],
+                *count,
+            );
+        }
+        for (language, count) in findings.languages {
+            state.increment(
+                "leadline_parse_errors_total",
+                &[
+                    ("surface", surface),
+                    ("operation", "check"),
+                    ("language", language),
+                ],
+                *count,
+            );
+        }
     });
+}
+
+/// Maps a file path to its metrics language label, if supported.
+pub fn language_label(path: &str) -> Option<&'static str> {
+    crate::parser::detect_language(path).map(|language| language.as_str())
 }
 
 /// Records one `debt` run: new and resolved function debt, increased and added
@@ -940,5 +993,78 @@ mod tests {
         );
         assert!(!sibling.exists());
         std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn security_and_language_breakdowns_render() {
+        let mut state = MetricState::default();
+        state.increment(
+            "leadline_security_findings_total",
+            &[
+                ("surface", "cli"),
+                ("operation", "check"),
+                ("kind", "security"),
+                ("severity", "high"),
+            ],
+            3,
+        );
+        state.increment(
+            "leadline_parse_errors_total",
+            &[
+                ("surface", "mcp"),
+                ("operation", "check"),
+                ("language", "typescript"),
+            ],
+            2,
+        );
+
+        let text = render(&state);
+        assert!(text.contains(
+            "leadline_security_findings_total{kind=\"security\",operation=\"check\",severity=\"high\",surface=\"cli\"} 3"
+        ));
+        assert!(text.contains(
+            "leadline_parse_errors_total{language=\"typescript\",operation=\"check\",surface=\"mcp\"} 2"
+        ));
+    }
+
+    #[test]
+    fn unknown_severity_and_language_are_pruned() {
+        let mut state = MetricState::default();
+        state.increment(
+            "leadline_security_findings_total",
+            &[
+                ("surface", "cli"),
+                ("operation", "check"),
+                ("kind", "security"),
+                ("severity", "pwned"),
+            ],
+            1,
+        );
+        state.increment(
+            "leadline_parse_errors_total",
+            &[
+                ("surface", "cli"),
+                ("operation", "check"),
+                ("language", "/etc/passwd"),
+            ],
+            1,
+        );
+
+        let text = render(&state);
+        assert!(!text.contains("pwned"));
+        assert!(!text.contains("/etc/passwd"));
+
+        state.prune();
+        assert!(state.counters.is_empty());
+    }
+
+    #[test]
+    fn language_label_maps_extensions_only() {
+        assert_eq!(language_label("src/Main.java"), Some("java"));
+        assert_eq!(language_label("app.min.MJS"), Some("javascript"));
+        assert_eq!(language_label("src/index.TS"), Some("typescript"));
+        assert_eq!(language_label("src/view.tsx"), Some("tsx"));
+        assert_eq!(language_label("notes.md"), None);
+        assert_eq!(language_label("Makefile"), None);
     }
 }

@@ -3540,21 +3540,79 @@ impl CommonOptions {
             vulnerabilities,
             sql,
         } = scanners;
+        // Severity counts per scanner family and parse-error counts per
+        // language; fixed label sets only, paths never leave this function.
+        fn push_severity_counts<T>(
+            kind: &'static str,
+            violations: &[T],
+            severity: impl Fn(&T) -> &'static str,
+            out: &mut Vec<(&'static str, &'static str, u64)>,
+        ) {
+            for level in ["unknown", "low", "medium", "high", "critical"] {
+                let count = violations
+                    .iter()
+                    .filter(|violation| severity(violation) == level)
+                    .count() as u64;
+                out.push((kind, level, count));
+            }
+        }
+        let mut severity: Vec<(&str, &str, u64)> = Vec::new();
+        if let Some(security) = security {
+            push_severity_counts(
+                "security",
+                &security.violations,
+                |violation| violation.severity.as_str(),
+                &mut severity,
+            );
+        }
+        if let Some(vulnerabilities) = vulnerabilities {
+            push_severity_counts(
+                "vulnerability",
+                &vulnerabilities.violations,
+                |violation| violation.severity.as_str(),
+                &mut severity,
+            );
+        }
+        if let Some(sql) = sql {
+            push_severity_counts(
+                "sql",
+                &sql.violations,
+                |violation| violation.severity.as_str(),
+                &mut severity,
+            );
+        }
+        let mut languages: Vec<(&str, u64)> = Vec::new();
+        for file in &report.files {
+            let count = file.parse_errors.len() as u64;
+            if count == 0 {
+                continue;
+            }
+            let language = file.language.as_str();
+            match languages.iter_mut().find(|(known, _)| *known == language) {
+                Some(slot) => slot.1 += count,
+                None => languages.push((language, count)),
+            }
+        }
         leadline::telemetry::record_check_findings(
             "cli",
-            report
-                .files
-                .iter()
-                .map(|file| file.functions.len() as u64)
-                .sum(),
-            report
-                .files
-                .iter()
-                .map(|file| file.parse_errors.len() as u64)
-                .sum(),
-            security.map_or(0, |outcome| outcome.violations.len() as u64),
-            vulnerabilities.map_or(0, |outcome| outcome.violations.len() as u64),
-            sql.map_or(0, |outcome| outcome.violations.len() as u64),
+            &leadline::telemetry::CheckFindings {
+                functions: report
+                    .files
+                    .iter()
+                    .map(|file| file.functions.len() as u64)
+                    .sum(),
+                parse_errors: report
+                    .files
+                    .iter()
+                    .map(|file| file.parse_errors.len() as u64)
+                    .sum(),
+                security: security.map_or(0, |outcome| outcome.violations.len() as u64),
+                vulnerabilities: vulnerabilities
+                    .map_or(0, |outcome| outcome.violations.len() as u64),
+                sql: sql.map_or(0, |outcome| outcome.violations.len() as u64),
+                severity: &severity,
+                languages: &languages,
+            },
         );
         let internal = |error: serde_json::Error| CliError::internal(error.to_string());
         if self.agent_json {
