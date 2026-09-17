@@ -18,6 +18,23 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
   or exit codes, and MCP writes go only to the configured metrics directory.
   See `docs/telemetry.md`.
 
+- Optional TypeSafe triage companion (`integrations/typesafe-triage/`): six
+  advisory features over leadline JSON reports — changed/regression triage,
+  repo-wide `check` backlog triage, security/vulnerability triage, debt
+  acceptance review, duplication intent triage, and workflow routing. It is a
+  separate TypeScript tool with no runtime dependencies; leadline itself stays
+  offline and MCP stays network-free. Judgments are composed with
+  deterministic weights and confidence gates, and the output is advisory: it
+  never gates, changes an exit code, or suppresses a finding. The package
+  vendors the MIT anti-slop Oxlint rules and enforces them in CI.
+
+### Changed
+
+- Agent guidance for cheaper sessions: the skill and the MCP server
+  instructions now tell agents to batch independent calls in one block, read
+  each file once per task, and start from a broad call (`analyze --top`,
+  `hotspots`, `risk`, `repo_summary`, `project`) before per-function drills.
+
 ## 0.9.0 - 2026-09-16
 
 ### Added

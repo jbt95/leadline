@@ -1,0 +1,16 @@
+{
+  "findings": [
+    {
+      "ecosystem": "npm",
+      "package": "lodash",
+      "installed_version": "4.17.15",
+      "advisory_id": "GHSA-xxxx-yyyy-zzzz",
+      "severity": "critical",
+      "fixed_versions": ["4.17.21"],
+      "manifest_path": "package.json",
+      "state": "new",
+      "reachable_from_changed": true,
+      "changed_imports": [{ "path": "src/report.ts", "package": "lodash" }]
+    }
+  ]
+}

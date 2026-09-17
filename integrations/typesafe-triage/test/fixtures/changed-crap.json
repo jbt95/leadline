@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "metric_profile": "default",
+  "analyzer_version": "0.9.0",
+  "base": "origin/main",
+  "functions": [
+    {
+      "path": "src/coverage-only.ts",
+      "name": "uncoveredBranch",
+      "before": { "metrics": { "cognitive": 4, "cyclomatic": 4, "max_nesting": 2, "crap": 6.0 } },
+      "after": { "start_line": 10, "metrics": { "cognitive": 4, "cyclomatic": 4, "max_nesting": 2, "crap": 42.0 } }
+    }
+  ]
+}

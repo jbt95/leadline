@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "metric_profile": "default",
+  "analyzer_version": "0.9.0",
+  "files": [
+    {
+      "path": "src/orchestrator.ts",
+      "language": "typescript",
+      "functions": [
+        {
+          "name": "dispatch",
+          "start_line": 40,
+          "end_line": 220,
+          "metrics": { "cognitive": 34, "cyclomatic": 21, "max_nesting": 6, "crap": 55.5 }
+        },
+        {
+          "name": "retry",
+          "start_line": 222,
+          "end_line": 260,
+          "metrics": { "cognitive": 16, "cyclomatic": 11, "max_nesting": 4, "crap": 31.0 }
+        }
+      ],
+      "parse_errors": []
+    },
+    {
+      "path": "src/broken.ts",
+      "language": "typescript",
+      "functions": [],
+      "parse_errors": [
+        {
+          "kind": "error",
+          "start_line": 3,
+          "start_column": 1,
+          "end_line": 3,
+          "end_column": 9
+        }
+      ]
+    }
+  ]
+}

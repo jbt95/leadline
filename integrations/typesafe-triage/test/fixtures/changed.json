@@ -1,0 +1,32 @@
+{
+  "schema_version": 2,
+  "metric_profile": "default",
+  "analyzer_version": "0.9.0",
+  "base": "origin/main",
+  "functions": [
+    {
+      "path": "src/payments/reconcile.ts",
+      "name": "reconcile",
+      "before": { "metrics": { "cognitive": 12, "cyclomatic": 8, "max_nesting": 3, "crap": 18.0 } },
+      "after": { "start_line": 120, "metrics": { "cognitive": 31, "cyclomatic": 18, "max_nesting": 5, "crap": 42.0 } }
+    },
+    {
+      "path": "scripts/legacy-import.js",
+      "name": "importRows",
+      "before": { "metrics": { "cognitive": 6, "cyclomatic": 5, "max_nesting": 2, "crap": null } },
+      "after": { "start_line": 12, "metrics": { "cognitive": 9, "cyclomatic": 6, "max_nesting": 3, "crap": null } }
+    },
+    {
+      "path": "src/util/format.ts",
+      "name": "formatCents",
+      "before": { "metrics": { "cognitive": 2, "cyclomatic": 3, "max_nesting": 1, "crap": 4.0 } },
+      "after": { "start_line": 5, "metrics": { "cognitive": 2, "cyclomatic": 3, "max_nesting": 1, "crap": 4.0 } }
+    },
+    {
+      "path": "src/added.ts",
+      "name": "brandNew",
+      "before": null,
+      "after": { "start_line": 1, "metrics": { "cognitive": 4, "cyclomatic": 3, "max_nesting": 2, "crap": null } }
+    }
+  ]
+}

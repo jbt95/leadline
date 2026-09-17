@@ -36,6 +36,12 @@ Shortest post-edit commands (all deterministic, JSON with `--format agent-json`)
 - Snapshot without Git history: `leadline baseline . --output <file>`, then `leadline check . --baseline <file> --regressions`.
 - Full project report: `leadline analyze . --format agent-json --top 30 --sort-by cognitive` for the hotspot list, `leadline risk . --format agent-json` for file risk ranking, then `leadline impact <file> --format agent-json` on the riskiest files. `leadline check` is a gate, not a report: it needs at least one threshold flag (e.g. `--cognitive 15`), `--regressions` with `--base`/`--baseline`, or a scanner/SQL input (`--sarif`, `--osv`/`--trivy`, `--sql`), and errors without them.
 
+## Efficiency
+
+- Batch independent calls in one block instead of serializing them across turns.
+- Read each file once per task and reuse the result; use `--explain` output for follow-up questions about a flagged function.
+- Prefer one broad call (`analyze --top`, `hotspots`, `risk`) before per-function drills.
+
 ## Rules
 
 1. Metrics are signals, not objectives.

@@ -1,0 +1,25 @@
+{
+  "name": "@leadline/typesafe-triage",
+  "version": "0.9.0",
+  "private": true,
+  "description": "Companion triage for leadline reports: TypeSafe/Jev judgments composed into ranked worklists",
+  "type": "module",
+  "bin": {
+    "leadline-triage": "./bin/triage.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "check": "npm run typecheck && npm run lint",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint",
+    "test": "node --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.78.0",
+    "@types/node": "22.20.2",
+    "oxlint": "1.78.0",
+    "typescript": "5.9.2"
+  }
+}

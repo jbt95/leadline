@@ -160,6 +160,20 @@ HTTP limits apply to every request: 32 MiB body, 64 KiB of headers, an 8 KiB lin
 
 The `analyze` and `check` tools accept an optional `index` directory pointing at a repository index built by `leadline index`. Repeated post-edit calls then reuse unchanged file metrics instead of recomputing them. The server only ever reads the index and will never create or modify one. When the argument is absent the configured `[index].path` is used, and an unusable or missing index silently degrades to a full analysis.
 
+## Triage companion (optional, network)
+
+`integrations/typesafe-triage/` is an optional companion that ranks leadline
+reports with [TypeSafe](https://docs.typesafe.ai) judgments (role, inherent
+complexity, attention) and prints a prioritized worklist for changed-code,
+repo-wide `check`, scanner, debt, duplication, and workflow-routing triage. It
+runs as a separate TypeScript tool with no runtime dependencies — dev
+dependencies cover typechecking and the vendored MIT
+[anti-slop](https://github.com/dmmulroy/anti-slop) Oxlint rules — and sends
+only report metadata — paths, function names, metrics, scanner IDs, or the
+free-form request text for `route` — never source text. The output is advisory: it cannot gate, change exit codes, or
+suppress a finding, and the leadline binary and MCP server remain offline and
+network-free. See `integrations/typesafe-triage/README.md`.
+
 ## Skill principles
 
 - Report numbers with file, line, and threshold context. Never bare scores.

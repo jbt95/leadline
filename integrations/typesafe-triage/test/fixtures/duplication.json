@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "analyzer_version": "0.9.0",
+  "profile": "tokens",
+  "complete": true,
+  "total_tokens": 1200,
+  "comparisons": 50,
+  "duplicated_lines": 80,
+  "groups": [
+    {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "language": "typescript",
+      "token_count": 318,
+      "occurrences": [
+        { "path": "src/a.ts", "start_line": 1, "end_line": 29, "token_count": 318, "duplicated_lines": 29 },
+        { "path": "src/b.ts", "start_line": 1, "end_line": 29, "token_count": 318, "duplicated_lines": 29 }
+      ]
+    },
+    {
+      "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "language": "typescript",
+      "token_count": 150,
+      "occurrences": [
+        { "path": "tests/one.test.ts", "start_line": 1, "end_line": 12, "token_count": 150, "duplicated_lines": 12 },
+        { "path": "tests/two.test.ts", "start_line": 1, "end_line": 12, "token_count": 150, "duplicated_lines": 12 }
+      ]
+    }
+  ],
+  "diagnostics": []
+}

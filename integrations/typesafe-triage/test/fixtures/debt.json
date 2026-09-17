@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "analyzer_version": "0.9.0",
+  "base": "origin/main",
+  "summary": {
+    "new": 1,
+    "existing": 4,
+    "resolved": 2,
+    "unknown": 0,
+    "risk_increased": 1,
+    "risk_decreased": 0,
+    "risk_added": 0,
+    "risk_removed": 0
+  },
+  "findings": [
+    {
+      "path": "src/billing/invoice.ts",
+      "name": "renderInvoice",
+      "dimension": "cognitive",
+      "threshold": 15.0,
+      "before": 12.0,
+      "after": 22.0,
+      "status": "new"
+    },
+    {
+      "path": "src/billing/legacy.ts",
+      "name": "oldPath",
+      "dimension": "cyclomatic",
+      "threshold": 10.0,
+      "before": 14.0,
+      "after": 14.0,
+      "status": "existing"
+    },
+    {
+      "path": "src/util/old.ts",
+      "name": "cleanup",
+      "dimension": "cognitive",
+      "threshold": 15.0,
+      "before": 20.0,
+      "after": 9.0,
+      "status": "resolved"
+    }
+  ],
+  "risk_changes": [
+    {
+      "path": "src/core/engine.ts",
+      "status": "increased",
+      "before_score": 0.42,
+      "after_score": 0.66,
+      "delta": 0.24,
+      "components": [
+        { "component": "churn", "before": 0.3, "after": 0.6, "delta": 0.3 }
+      ]
+    },
+    {
+      "path": "src/ui/view.ts",
+      "status": "decreased",
+      "before_score": 0.5,
+      "after_score": 0.4,
+      "delta": -0.1,
+      "components": []
+    }
+  ]
+}

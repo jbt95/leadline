@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "tool": "codeql",
+      "rule_id": "js/sql-injection",
+      "severity": "high",
+      "path": "src/api/users.ts",
+      "start_line": 88,
+      "end_line": 92,
+      "state": "new",
+      "changed": true,
+      "risk_score": 0.71,
+      "fan_in": 5,
+      "blast_radius": 12,
+      "reason": "high severity in a changed file"
+    },
+    {
+      "tool": "codeql",
+      "rule_id": "js/hardcoded-credentials",
+      "severity": "medium",
+      "path": "scripts/seed.js",
+      "start_line": 4,
+      "end_line": 4,
+      "state": "existing",
+      "changed": false,
+      "reason": "severity threshold"
+    }
+  ]
+}
