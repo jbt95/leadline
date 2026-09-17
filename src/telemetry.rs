@@ -27,7 +27,7 @@ use std::time::Duration;
 pub const METRICS_DIR_VAR: &str = "LEADLINE_METRICS_DIR";
 
 /// Version of the on-disk store; a mismatch starts a fresh store.
-pub const STATE_SCHEMA_VERSION: u32 = 1;
+pub const STATE_SCHEMA_VERSION: u32 = 2;
 
 const STATE_FILE_NAME: &str = "state.json";
 const PROM_FILE_NAME: &str = "leadline.prom";
@@ -63,7 +63,7 @@ const FAMILIES: &[Family] = &[
         name: "leadline_invocation_duration_seconds",
         help: "Wall-clock duration of leadline invocations in seconds.",
         kind: Kind::Summary,
-        label_keys: &["surface", "operation"],
+        label_keys: &["surface", "operation", "outcome"],
     },
     Family {
         name: "leadline_findings_total",
@@ -122,6 +122,12 @@ const LABEL_VALUES: &[(&str, &[&str])] = &[
 /// Hard ceiling per series list; real usage stays in the low hundreds.
 const MAX_SERIES: usize = 4096;
 
+/// Fixed duration histogram buckets (seconds). Chosen for sub-millisecond
+/// version probes up to multi-second whole-repo checks.
+const DURATION_BUCKETS: &[f64] = &[
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
+];
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Row {
     metric: String,
@@ -135,6 +141,7 @@ struct SummaryRow {
     labels: BTreeMap<String, String>,
     count: u64,
     sum: f64,
+    buckets: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -182,7 +189,8 @@ impl MetricState {
         }
     }
 
-    /// Records one observation for a summary family (count plus sum).
+    /// Records one observation for a histogram family (count, sum, and
+    /// cumulative buckets).
     fn observe(&mut self, metric: &str, labels: &[(&str, &str)], value: f64) {
         let labels = labels_map(labels);
         if let Some(row) = self
@@ -192,12 +200,27 @@ impl MetricState {
         {
             row.count = row.count.saturating_add(1);
             row.sum += value;
+            if row.buckets.len() != DURATION_BUCKETS.len() {
+                row.buckets.resize(DURATION_BUCKETS.len(), 0);
+            }
+            for (slot, bound) in row.buckets.iter_mut().zip(DURATION_BUCKETS.iter()) {
+                if value <= *bound {
+                    *slot = slot.saturating_add(1);
+                }
+            }
         } else {
+            let mut buckets = vec![0u64; DURATION_BUCKETS.len()];
+            for (slot, bound) in buckets.iter_mut().zip(DURATION_BUCKETS.iter()) {
+                if value <= *bound {
+                    *slot = 1;
+                }
+            }
             self.summaries.push(SummaryRow {
                 metric: metric.to_owned(),
                 labels,
                 count: 1,
                 sum: value,
+                buckets,
             });
         }
     }
@@ -241,7 +264,9 @@ fn valid_row(row: &Row) -> bool {
 }
 
 fn valid_summary_row(row: &SummaryRow) -> bool {
-    family_for(&row.metric).is_some_and(|family| valid_labels(family, &row.labels))
+    family_for(&row.metric).is_some_and(|family| {
+        valid_labels(family, &row.labels) && row.buckets.len() == DURATION_BUCKETS.len()
+    })
 }
 
 /// A label map fits a family when its key set matches exactly, every
@@ -300,7 +325,11 @@ pub fn record_invocation(surface: &str, operation: &str, outcome: &str, duration
         );
         state.observe(
             "leadline_invocation_duration_seconds",
-            &[("surface", surface), ("operation", operation)],
+            &[
+                ("surface", surface),
+                ("operation", operation),
+                ("outcome", outcome),
+            ],
             duration.as_secs_f64(),
         );
     });
@@ -513,21 +542,37 @@ fn render(state: &MetricState) -> String {
                 let mut rows: Vec<&SummaryRow> = state
                     .summaries
                     .iter()
-                    .filter(|row| row.metric == family.name && valid_labels(family, &row.labels))
+                    .filter(|row| row.metric == family.name && valid_summary_row(row))
                     .collect();
                 if rows.is_empty() {
                     continue;
                 }
                 rows.sort_by(|left, right| left.labels.cmp(&right.labels));
                 output.push_str(&format!(
-                    "# HELP {} {}\n# TYPE {} summary\n",
+                    "# HELP {} {}\n# TYPE {} histogram\n",
                     family.name, family.help, family.name
                 ));
                 for row in rows {
                     let labels = labels_text(&row.labels);
+                    for (bound, count) in DURATION_BUCKETS.iter().zip(row.buckets.iter()) {
+                        output.push_str(&format!(
+                            "{}_bucket{} {}\n",
+                            family.name,
+                            with_le(&labels, &bound.to_string()),
+                            count
+                        ));
+                    }
                     output.push_str(&format!(
-                        "{}_sum{} {}\n{}_count{} {}\n",
-                        family.name, labels, row.sum, family.name, labels, row.count
+                        "{}_bucket{} {}\n{}_sum{} {}\n{}_count{} {}\n",
+                        family.name,
+                        with_le(&labels, "+Inf"),
+                        row.count,
+                        family.name,
+                        labels,
+                        row.sum,
+                        family.name,
+                        labels,
+                        row.count
                     ));
                 }
             }
@@ -560,6 +605,15 @@ fn labels_text(labels: &BTreeMap<String, String>) -> String {
         text.push('"');
     }
     text.push('}');
+    text
+}
+
+fn with_le(base: &str, le: &str) -> String {
+    if base.is_empty() {
+        return format!("{{le=\"{le}\"}}");
+    }
+    let mut text = base[..base.len() - 1].to_owned();
+    text.push_str(&format!(",le=\"{le}\"}}"));
     text
 }
 
@@ -634,7 +688,8 @@ mod tests {
         let text = render(&state);
         assert!(!text.contains("attacker_metric"));
         assert!(text.contains(&format!(
-            "leadline_build_info{{metrics_schema=\"1\",version=\"{}\"}} 1",
+            "leadline_build_info{{metrics_schema=\"{}\",version=\"{}\"}} 1",
+            STATE_SCHEMA_VERSION,
             env!("CARGO_PKG_VERSION")
         )));
         assert!(text.ends_with('\n'));
@@ -711,18 +766,155 @@ mod tests {
         for value in [0.5, 0.25] {
             state.observe(
                 "leadline_invocation_duration_seconds",
-                &[("surface", "cli"), ("operation", "check")],
+                &[
+                    ("surface", "cli"),
+                    ("operation", "check"),
+                    ("outcome", "success"),
+                ],
                 value,
             );
         }
 
         let text = render(&state);
         assert!(text.contains(
-            "leadline_invocation_duration_seconds_sum{operation=\"check\",surface=\"cli\"} 0.75"
+            "leadline_invocation_duration_seconds_sum{operation=\"check\",outcome=\"success\",surface=\"cli\"} 0.75"
         ));
         assert!(text.contains(
-            "leadline_invocation_duration_seconds_count{operation=\"check\",surface=\"cli\"} 2"
+            "leadline_invocation_duration_seconds_count{operation=\"check\",outcome=\"success\",surface=\"cli\"} 2"
         ));
+    }
+
+    #[test]
+    fn duration_buckets_are_cumulative() {
+        let mut state = MetricState::default();
+        state.observe(
+            "leadline_invocation_duration_seconds",
+            &[
+                ("surface", "cli"),
+                ("operation", "check"),
+                ("outcome", "success"),
+            ],
+            0.02,
+        );
+
+        let row = &state.summaries[0];
+        // 0.02 lands in the first bound >= value (0.025 at index 2) and all higher.
+        assert_eq!(row.buckets.len(), DURATION_BUCKETS.len());
+        assert_eq!(row.buckets[0], 0);
+        assert_eq!(row.buckets[1], 0);
+        for slot in row.buckets.iter().skip(2) {
+            assert_eq!(*slot, 1);
+        }
+
+        let text = render(&state);
+        let base = "{operation=\"check\",outcome=\"success\",surface=\"cli\"}";
+        assert!(text.contains(&format!(
+            "leadline_invocation_duration_seconds_bucket{base_without} 0\n",
+            base_without = with_le(base, "0.01")
+        )));
+        assert!(text.contains(&format!(
+            "leadline_invocation_duration_seconds_bucket{base_without} 1\n",
+            base_without = with_le(base, "0.025")
+        )));
+    }
+
+    #[test]
+    fn duration_plus_inf_equals_count() {
+        let mut state = MetricState::default();
+        for value in [0.001, 0.5, 60.0] {
+            state.observe(
+                "leadline_invocation_duration_seconds",
+                &[
+                    ("surface", "cli"),
+                    ("operation", "check"),
+                    ("outcome", "success"),
+                ],
+                value,
+            );
+        }
+
+        // 60.0 exceeds every finite bucket, so only +Inf covers it.
+        let row = &state.summaries[0];
+        assert_eq!(row.count, 3);
+        assert_eq!(*row.buckets.last().unwrap(), 2);
+
+        let text = render(&state);
+        let base = "{operation=\"check\",outcome=\"success\",surface=\"cli\"}";
+        assert!(text.contains(&format!(
+            "leadline_invocation_duration_seconds_bucket{} 3\n",
+            with_le(base, "+Inf")
+        )));
+        assert!(text.contains(&format!(
+            "leadline_invocation_duration_seconds_count{base} 3"
+        )));
+    }
+
+    #[test]
+    fn duration_outcome_splits_rows() {
+        let mut state = MetricState::default();
+        for outcome in ["success", "gate_failed"] {
+            state.observe(
+                "leadline_invocation_duration_seconds",
+                &[
+                    ("surface", "cli"),
+                    ("operation", "check"),
+                    ("outcome", outcome),
+                ],
+                0.1,
+            );
+        }
+
+        assert_eq!(state.summaries.len(), 2);
+        let text = render(&state);
+        assert!(text.contains("outcome=\"success\""));
+        assert!(text.contains("outcome=\"gate_failed\""));
+        assert_eq!(
+            text.matches("leadline_invocation_duration_seconds_count{")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn duration_renders_histogram_shape() {
+        let mut state = MetricState::default();
+        state.observe(
+            "leadline_invocation_duration_seconds",
+            &[
+                ("surface", "cli"),
+                ("operation", "check"),
+                ("outcome", "success"),
+            ],
+            0.1,
+        );
+
+        let text = render(&state);
+        assert!(text.contains("# TYPE leadline_invocation_duration_seconds histogram"));
+        assert!(!text.contains("# TYPE leadline_invocation_duration_seconds summary"));
+        assert!(text.contains("leadline_invocation_duration_seconds_bucket{"));
+        assert!(text.contains("leadline_invocation_duration_seconds_sum{"));
+        assert!(text.contains("leadline_invocation_duration_seconds_count{"));
+        assert!(text.contains("le=\"+Inf\""));
+    }
+
+    #[test]
+    fn v1_state_is_dropped_by_read_state() {
+        let directory =
+            std::env::temp_dir().join(format!("leadline-telemetry-v1-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("state.json"),
+            br#"{"schema_version":1,"counters":[],"summaries":[{"metric":"leadline_invocation_duration_seconds","labels":{"surface":"cli","operation":"check"},"count":2,"sum":0.75}],"gauges":[]}"#,
+        )
+        .unwrap();
+
+        let state = read_state(&directory);
+        assert_eq!(state.schema_version, STATE_SCHEMA_VERSION);
+        assert!(state.summaries.is_empty());
+        assert!(state.counters.is_empty());
+
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 
     /// A pre-created symlink at the temporary path must be unlinked, not

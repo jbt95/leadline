@@ -139,7 +139,7 @@ fn records_cli_invocations_outcomes_and_findings() {
         1
     );
     assert!(text.contains(&format!(
-        "leadline_build_info{{metrics_schema=\"1\",version=\"{}\"}} 1",
+        "leadline_build_info{{metrics_schema=\"2\",version=\"{}\"}} 1",
         env!("CARGO_PKG_VERSION")
     )));
     assert!(text.ends_with('\n'));
@@ -369,7 +369,7 @@ fn corrupt_state_recovers_without_changing_the_command() {
         String::from_utf8(output.stdout).unwrap().trim(),
         concat!("leadline ", env!("CARGO_PKG_VERSION"))
     );
-    assert_eq!(state(&metrics)["schema_version"], 1);
+    assert_eq!(state(&metrics)["schema_version"], 2);
     assert_eq!(
         counter(
             &metrics,
@@ -391,7 +391,7 @@ fn corrupt_state_recovers_without_changing_the_command() {
     .unwrap();
     let output = run_with(&metrics, &["version"]);
     assert!(output.status.success());
-    assert_eq!(state(&metrics)["schema_version"], 1);
+    assert_eq!(state(&metrics)["schema_version"], 2);
     assert_eq!(
         counter(
             &metrics,
