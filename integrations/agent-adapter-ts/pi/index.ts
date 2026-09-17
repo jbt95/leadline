@@ -24,7 +24,7 @@ export function registerLeadlineExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "leadline_changed",
     label: "Leadline Changed",
-    description: "Analyze functions changed relative to a git base revision and report complexity regressions.",
+    description: "Call after editing Java/JS/TS/TSX, fixing bugs, refactoring, or before committing to spot complexity regressions vs a git base.",
     parameters: Type.Object({
       base: Type.Optional(Type.String({ description: "Git revision to compare against (default HEAD~1)" })),
       path: Type.Optional(Type.String({ description: "Only analyze this path" })),
@@ -35,7 +35,7 @@ export function registerLeadlineExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "leadline_function",
     label: "Leadline Function",
-    description: "Analyze one function's complexity metrics (cognitive, cyclomatic, CRAP, coverage).",
+    description: "Call when a flagged function needs inspection; shows cognitive, cyclomatic, CRAP, and coverage for one function.",
     parameters: Type.Object({
       file: Type.String({ description: "Source file path" }),
       name: Type.String({ description: "Function name" }),
@@ -46,7 +46,7 @@ export function registerLeadlineExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "leadline_gate",
     label: "Leadline Gate",
-    description: "Run the leadline quality gate over a path and list functions above the thresholds.",
+    description: "Call before committing or in CI to gate changed code against quality thresholds (warn mode, never blocks).",
     parameters: Type.Object({
       path: Type.Optional(Type.String({ description: "Path to check (default .)" })),
     }),
@@ -56,7 +56,7 @@ export function registerLeadlineExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "leadline_secret_check",
     label: "Leadline Secret Check",
-    description: "Scan worktree or staged files for secrets via the shared gate. Fails the call on findings or an unavailable scanner.",
+    description: "Call only when asked to scan for secrets; checks worktree or staged files via the shared gate. Fails the call on findings or an unavailable scanner.",
     parameters: Type.Object({
       root: Type.Optional(Type.String({ description: "Project root to scan (default .)" })),
       mode: Type.Optional(Type.Union([Type.Literal("worktree"), Type.Literal("staged")], { description: "Scan scope (default worktree)" })),

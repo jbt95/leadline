@@ -32,7 +32,7 @@ function text(run: () => Promise<string>): Promise<string> {
 export const tools = [
   {
     name: "leadline_changed",
-    description: "Analyze changed functions vs git base for complexity regressions.",
+    description: "Call after editing Java/JS/TS/TSX, fixing bugs, refactoring, or before committing to spot complexity regressions vs a git base.",
     parameters: {
       base: "git base revision, default HEAD~1",
       path: "limit analysis to this path",
@@ -43,7 +43,7 @@ export const tools = [
   },
   {
     name: "leadline_function",
-    description: "Show metrics for one function.",
+    description: "Call when a flagged function needs inspection; shows cognitive, cyclomatic, CRAP, and coverage for one function.",
     parameters: { path: "source file", name: "function name" },
     execute({ path, name }: LeadlineArgs) {
       return text(() => runFunction({ file: path ?? "", name: name ?? "" }));
@@ -51,7 +51,7 @@ export const tools = [
   },
   {
     name: "leadline_gate",
-    description: "Quality-gate check over changed code (warn mode, never blocks).",
+    description: "Call before committing or in CI to gate changed code against quality thresholds (warn mode, never blocks).",
     parameters: {},
     execute() {
       return text(() => runCheck({}));
@@ -59,7 +59,7 @@ export const tools = [
   },
   {
     name: "leadline_secret_check",
-    description: "Scan worktree or staged files for secrets via the shared gate (warn mode, never blocks).",
+    description: "Call only when asked to scan for secrets; checks worktree or staged files via the shared gate (warn mode, never blocks).",
     parameters: { mode: "worktree|staged, default worktree" },
     execute({ mode = "worktree" }: LeadlineArgs) {
       return text(() =>

@@ -53,7 +53,7 @@ export default Plugin.define({
     await ctx.tool.transform((editor) => {
       editor.add({
         name: "leadline_changed",
-        description: "Analyze changed functions vs a git base revision for complexity regressions.",
+        description: "Call after editing Java/JS/TS/TSX, fixing bugs, refactoring, or before committing to spot complexity regressions vs a git base.",
         input: {
           type: "object",
           properties: {
@@ -71,7 +71,7 @@ export default Plugin.define({
       });
       editor.add({
         name: "leadline_function",
-        description: "Show complexity metrics for one function (cognitive, cyclomatic, CRAP, coverage).",
+        description: "Call when a flagged function needs inspection; shows cognitive, cyclomatic, CRAP, and coverage for one function.",
         input: {
           type: "object",
           properties: {
@@ -89,7 +89,7 @@ export default Plugin.define({
       });
       editor.add({
         name: "leadline_gate",
-        description: "Run the leadline quality gate over the project and list functions above the thresholds.",
+        description: "Call before committing or in CI to gate changed code against quality thresholds (warn mode, never blocks).",
         input: { type: "object", properties: {}, additionalProperties: false },
         output: { type: "string" },
         execute: async (_input, context) => {
@@ -99,7 +99,7 @@ export default Plugin.define({
       });
       editor.add({
         name: "leadline_secret_check",
-        description: "Scan worktree or staged files for secrets via the shared gate (warn mode, never blocks).",
+        description: "Call only when asked to scan for secrets; checks worktree or staged files via the shared gate (warn mode, never blocks).",
         input: {
           type: "object",
           properties: {
