@@ -10,8 +10,8 @@
 //!
 //! Recording is best-effort. Any I/O, lock, or serialization failure is
 //! ignored, so metrics can never change command output, exit codes, or MCP
-//! responses, and a concurrent invocation that cannot take the store lock
-//! within a short budget drops its sample instead of waiting.
+//! responses. Concurrent invocations block briefly on the store lock so no
+//! sample is lost.
 //!
 //! The store is per-directory and cumulative. Deleting it resets every
 //! counter, which Prometheus treats as a normal counter reset.
@@ -32,8 +32,6 @@ pub const STATE_SCHEMA_VERSION: u32 = 2;
 const STATE_FILE_NAME: &str = "state.json";
 const PROM_FILE_NAME: &str = "leadline.prom";
 const LOCK_FILE_NAME: &str = "state.lock";
-const LOCK_ATTEMPTS: u32 = 8;
-const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 /// One metric family the store knows how to render. Unknown families read
 /// from a tampered store are dropped rather than rendered.
@@ -482,17 +480,9 @@ fn update_store(directory: &Path, update: impl FnOnce(&mut MetricState)) -> std:
         .write(true)
         .truncate(false)
         .open(&lock_path)?;
-    let mut attempts = 0;
-    loop {
-        match lock.try_lock() {
-            Ok(()) => break,
-            Err(_) if attempts < LOCK_ATTEMPTS => {
-                attempts += 1;
-                std::thread::sleep(LOCK_RETRY_DELAY);
-            }
-            Err(_) => return Err(std::io::Error::other("metrics store lock is busy")),
-        }
-    }
+    // Block so concurrent invocations queue instead of losing samples. The
+    // lock releases when `lock` drops, so a killed holder cannot wedge us.
+    lock.lock()?;
     let mut state = read_state(directory);
     update(&mut state);
     state.prune();
