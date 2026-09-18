@@ -442,6 +442,45 @@ fn gate_violations_respect_minimum_new_and_changed() {
 }
 
 #[test]
+fn gitleaks_findings_without_severity_default_to_high() {
+    let root = temporary_directory();
+    // Real gitleaks SARIF: no `level`, no `security-severity` property.
+    let body = r#"{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "gitleaks"}}, "results": [{"ruleId": "slack-bot-token", "message": {"text": "x"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/a.ts"}, "region": {"startLine": 1}}}]}]}]}"#;
+    let current = [write_temp(&root, "gitleaks.sarif", body.as_bytes())];
+    let report = read_security_reports(SecurityInputs {
+        current: &current,
+        baseline: &[],
+    })
+    .unwrap();
+    assert_eq!(report.findings.len(), 1);
+    assert_eq!(report.findings[0].severity, SecuritySeverity::High);
+    // The secret gate must trip: unknown severities never violate, so
+    // without this default the gate could flag but never block.
+    let gate = SecurityGate {
+        minimum: SecuritySeverity::Low,
+        new_only: false,
+        changed_only: false,
+    };
+    assert_eq!(leadline::security::gate_violations(&report, &gate).len(), 1);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn unleveled_findings_from_other_tools_stay_unknown() {
+    let root = temporary_directory();
+    let body = r#"{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "other"}}, "results": [{"ruleId": "r", "message": {"text": "x"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/a.ts"}, "region": {"startLine": 1}}}]}]}]}"#;
+    let current = [write_temp(&root, "other.sarif", body.as_bytes())];
+    let report = read_security_reports(SecurityInputs {
+        current: &current,
+        baseline: &[],
+    })
+    .unwrap();
+    assert_eq!(report.findings.len(), 1);
+    assert_eq!(report.findings[0].severity, SecuritySeverity::Unknown);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn agent_json_caps_rows_with_truncated_flag() {
     let report = SecurityReport {
         findings: vec![

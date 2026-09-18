@@ -541,10 +541,10 @@ fn parse_result(
         if mapped != SecuritySeverity::Unknown {
             mapped
         } else {
-            level_severity(result.get("level").and_then(|level| level.as_str()))
+            tool_default_severity(tool, result)
         }
     } else {
-        level_severity(result.get("level").and_then(|level| level.as_str()))
+        tool_default_severity(tool, result)
     };
     let (normalized_path, start_line, end_line) = match location(result) {
         Some((uri, start, end)) => (Some(normalize_uri(uri, path)?), start, end),
@@ -777,6 +777,25 @@ pub(crate) fn severity_from_score(score: f64) -> SecuritySeverity {
         SecuritySeverity::High
     } else {
         SecuritySeverity::Critical
+    }
+}
+
+/// Severity fallback when a result carries no severity property and its
+/// rule carries none either: the SARIF level mapping applies when a level
+/// is present, otherwise gitleaks detections default to high. Gitleaks
+/// emits neither `level` nor `security-severity`, and a detected secret is
+/// a concrete credential exposure; without this default its findings stay
+/// unknown, unknown severities sit below every gate threshold, and the
+/// secret gate can flag but never block.
+fn tool_default_severity(tool: &str, result: &serde_json::Value) -> SecuritySeverity {
+    let level = level_severity(result.get("level").and_then(|level| level.as_str()));
+    if level != SecuritySeverity::Unknown {
+        return level;
+    }
+    if tool.eq_ignore_ascii_case("gitleaks") {
+        SecuritySeverity::High
+    } else {
+        SecuritySeverity::Unknown
     }
 }
 

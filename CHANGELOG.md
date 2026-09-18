@@ -35,6 +35,13 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 - The Claude Code `Stop` hook no longer runs the secret scan on every turn;
   secret gating stays in the pre-commit staged hook and the on-demand check.
 
+### Fixed
+
+- Gitleaks findings without a severity signal now default to high instead of
+  unknown, so the secret gate blocks on findings at `--fail-on-severity low`
+  and above. Previously unknown severities sat below every threshold and the
+  gate could flag but never block.
+
 ## 0.13.2 - 2026-09-18
 
 ### Fixed
