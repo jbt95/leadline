@@ -50,11 +50,66 @@ fn build_with_analysis(
     request: &ProjectRequest,
 ) -> Result<(Project, AnalysisReport, SnapshotContext)> {
     let (context, snapshot) = load(&request.path, request.target.clone())?;
-    let analysis = crate::analyze_sources(&snapshot.entries, request.coverage.as_ref())?;
-    let graph = analyze_dependencies_from_sources(&snapshot.entries)?;
+    let (mut analysis, graph, duplication) =
+        bundle_parts(&snapshot.entries, &context.config.duplication)?;
+    if let Some(coverage) = request.coverage.as_ref() {
+        for file in &mut analysis.files {
+            coverage.apply(file);
+        }
+    }
     let mut budget = InputBudget::new();
-    let project = build_from_parts(&context, &snapshot, &analysis, &graph, request, &mut budget)?;
+    let project = build_from_parts(
+        &context,
+        &snapshot,
+        &analysis,
+        &graph,
+        &duplication,
+        request,
+        &mut budget,
+    )?;
     Ok((project, analysis, context))
+}
+
+/// One parse per entry feeds metrics, dependencies, and clone tokens.
+fn bundle_parts(
+    entries: &[crate::source_snapshot::SourceEntry],
+    config: &crate::config::DuplicationConfig,
+) -> Result<(
+    AnalysisReport,
+    crate::graph::DependencyReport,
+    crate::duplication::DuplicationReport,
+)> {
+    let bundles = crate::parser::parse_bundles(entries)?;
+    let excluded = crate::duplication::ExcludeMatcher::new(&config.excludes);
+    let mut files = Vec::with_capacity(bundles.len());
+    let mut dependencies = Vec::with_capacity(bundles.len());
+    let mut tokenized = crate::duplication::TokenizedFiles::default();
+    for (path, bundle) in bundles {
+        if !excluded.matches(&path) {
+            if bundle.analysis.parse_errors.is_empty() {
+                tokenized.total_tokens += bundle.tokens.tokens.len();
+                tokenized.files.push((path.clone(), bundle.tokens));
+            } else {
+                tokenized
+                    .diagnostics
+                    .push(crate::duplication::DuplicationDiagnostic {
+                        path: path.clone(),
+                        reason: "parse errors exclude the file from clone candidates".to_owned(),
+                    });
+            }
+        }
+        dependencies.push((path, bundle.dependencies));
+        files.push(bundle.analysis);
+    }
+    let analysis = crate::analysis_report(files);
+    let graph = crate::graph::dependency_report_from_parsed(dependencies);
+    let duplication = crate::duplication::detect_tokenized(
+        tokenized,
+        config,
+        crate::duplication::TOKEN_CEILING,
+        crate::duplication::COMPARISON_CEILING,
+    );
+    Ok((analysis, graph, duplication))
 }
 
 fn build_from_parts(
@@ -62,6 +117,7 @@ fn build_from_parts(
     snapshot: &SourceSnapshot,
     analysis: &crate::core::AnalysisReport,
     graph: &crate::graph::DependencyReport,
+    duplication: &crate::duplication::DuplicationReport,
     request: &ProjectRequest,
     budget: &mut InputBudget,
 ) -> Result<Project> {
@@ -101,7 +157,6 @@ fn build_from_parts(
             budget,
         )?)
     };
-    let duplication = detect(&snapshot.entries, &context.config.duplication);
     let policy = evaluate_policy(graph, &context.config.architecture_rules);
     let no_ownership = OwnershipReport {
         files: Vec::new(),
@@ -130,7 +185,7 @@ fn build_from_parts(
         ownership: ownership.as_ref(),
         mutation: mutation.as_ref(),
         test_relationships: test_relationships.as_ref(),
-        duplication: &duplication,
+        duplication,
         policy: &policy,
         risk: &risk,
         snapshots,
@@ -179,14 +234,15 @@ pub fn capture_trend(
     let Some(commit) = snapshot.commit.clone() else {
         return Err("snapshot: HEAD must resolve to a commit".into());
     };
-    let analysis = crate::analyze_sources(&snapshot.entries, None)?;
-    let graph = analyze_dependencies_from_sources(&snapshot.entries)?;
+    let (analysis, graph, duplication) =
+        bundle_parts(&snapshot.entries, &context.config.duplication)?;
     let mut budget = InputBudget::new();
     let project = build_from_parts(
         &context,
         &snapshot,
         &analysis,
         &graph,
+        &duplication,
         &request,
         &mut budget,
     )?;

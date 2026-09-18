@@ -16,6 +16,9 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 - Warm `analyze`/`check` runs no longer rewrite an unchanged index, the index
   save streams through a buffered writer, and the MCP server reuses the parsed
   index across tool calls until the file changes on disk.
+- `project`, `debt`, and trend capture parse each source file once and derive
+  metrics, dependencies, and clone tokens from the same tree instead of
+  parsing three times; SQL host analysis parses each file once as well.
 
 ## 0.13.2 - 2026-09-18
 

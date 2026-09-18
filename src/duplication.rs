@@ -629,12 +629,12 @@ pub fn compare(
     }
 }
 
-struct ExcludeMatcher {
+pub(crate) struct ExcludeMatcher {
     matcher: ignore::gitignore::Gitignore,
 }
 
 impl ExcludeMatcher {
-    fn new(patterns: &[String]) -> Self {
+    pub(crate) fn new(patterns: &[String]) -> Self {
         let mut builder = ignore::gitignore::GitignoreBuilder::new("");
         for pattern in patterns {
             let _ = builder.add_line(None, pattern);
@@ -648,7 +648,7 @@ impl ExcludeMatcher {
         }
     }
 
-    fn matches(&self, path: &str) -> bool {
+    pub(crate) fn matches(&self, path: &str) -> bool {
         self.matcher
             .matched_path_or_any_parents(std::path::Path::new(path), false)
             .is_ignore()

@@ -3,6 +3,8 @@ use crate::core::{
     DecisionKind, Event, FileAnalysis, FunctionInput, FunctionKind, Language, LogicalOperator,
     ParseDiagnostic, Span, analyze_function,
 };
+use crate::source_snapshot::SourceEntry;
+use rayon::prelude::*;
 use std::cell::RefCell;
 use std::path::Path;
 use tree_sitter::{Language as TsLanguage, Node, Parser, Tree};
@@ -44,25 +46,30 @@ pub struct TreeSitterBackend;
 impl ParserBackend for TreeSitterBackend {
     fn analyze(&self, path: &str, source: &[u8]) -> Result<FileAnalysis> {
         let (language, tree) = parse_tree(path, source)?;
-        let mut nodes = Vec::new();
-        let mut parse_errors = Vec::new();
-        discover_tree(tree.root_node(), language, &mut nodes, &mut parse_errors);
-        debug_assert!(
-            nodes
-                .windows(2)
-                .all(|pair| pair[0].start_byte() <= pair[1].start_byte()),
-            "discover_tree must visit functions in source order"
-        );
-        let functions = nodes
-            .into_iter()
-            .map(|node| analyze_node(path, node, language, source))
-            .collect();
-        Ok(FileAnalysis {
-            path: path.to_owned(),
-            language,
-            functions,
-            parse_errors,
-        })
+        Ok(analyze_tree(path, language, source, tree.root_node()))
+    }
+}
+
+/// Discovers functions and parse diagnostics in an already-parsed tree.
+fn analyze_tree(path: &str, language: Language, source: &[u8], root: Node<'_>) -> FileAnalysis {
+    let mut nodes = Vec::new();
+    let mut parse_errors = Vec::new();
+    discover_tree(root, language, &mut nodes, &mut parse_errors);
+    debug_assert!(
+        nodes
+            .windows(2)
+            .all(|pair| pair[0].start_byte() <= pair[1].start_byte()),
+        "discover_tree must visit functions in source order"
+    );
+    let functions = nodes
+        .into_iter()
+        .map(|node| analyze_node(path, node, language, source))
+        .collect();
+    FileAnalysis {
+        path: path.to_owned(),
+        language,
+        functions,
+        parse_errors,
     }
 }
 
@@ -107,7 +114,11 @@ pub(crate) struct TokenizedSource {
 /// Extracts `tokens` normalized leaf tokens from `source`.
 pub(crate) fn normalized_tokens(path: &str, source: &[u8]) -> Result<TokenizedSource> {
     let (language, tree) = parse_tree(path, source)?;
-    let root = tree.root_node();
+    Ok(tokenize_tree(language, source, tree.root_node()))
+}
+
+/// Walks an already-parsed tree for normalized leaf tokens.
+fn tokenize_tree(language: Language, source: &[u8], root: Node<'_>) -> TokenizedSource {
     let mut tokens = Vec::new();
     let mut parse_errors = 0usize;
     let mut stack = vec![root];
@@ -132,12 +143,12 @@ pub(crate) fn normalized_tokens(path: &str, source: &[u8]) -> Result<TokenizedSo
         tokens.windows(2).all(|pair| pair[0].line <= pair[1].line),
         "token walk must visit leaves in line order"
     );
-    Ok(TokenizedSource {
+    TokenizedSource {
         language,
         tokens,
         parse_errors,
         line_count: source.iter().filter(|byte| **byte == b'\n').count() as u32 + 1,
-    })
+    }
 }
 
 fn normalize_leaf(node: Node<'_>, source: &[u8]) -> Option<String> {
@@ -188,6 +199,59 @@ pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDe
             extract_javascript_dependencies(root, source)
         }
     })
+}
+
+/// Everything one source file yields for a full project pass.
+pub(crate) struct ParsedBundle {
+    pub(crate) analysis: FileAnalysis,
+    pub(crate) dependencies: ParsedDependencies,
+    pub(crate) tokens: TokenizedSource,
+}
+
+/// Parses `source` once and derives metrics, dependencies, and normalized
+/// tokens from the same tree. Callers that need only one product keep using
+/// the narrower entry points.
+pub(crate) fn parse_bundle(path: &str, source: &[u8]) -> Result<ParsedBundle> {
+    let (language, tree) = parse_tree(path, source)?;
+    let root = tree.root_node();
+    Ok(ParsedBundle {
+        analysis: analyze_tree(path, language, source, root),
+        dependencies: match language {
+            Language::Java => extract_java_dependencies(root, source),
+            Language::JavaScript | Language::TypeScript | Language::Tsx => {
+                extract_javascript_dependencies(root, source)
+            }
+        },
+        tokens: tokenize_tree(language, source, root),
+    })
+}
+
+/// Parses every entry once, in parallel, preserving input order. Errors are
+/// returned for the first path in sorted order.
+pub(crate) fn parse_bundles(entries: &[SourceEntry]) -> Result<Vec<(String, ParsedBundle)>> {
+    let mut outcomes: Vec<(String, Result<ParsedBundle>)> = entries
+        .par_iter()
+        .map(|entry| (entry.path.clone(), parse_bundle(&entry.path, &entry.bytes)))
+        .collect();
+    outcomes.sort_by(|left, right| left.0.cmp(&right.0));
+    outcomes
+        .into_iter()
+        .map(|(path, bundle)| Ok((path, bundle?)))
+        .collect()
+}
+
+/// Parses one host-language file once for SQL call-site analysis and
+/// function attribution.
+pub(crate) fn parse_sql_host(
+    path: &str,
+    source: &[u8],
+) -> Result<(FileAnalysis, Vec<HostSqlSite>)> {
+    let (language, tree) = parse_tree(path, source)?;
+    let root = tree.root_node();
+    Ok((
+        analyze_tree(path, language, source, root),
+        host_sql_sites_from_tree(language, source, root),
+    ))
 }
 
 fn extract_javascript_dependencies(root: Node<'_>, source: &[u8]) -> ParsedDependencies {
@@ -1012,7 +1076,11 @@ fn is_loop_kind(kind: &str) -> bool {
 /// are never attributed to an outer loop. Dedplicated by span and flags.
 pub(crate) fn host_sql_sites(path: &str, source: &[u8]) -> crate::Result<Vec<HostSqlSite>> {
     let (language, tree) = parse_tree(path, source)?;
-    let root = tree.root_node();
+    Ok(host_sql_sites_from_tree(language, source, tree.root_node()))
+}
+
+/// Walks an already-parsed tree for recognized SQL call sites.
+fn host_sql_sites_from_tree(language: Language, source: &[u8], root: Node<'_>) -> Vec<HostSqlSite> {
     let mut seen = std::collections::BTreeSet::new();
     let mut sites = Vec::new();
     let mut stack = vec![root];
@@ -1037,7 +1105,7 @@ pub(crate) fn host_sql_sites(path: &str, source: &[u8]) -> crate::Result<Vec<Hos
         }
     }
     sites.sort_by_key(|site| (site.line, site.end_line));
-    Ok(sites)
+    sites
 }
 
 /// Callee name plus first-argument node for query-shaped calls, else `None`.
@@ -1289,5 +1357,50 @@ await db.query('SELECT 1 ' + tail);
         ] {
             assert_eq!(operands(name, source), decimal, "{name}");
         }
+    }
+
+    #[test]
+    fn bundle_matches_narrow_entry_points() {
+        let source = b"import { x } from './x';\nexport function f(a: number) { if (a > 1) { return a + 1; } return a; }\n";
+        let bundle = parse_bundle("src/f.ts", source).unwrap();
+        let analysis = crate::analyze_source("src/f.ts", source).unwrap();
+        assert_eq!(bundle.analysis.functions, analysis.functions);
+        assert_eq!(
+            bundle.tokens,
+            normalized_tokens("src/f.ts", source).unwrap()
+        );
+        assert_eq!(
+            bundle.dependencies,
+            extract_dependencies("src/f.ts", source).unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_bundles_sorts_paths_and_selects_errors_deterministically() {
+        let entries = vec![
+            SourceEntry {
+                path: "b.ts".to_owned(),
+                bytes: b"function b() {}".to_vec(),
+            },
+            SourceEntry {
+                path: "a.ts".to_owned(),
+                bytes: b"function a() {}".to_vec(),
+            },
+        ];
+        let bundles = parse_bundles(&entries).unwrap();
+        assert_eq!(bundles[0].0, "a.ts");
+        assert_eq!(bundles[1].0, "b.ts");
+
+        let invalid = vec![
+            SourceEntry {
+                path: "b.unknown".to_owned(),
+                bytes: b"x".to_vec(),
+            },
+            SourceEntry {
+                path: "a.unknown".to_owned(),
+                bytes: b"x".to_vec(),
+            },
+        ];
+        assert!(parse_bundles(&invalid).is_err());
     }
 }

@@ -910,8 +910,17 @@ pub fn analyze_host_sql(
     functions: &[crate::core::FunctionAnalysis],
 ) -> crate::Result<Vec<SqlFinding>> {
     let sites = crate::parser::host_sql_sites(path, source)?;
+    Ok(host_sql_findings(path, &sites, functions))
+}
+
+/// Maps already-parsed host call sites to fixed findings.
+fn host_sql_findings(
+    path: &str,
+    sites: &[crate::parser::HostSqlSite],
+    functions: &[crate::core::FunctionAnalysis],
+) -> Vec<SqlFinding> {
     let mut findings = Vec::new();
-    for site in &sites {
+    for site in sites {
         let function_id = crate::core::innermost_containing(
             functions,
             site.line,
@@ -943,7 +952,7 @@ pub fn analyze_host_sql(
         }
     }
     sort_by_line(&mut findings);
-    Ok(findings)
+    findings
 }
 
 /// Gate violations: findings at or above `minimum`, in report order.
@@ -1094,10 +1103,10 @@ pub fn analyze_sql_path(
         let bytes = std::fs::read(path)
             .map_err(|error| format!("cannot read source file {}: {error}", path.display()))?;
         let display = crate::normalized_relative_path(path, &base);
-        let functions = crate::analyze_source(&display, &bytes)?.functions;
+        let (analysis, sites) = crate::parser::parse_sql_host(&display, &bytes)?;
         report
             .findings
-            .extend(analyze_host_sql(&display, &bytes, &functions)?);
+            .extend(host_sql_findings(&display, &sites, &analysis.functions));
     }
     let migration_files: Vec<SqlFile> = sql_files
         .iter()

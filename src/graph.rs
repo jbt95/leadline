@@ -95,6 +95,18 @@ pub fn analyze_dependencies_from_sources(entries: &[SourceEntry]) -> Result<Depe
     report_from_parsed(outcomes)
 }
 
+/// Resolves dependencies from already-extracted references.
+pub(crate) fn dependency_report_from_parsed(
+    parsed_files: Vec<(String, ParsedDependencies)>,
+) -> DependencyReport {
+    dependency_report(
+        parsed_files
+            .into_iter()
+            .map(|(path, parsed)| ParsedFile { path, parsed })
+            .collect(),
+    )
+}
+
 /// Sorts extraction outcomes by path, then resolves the first error in path
 /// order so failures stay deterministic under parallel extraction.
 pub(crate) fn report_from_parsed(
