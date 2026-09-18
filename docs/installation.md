@@ -53,7 +53,13 @@ leadline update --integrations
 
 Downloads the latest release, verifies the archive against the release `SHA256SUMS`, and replaces the running binary in place. `LEADLINE_BASE_URL` points at a mirror.
 
-`--integrations` then probes installed harnesses and refreshes the official integration through that harness's own CLI:
+`--integrations` then probes installed harnesses and refreshes the official integration through that harness's own CLI. Probes:
+
+- `pi list`
+- `omp plugin list --json`
+- `claude plugin list --json`
+
+Refreshers:
 
 - `pi update git:github.com/jbt95/leadline`
 - `omp plugin install git:github.com/jbt95/leadline --force`

@@ -96,13 +96,23 @@ fn output_of(program: &str, args: &[&str]) -> std::io::Result<Output> {
     command.output()
 }
 
+/// Maximum characters of captured stderr kept in a failure diagnostic, so a
+/// harness cannot flood error output with an arbitrarily long line.
+const MAX_DIAGNOSTIC_CHARS: usize = 200;
+
+/// First line of `stderr`, trimmed and bounded to `MAX_DIAGNOSTIC_CHARS`.
+fn first_diagnostic_line(stderr: &[u8]) -> String {
+    let line = String::from_utf8_lossy(stderr);
+    let line = line.lines().next().unwrap_or("").trim();
+    line.chars().take(MAX_DIAGNOSTIC_CHARS).collect()
+}
+
 /// Requires success and returns stdout, or an error naming the tool.
 fn stdout_of(program: &str, output: &Output, action: &str) -> Result<String> {
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
     }
-    let reason = String::from_utf8_lossy(&output.stderr);
-    let reason = reason.lines().next().unwrap_or("").trim();
+    let reason = first_diagnostic_line(&output.stderr);
     if reason.is_empty() {
         Err(format!("{program} failed to {action}").into())
     } else {
@@ -941,6 +951,23 @@ mod tests {
         assert!(!claude_has_leadline(r#"[{"id":"other@other"}]"#).unwrap());
         assert!(claude_has_leadline("not json").is_err());
         assert!(claude_has_leadline("{}").is_err());
+    }
+
+    #[test]
+    fn diagnostic_line_is_bounded() {
+        let long = "x".repeat(MAX_DIAGNOSTIC_CHARS + 300);
+        let stderr = format!("{long}\nsecond line\n");
+        let line = first_diagnostic_line(stderr.as_bytes());
+        assert_eq!(line.len(), MAX_DIAGNOSTIC_CHARS);
+        assert_eq!(line, "x".repeat(MAX_DIAGNOSTIC_CHARS));
+    }
+
+    #[test]
+    fn diagnostic_line_keeps_short_lines() {
+        assert_eq!(first_diagnostic_line(b"boom\nsecond"), "boom");
+        assert_eq!(first_diagnostic_line(b"  spaced  \n"), "spaced");
+        assert_eq!(first_diagnostic_line(b""), "");
+        assert_eq!(first_diagnostic_line(b"   \n"), "");
     }
 
     #[test]

@@ -115,6 +115,71 @@ fn run_binary(binary: &Path, args: &[&str], envs: &[(&str, &str)]) -> std::proce
     command.output().unwrap()
 }
 
+/// Shared setup for `--integrations` tests: a current-version release tree,
+/// a binary copy, a fake harness bin, a call log, and an isolated config dir.
+///
+/// `harnesses` lists `(name, probe listing, update exit status)` fakes to
+/// install; every fake records its invocations in the log. The temp root is
+/// removed on drop, even when an assertion fails.
+struct IntegrationFixture {
+    root: PathBuf,
+    binary: PathBuf,
+    log: PathBuf,
+    config: PathBuf,
+    path: String,
+    base_url: String,
+}
+
+impl IntegrationFixture {
+    fn new(harnesses: &[(&str, &str, i32)]) -> Self {
+        let root = temporary_directory();
+        let release = build_release(
+            &root,
+            env!("CARGO_PKG_VERSION"),
+            "#!/bin/sh\nexit 1\n",
+            false,
+        );
+        let binary = copied_binary(&root);
+        let fake_bin = root.join("fake-bin");
+        std::fs::create_dir_all(&fake_bin).unwrap();
+        for (name, listing, update_exit) in harnesses {
+            write_fake_harness(&fake_bin, name, listing, *update_exit);
+        }
+        let log = root.join("calls.log");
+        let config = root.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let path = fake_path(&fake_bin);
+        let base_url = format!("file://{}", release.display());
+        Self {
+            root,
+            binary,
+            log,
+            config,
+            path,
+            base_url,
+        }
+    }
+
+    fn run(&self, args: &[&str]) -> std::process::Output {
+        run_binary(
+            &self.binary,
+            args,
+            &[
+                ("PATH", self.path.as_str()),
+                ("FAKE_LOG", self.log.to_str().unwrap()),
+                ("XDG_CONFIG_HOME", self.config.to_str().unwrap()),
+                ("LEADLINE_BASE_URL", self.base_url.as_str()),
+            ],
+        )
+    }
+}
+
+impl Drop for IntegrationFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 #[test]
 fn update_replaces_the_binary_with_the_latest_release() {
     if prerequisites_missing() {
@@ -195,35 +260,13 @@ fn integrations_refresh_every_detected_harness() {
     if prerequisites_missing() {
         return;
     }
-    let root = temporary_directory();
-    let release = build_release(
-        &root,
-        env!("CARGO_PKG_VERSION"),
-        "#!/bin/sh\nexit 1\n",
-        false,
-    );
-    let binary = copied_binary(&root);
-    let fake_bin = root.join("fake-bin");
-    std::fs::create_dir_all(&fake_bin).unwrap();
-    write_fake_harness(&fake_bin, "pi", PI_LISTING, 0);
-    write_fake_harness(&fake_bin, "omp", OMP_LISTING, 0);
-    write_fake_harness(&fake_bin, "claude", CLAUDE_LISTING, 0);
-    let log = root.join("calls.log");
-    let config = root.join("config");
-    std::fs::create_dir_all(&config).unwrap();
-    let path = fake_path(&fake_bin);
-    let base_url = format!("file://{}", release.display());
+    let fixture = IntegrationFixture::new(&[
+        ("pi", PI_LISTING, 0),
+        ("omp", OMP_LISTING, 0),
+        ("claude", CLAUDE_LISTING, 0),
+    ]);
 
-    let output = run_binary(
-        &binary,
-        &["update", "--integrations"],
-        &[
-            ("PATH", &path),
-            ("FAKE_LOG", log.to_str().unwrap()),
-            ("XDG_CONFIG_HOME", config.to_str().unwrap()),
-            ("LEADLINE_BASE_URL", &base_url),
-        ],
-    );
+    let output = fixture.run(&["update", "--integrations"]);
 
     assert!(
         output.status.success(),
@@ -231,7 +274,7 @@ fn integrations_refresh_every_detected_harness() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        recorded_calls(&log),
+        recorded_calls(&fixture.log),
         vec![
             "pi list",
             "pi update git:github.com/jbt95/leadline",
@@ -258,7 +301,6 @@ fn integrations_refresh_every_detected_harness() {
         stdout.contains("Restart required: Pi, OMP, Claude Code."),
         "stdout: {stdout}"
     );
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -266,40 +308,17 @@ fn integrations_are_skipped_when_not_installed() {
     if prerequisites_missing() {
         return;
     }
-    let root = temporary_directory();
-    let release = build_release(
-        &root,
-        env!("CARGO_PKG_VERSION"),
-        "#!/bin/sh\nexit 1\n",
-        false,
-    );
-    let binary = copied_binary(&root);
-    let fake_bin = root.join("fake-bin");
-    std::fs::create_dir_all(&fake_bin).unwrap();
-    write_fake_harness(&fake_bin, "pi", "User packages:\n  npm:pi-web-access\n", 0);
-    write_fake_harness(
-        &fake_bin,
-        "omp",
-        r#"{"npm":[{"name":"ponytail"}],"marketplace":[]}"#,
-        0,
-    );
-    write_fake_harness(&fake_bin, "claude", "[]", 0);
-    let log = root.join("calls.log");
-    let config = root.join("config");
-    std::fs::create_dir_all(&config).unwrap();
-    let path = fake_path(&fake_bin);
-    let base_url = format!("file://{}", release.display());
+    let fixture = IntegrationFixture::new(&[
+        ("pi", "User packages:\n  npm:pi-web-access\n", 0),
+        (
+            "omp",
+            r#"{"npm":[{"name":"ponytail"}],"marketplace":[]}"#,
+            0,
+        ),
+        ("claude", "[]", 0),
+    ]);
 
-    let output = run_binary(
-        &binary,
-        &["update", "--integrations"],
-        &[
-            ("PATH", &path),
-            ("FAKE_LOG", log.to_str().unwrap()),
-            ("XDG_CONFIG_HOME", config.to_str().unwrap()),
-            ("LEADLINE_BASE_URL", &base_url),
-        ],
-    );
+    let output = fixture.run(&["update", "--integrations"]);
 
     assert!(
         output.status.success(),
@@ -307,7 +326,7 @@ fn integrations_are_skipped_when_not_installed() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        recorded_calls(&log),
+        recorded_calls(&fixture.log),
         vec![
             "pi list",
             "omp plugin list --json",
@@ -325,7 +344,6 @@ fn integrations_are_skipped_when_not_installed() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -371,7 +389,6 @@ fn missing_harness_executables_are_skipped() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -379,39 +396,17 @@ fn integration_failures_do_not_stop_later_updates() {
     if prerequisites_missing() {
         return;
     }
-    let root = temporary_directory();
-    let release = build_release(
-        &root,
-        env!("CARGO_PKG_VERSION"),
-        "#!/bin/sh\nexit 1\n",
-        false,
-    );
-    let binary = copied_binary(&root);
-    let fake_bin = root.join("fake-bin");
-    std::fs::create_dir_all(&fake_bin).unwrap();
-    write_fake_harness(&fake_bin, "pi", PI_LISTING, 1);
-    write_fake_harness(&fake_bin, "omp", OMP_LISTING, 0);
-    write_fake_harness(&fake_bin, "claude", CLAUDE_LISTING, 0);
-    let log = root.join("calls.log");
-    let config = root.join("config");
-    std::fs::create_dir_all(&config).unwrap();
-    let path = fake_path(&fake_bin);
-    let base_url = format!("file://{}", release.display());
+    let fixture = IntegrationFixture::new(&[
+        ("pi", PI_LISTING, 1),
+        ("omp", OMP_LISTING, 0),
+        ("claude", CLAUDE_LISTING, 0),
+    ]);
 
-    let output = run_binary(
-        &binary,
-        &["update", "--integrations"],
-        &[
-            ("PATH", &path),
-            ("FAKE_LOG", log.to_str().unwrap()),
-            ("XDG_CONFIG_HOME", config.to_str().unwrap()),
-            ("LEADLINE_BASE_URL", &base_url),
-        ],
-    );
+    let output = fixture.run(&["update", "--integrations"]);
 
     assert_eq!(output.status.code(), Some(3));
     assert_eq!(
-        recorded_calls(&log),
+        recorded_calls(&fixture.log),
         vec![
             "pi list",
             "pi update git:github.com/jbt95/leadline",
@@ -443,7 +438,6 @@ fn integration_failures_do_not_stop_later_updates() {
         stderr.contains("binary update succeeded; failed harness integrations: Pi"),
         "stderr: {stderr}"
     );
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -451,35 +445,13 @@ fn malformed_probe_output_is_a_detection_failure() {
     if prerequisites_missing() {
         return;
     }
-    let root = temporary_directory();
-    let release = build_release(
-        &root,
-        env!("CARGO_PKG_VERSION"),
-        "#!/bin/sh\nexit 1\n",
-        false,
-    );
-    let binary = copied_binary(&root);
-    let fake_bin = root.join("fake-bin");
-    std::fs::create_dir_all(&fake_bin).unwrap();
-    write_fake_harness(&fake_bin, "pi", PI_LISTING, 0);
-    write_fake_harness(&fake_bin, "omp", "not json", 0);
-    write_fake_harness(&fake_bin, "claude", CLAUDE_LISTING, 0);
-    let log = root.join("calls.log");
-    let config = root.join("config");
-    std::fs::create_dir_all(&config).unwrap();
-    let path = fake_path(&fake_bin);
-    let base_url = format!("file://{}", release.display());
+    let fixture = IntegrationFixture::new(&[
+        ("pi", PI_LISTING, 0),
+        ("omp", "not json", 0),
+        ("claude", CLAUDE_LISTING, 0),
+    ]);
 
-    let output = run_binary(
-        &binary,
-        &["update", "--integrations"],
-        &[
-            ("PATH", &path),
-            ("FAKE_LOG", log.to_str().unwrap()),
-            ("XDG_CONFIG_HOME", config.to_str().unwrap()),
-            ("LEADLINE_BASE_URL", &base_url),
-        ],
-    );
+    let output = fixture.run(&["update", "--integrations"]);
 
     assert_eq!(output.status.code(), Some(3));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -488,7 +460,7 @@ fn malformed_probe_output_is_a_detection_failure() {
         "stderr: {stderr}"
     );
     assert_eq!(
-        recorded_calls(&log),
+        recorded_calls(&fixture.log),
         vec![
             "pi list",
             "pi update git:github.com/jbt95/leadline",
@@ -501,7 +473,6 @@ fn malformed_probe_output_is_a_detection_failure() {
         stderr.contains("failed harness integrations: OMP"),
         "stderr: {stderr}"
     );
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -509,35 +480,13 @@ fn claude_malformed_probe_output_is_a_detection_failure() {
     if prerequisites_missing() {
         return;
     }
-    let root = temporary_directory();
-    let release = build_release(
-        &root,
-        env!("CARGO_PKG_VERSION"),
-        "#!/bin/sh\nexit 1\n",
-        false,
-    );
-    let binary = copied_binary(&root);
-    let fake_bin = root.join("fake-bin");
-    std::fs::create_dir_all(&fake_bin).unwrap();
-    write_fake_harness(&fake_bin, "pi", PI_LISTING, 0);
-    write_fake_harness(&fake_bin, "omp", OMP_LISTING, 0);
-    write_fake_harness(&fake_bin, "claude", "not json", 0);
-    let log = root.join("calls.log");
-    let config = root.join("config");
-    std::fs::create_dir_all(&config).unwrap();
-    let path = fake_path(&fake_bin);
-    let base_url = format!("file://{}", release.display());
+    let fixture = IntegrationFixture::new(&[
+        ("pi", PI_LISTING, 0),
+        ("omp", OMP_LISTING, 0),
+        ("claude", "not json", 0),
+    ]);
 
-    let output = run_binary(
-        &binary,
-        &["update", "--integrations"],
-        &[
-            ("PATH", &path),
-            ("FAKE_LOG", log.to_str().unwrap()),
-            ("XDG_CONFIG_HOME", config.to_str().unwrap()),
-            ("LEADLINE_BASE_URL", &base_url),
-        ],
-    );
+    let output = fixture.run(&["update", "--integrations"]);
 
     assert_eq!(output.status.code(), Some(3));
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -551,7 +500,7 @@ fn claude_malformed_probe_output_is_a_detection_failure() {
         "stderr: {stderr}"
     );
     assert_eq!(
-        recorded_calls(&log),
+        recorded_calls(&fixture.log),
         vec![
             "pi list",
             "pi update git:github.com/jbt95/leadline",
@@ -564,7 +513,6 @@ fn claude_malformed_probe_output_is_a_detection_failure() {
         stderr.contains("binary update succeeded; failed harness integrations: Claude Code"),
         "stderr: {stderr}"
     );
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -572,37 +520,40 @@ fn opencode_local_plugin_requires_manual_restart() {
     if prerequisites_missing() {
         return;
     }
-    let root = temporary_directory();
-    let release = build_release(
-        &root,
-        env!("CARGO_PKG_VERSION"),
-        "#!/bin/sh\nexit 1\n",
-        false,
-    );
-    let binary = copied_binary(&root);
-    let config = root.join("config");
-    let plugin = config.join("opencode/plugins/leadline");
+    // The other harnesses get absent-integration fakes so the test is hermetic;
+    // the `opencode2` fake records calls to prove it is never invoked.
+    let fixture = IntegrationFixture::new(&[
+        ("pi", "User packages:\n  npm:pi-web-access\n", 0),
+        (
+            "omp",
+            r#"{"npm":[{"name":"ponytail"}],"marketplace":[]}"#,
+            0,
+        ),
+        ("claude", "[]", 0),
+        ("opencode2", "", 0),
+    ]);
+    let plugin = fixture.config.join("opencode/plugins/leadline");
     std::fs::create_dir_all(plugin.parent().unwrap()).unwrap();
-    let checkout = root.join("checkout");
+    let checkout = fixture.root.join("checkout");
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("marker.txt"), "untouched").unwrap();
     std::os::unix::fs::symlink(&checkout, &plugin).unwrap();
-    let base_url = format!("file://{}", release.display());
 
-    let output = run_binary(
-        &binary,
-        &["update", "--integrations"],
-        &[
-            ("PATH", "/usr/bin:/bin"),
-            ("XDG_CONFIG_HOME", config.to_str().unwrap()),
-            ("LEADLINE_BASE_URL", &base_url),
-        ],
-    );
+    let output = fixture.run(&["update", "--integrations"]);
 
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        recorded_calls(&fixture.log),
+        vec![
+            "pi list",
+            "omp plugin list --json",
+            "claude plugin list --json"
+        ],
+        "opencode2 must never be invoked"
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -622,7 +573,6 @@ fn opencode_local_plugin_requires_manual_restart() {
         "untouched"
     );
     assert!(plugin.symlink_metadata().unwrap().file_type().is_symlink());
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
