@@ -1039,7 +1039,6 @@ fn host_sql_sites_from_tree(language: Language, source: &[u8], root: Node<'_>) -
             && HOST_SQL_CALLS.contains(&name.as_str())
         {
             let dynamic = first_argument.is_some_and(|argument| subtree_is_dynamic(argument, language))
-                    || name.contains("Sprintf")
                     // `db.Query(fmt.Sprintf(...))` nests the Sprintf call in the
                     // argument, so the top-level callee name never carries the
                     // signal; the nested call builds the query text dynamically

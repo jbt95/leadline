@@ -1,6 +1,7 @@
 # Dependencies and impact
 
-Static file-level dependency intelligence for JavaScript, TypeScript, and Java.
+Static file-level dependency intelligence for Go, JavaScript, TypeScript, and Java.
+Go imports are module-qualified paths, so `GoImport` references are `Ignored` and never produce edges.
 The analyzer parses code with Tree-sitter and never executes it: no build
 runtime, no network, no project scripts.
 
