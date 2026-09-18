@@ -23,6 +23,25 @@ interface FunctionInput {
   name?: string;
 }
 
+// Leadline analyzes Java/JS/TS/TSX only. The hook skips the analyzer when
+// the edited file definitely falls outside that scope; unknown input shapes
+// fall through to analysis (fail-open, never a missed regression).
+const LEADLINE_EXTENSIONS = [".java", ".js", ".jsx", ".ts", ".tsx"] as const;
+
+function editedPath(input: unknown): string | undefined {
+  if (typeof input !== "object" || input === null) {
+    return undefined;
+  }
+  const record = input as Record<string, unknown>;
+  for (const key of ["filePath", "file", "path", "filename"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 // V2 code mode reads `output`; `content` carries the display text. Failures are
 // returned as text so the model sees the analyzer error instead of a bare
 // "no output" result.
@@ -126,6 +145,10 @@ export default Plugin.define({
         return;
       }
       if (event.tool !== "edit" && event.tool !== "write") {
+        return;
+      }
+      const target = editedPath(event.input);
+      if (target !== undefined && !LEADLINE_EXTENSIONS.some((ext) => target.toLowerCase().endsWith(ext))) {
         return;
       }
       const directory = await directoryFor(event.sessionID);
