@@ -28,6 +28,12 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
   the first child for every index, removing the quadratic blowup on the nodes that
   malformed error recovery produces while keeping ordinary nodes on the indexed
   fast path.
+- Worktree secret scans cover only files changed against HEAD (untracked files
+  count; an empty change set skips the scan without running gitleaks), replacing
+  the full-tree scan on every invocation. Huge change sets (over 100 files) keep
+  the single full-tree scan.
+- The Claude Code `Stop` hook no longer runs the secret scan on every turn;
+  secret gating stays in the pre-commit staged hook and the on-demand check.
 
 ## 0.13.2 - 2026-09-18
 

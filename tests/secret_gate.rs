@@ -15,11 +15,12 @@ fn runner() -> PathBuf {
 }
 
 /// Fake `gitleaks`: records argv, writes sentinel SARIF, exits as told.
+/// Appends: worktree mode can invoke the scanner once per changed file.
 fn fake_gitleaks(bin: &Path) {
     write_executable(
         &bin.join("gitleaks"),
         "#!/bin/sh\n\
-         echo \"$@\" > \"$ARGS_FILE\"\n\
+         echo \"$@\" >> \"$ARGS_FILE\"\n\
          previous=\"\"\n\
          for argument in \"$@\"; do\n\
            if [ \"$previous\" = \"--report-path\" ]; then printf 'SECRET_SENTINEL' > \"$argument\"; fi\n\
@@ -150,17 +151,159 @@ fn secret_runner_uses_redacted_staged_scan() {
 }
 
 #[test]
-fn secret_runner_uses_worktree_scan_with_base_target() {
+fn secret_runner_scans_only_changed_files_in_worktree_mode() {
     let root = temporary_directory();
     fixture_bin(&root);
     init_repository(&root);
+    std::fs::write(root.join("changed.txt"), "changed\n").unwrap();
     let output = run_runner(&root, "worktree", &[]);
     assert_eq!(output.status.code(), Some(1));
     let gitleaks_args = std::fs::read_to_string(root.join("gitleaks.args")).unwrap();
     assert!(gitleaks_args.contains("--redact"), "{gitleaks_args}");
     assert!(!gitleaks_args.contains("--staged"), "{gitleaks_args}");
+    assert!(
+        gitleaks_args.contains("detect --no-git --source changed.txt"),
+        "{gitleaks_args}"
+    );
+    assert!(
+        !gitleaks_args.contains("dir ."),
+        "{gitleaks_args}: changed files must not trigger a full-tree scan"
+    );
     let leadline_args = std::fs::read_to_string(root.join("leadline.args")).unwrap();
     assert!(leadline_args.contains("--base HEAD"), "{leadline_args}");
+    assert!(leadline_args.contains("--changed-only"), "{leadline_args}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Commit everything (including the fixture `bin/`) so the change set
+/// under test contains only what the test adds afterwards.
+fn commit_everything(root: &Path) {
+    let run = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run(&["add", "-A"]);
+    run(&[
+        "-c",
+        "user.name=leadline-test",
+        "-c",
+        "user.email=leadline-test@example.com",
+        "commit",
+        "-q",
+        "-m",
+        "snapshot",
+    ]);
+}
+
+#[test]
+fn secret_runner_skips_scan_with_no_changes() {
+    let root = temporary_directory();
+    fixture_bin(&root);
+    init_repository(&root);
+    commit_everything(&root);
+    let output = run_runner(&root, "worktree", &[]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        !root.join("gitleaks.args").exists(),
+        "no changes must skip the scanner"
+    );
+    assert!(
+        !root.join("leadline.args").exists(),
+        "no changes must skip the gate"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn secret_runner_scans_every_changed_file() {
+    let root = temporary_directory();
+    fixture_bin(&root);
+    init_repository(&root);
+    std::fs::write(root.join("first.txt"), "first\n").unwrap();
+    std::fs::write(root.join("second.txt"), "second\n").unwrap();
+    let output = run_runner(&root, "worktree", &[]);
+    assert_eq!(output.status.code(), Some(1));
+    let gitleaks_args = std::fs::read_to_string(root.join("gitleaks.args")).unwrap();
+    assert!(gitleaks_args.contains("first.txt"), "{gitleaks_args}");
+    assert!(gitleaks_args.contains("second.txt"), "{gitleaks_args}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn secret_runner_skips_deleted_paths() {
+    let root = temporary_directory();
+    fixture_bin(&root);
+    init_repository(&root);
+    // Deletions appear in the changed list but cannot leak: only the
+    // deletion must remain, and no scan may run for it (the fake scanner
+    // would exit 1 for anything it is asked to scan).
+    commit_everything(&root);
+    let run = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+    };
+    std::fs::write(root.join("victim.txt"), "victim\n").unwrap();
+    run(&["add", "victim.txt"]);
+    run(&[
+        "-c",
+        "user.name=leadline-test",
+        "-c",
+        "user.email=leadline-test@example.com",
+        "commit",
+        "-q",
+        "-m",
+        "victim",
+    ]);
+    std::fs::remove_file(root.join("victim.txt")).unwrap();
+    let output = run_runner(&root, "worktree", &[]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        !root.join("gitleaks.args").exists(),
+        "deleted paths must not be scanned"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn secret_runner_falls_back_to_full_scan_for_huge_change_sets() {
+    let root = temporary_directory();
+    fixture_bin(&root);
+    init_repository(&root);
+    for n in 0..101 {
+        std::fs::write(root.join(format!("bulk{n:03}.txt")), "bulk\n").unwrap();
+    }
+    let output = run_runner(&root, "worktree", &[]);
+    assert_eq!(output.status.code(), Some(1));
+    let gitleaks_args = std::fs::read_to_string(root.join("gitleaks.args")).unwrap();
+    assert!(
+        gitleaks_args.contains("dir ."),
+        "{gitleaks_args}: huge change sets use one full-tree scan"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn secret_runner_maps_per_file_scanner_failure_to_input_error() {
+    let root = temporary_directory();
+    fixture_bin(&root);
+    init_repository(&root);
+    std::fs::write(root.join("changed.txt"), "changed\n").unwrap();
+    let output = run_runner(&root, "worktree", &[("EXIT_CODE", "2")]);
+    assert_eq!(output.status.code(), Some(4));
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -369,7 +512,11 @@ fn native_hook_manifests_register_secret_gate_once() {
                 .is_some_and(|command| command.contains("leadline-secret-check.sh"))
         })
         .collect();
-    assert_eq!(secret_stops.len(), 1);
+    // The Stop hook runs leadline-check only: a whole-tree secret scan on
+    // every turn cost O(tree) per turn while the gate only evaluates
+    // changed paths. Secret gating lives in the pre-commit staged hook
+    // and the on-demand check.
+    assert!(secret_stops.is_empty());
     let gemini = hook_manifest_text("integrations/gemini/hooks/hooks.json");
     let after = gemini["hooks"]["AfterAgent"].as_array().unwrap();
     let secret_afters: Vec<_> = after

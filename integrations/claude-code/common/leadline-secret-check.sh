@@ -61,10 +61,72 @@ if [ "$mode" = staged ]; then
   scanner=$?
   set -e
 else
+  # Changed-paths-only scan: a full-tree `gitleaks dir` costs O(tree) on
+  # every run while the gate only evaluates changed paths (--changed-only),
+  # so only files changed against HEAD are scanned (untracked files count
+  # as changed). Lists are newline-delimited: names containing newlines are
+  # not supported.
+  if ! changed="$(git diff --name-only HEAD --; git ls-files --others --exclude-standard)"; then
+    echo "leadline-secret-check: cannot list changed files" >&2
+    exit 4
+  fi
+  if [ -z "$changed" ]; then
+    exit 0
+  fi
   set +e
-  gitleaks dir . --no-banner --redact --report-format sarif --report-path "$report" >/dev/null 2>&1
-  scanner=$?
+  change_count="$(printf '%s\n' "$changed" | wc -l)"
   set -e
+  # Huge change sets: one full-tree scan spawns fewer processes than a
+  # per-file loop and matches the historical behavior.
+  if [ "$change_count" -gt 100 ]; then
+    set +e
+    gitleaks dir . --no-banner --redact --report-format sarif --report-path "$report" >/dev/null 2>&1
+    scanner=$?
+    set -e
+    if [ "$scanner" -gt 1 ]; then
+      echo "leadline-secret-check: gitleaks scan failed" >&2
+      exit 4
+    fi
+  else
+    # One scanner run per changed file: `gitleaks detect --source` accepts
+    # a file path, and each per-file SARIF feeds its own gate call, so no
+    # report merging is needed. Non-files are skipped: deletions cannot
+    # leak, and gitleaks reports an unscannable path with the same exit
+    # code as a finding.
+    findings=0
+    n=0
+    while IFS= read -r path; do
+      [ -n "$path" ] || continue
+      [ -f "$path" ] || continue
+      n=$((n + 1))
+      file_report="$tmp/report.$n.sarif"
+      set +e
+      gitleaks detect --no-git --source "$path" --no-banner --redact --report-format sarif --report-path "$file_report" >/dev/null 2>&1
+      scanner=$?
+      set -e
+      if [ "$scanner" -gt 1 ]; then
+        echo "leadline-secret-check: gitleaks scan failed" >&2
+        exit 4
+      fi
+      if [ "$scanner" -eq 1 ]; then
+        set +e
+        "$leadline_bin" security . --sarif "$file_report" --base HEAD --fail-on-severity low --changed-only
+        gate=$?
+        set -e
+        if [ "$gate" -eq 1 ]; then
+          findings=1
+        elif [ "$gate" -ne 0 ]; then
+          exit "$gate"
+        fi
+      fi
+    done <<EOF
+$changed
+EOF
+    if [ "$findings" -eq 1 ]; then
+      exit 1
+    fi
+    exit 0
+  fi
 fi
 if [ "$scanner" -gt 1 ]; then
   echo "leadline-secret-check: gitleaks scan failed" >&2
