@@ -6,6 +6,9 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ### Changed
 
+- `changed` reads all base revision blobs with a single `ls-tree` plus one
+  `cat-file --batch` stream and analyzes the changed files in parallel instead
+  of spawning two Git processes per file.
 - Dependency extraction and duplication tokenization run in parallel across
   files, and duplication interns token ids in a hash map. Output is unchanged.
 - JSON output streams directly to stdout instead of materializing the full

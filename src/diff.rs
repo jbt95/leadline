@@ -7,6 +7,7 @@ use crate::git;
 use crate::parser::detect_language;
 use crate::source_snapshot::SourceEntry;
 use crate::strip_verbatim_prefix;
+use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -255,21 +256,54 @@ pub fn analyze_changes(path: &Path, options: &ChangeOptions) -> Result<ChangedRe
         renames,
         ..
     } = changed_paths_in_scope(path, options)?;
+    let ordered: Vec<String> = paths.into_iter().collect();
+    let analyzable: Vec<(String, String)> = ordered
+        .iter()
+        .filter(|relative| detect_language(relative).is_some())
+        .map(|relative| {
+            let before_path = renames
+                .get(relative)
+                .map_or_else(|| relative.clone(), Clone::clone);
+            (relative.clone(), before_path)
+        })
+        .collect();
+    let before_paths: Vec<String> = analyzable
+        .iter()
+        .map(|(_, before_path)| before_path.clone())
+        .collect();
+    let before_blobs = git::read_revision_blobs(&root, &options.base, &before_paths)?;
+    let after_blobs = match &options.target {
+        ComparisonTarget::Revision(revision) => {
+            git::read_revision_blobs(&root, revision, &ordered)?
+        }
+        _ => std::collections::BTreeMap::new(),
+    };
+    type FileOutcome = Result<(
+        String,
+        Option<crate::core::FileAnalysis>,
+        Option<crate::core::FileAnalysis>,
+    )>;
+    let outcomes: Vec<FileOutcome> = analyzable
+        .par_iter()
+        .map(|(relative, before_path)| {
+            let before = before_blobs
+                .get(before_path)
+                .map(|source| crate::analyze_source(before_path, source))
+                .transpose()?;
+            let after_source: Result<Option<Vec<u8>>> = match &options.target {
+                ComparisonTarget::Revision(_) => Ok(after_blobs.get(relative).cloned()),
+                _ => read_after(&root, relative, &options.target),
+            };
+            let after = after_source?
+                .map(|source| crate::analyze_source(relative, &source))
+                .transpose()?;
+            Ok((relative.clone(), before, after))
+        })
+        .collect();
     let mut functions = Vec::new();
     let mut parse_errors = Vec::new();
-    for relative in paths {
-        if detect_language(&relative).is_none() {
-            continue;
-        }
-        let before_path = renames
-            .get(&relative)
-            .map_or(relative.as_str(), String::as_str);
-        let before = git::read_revision_blob_optional(&root, &options.base, before_path)?
-            .map(|source| crate::analyze_source(before_path, &source))
-            .transpose()?;
-        let after = read_after(&root, &relative, &options.target)?
-            .map(|source| crate::analyze_source(&relative, &source))
-            .transpose()?;
+    for outcome in outcomes {
+        let (relative, before, after) = outcome?;
         let before_errors = before
             .as_ref()
             .map(|file| file.parse_errors.clone())

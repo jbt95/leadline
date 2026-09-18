@@ -10,9 +10,8 @@ use crate::discovery::SourceFilter;
 use crate::git;
 use crate::{Result, normalize_path};
 use std::collections::BTreeMap;
-use std::io::{BufReader, ErrorKind, Read, Write};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Stdio};
 
 const CONFIG_FILE: &str = "leadline.toml";
 const MAILMAP_FILE: &str = ".mailmap";
@@ -626,7 +625,7 @@ fn load_objects(
     plan: ObjectPlan,
     explicit: bool,
 ) -> Result<ObjectContents> {
-    let mut batch = ObjectBatch::open(root)?;
+    let mut batch = git::ObjectBatch::open(root)?;
     let mailmap_bytes = match &plan.mailmap {
         Some(oid) => Some(batch.read(oid)?),
         None => None,
@@ -648,122 +647,4 @@ fn load_objects(
     }
     batch.finish()?;
     Ok((config_bytes, mailmap_bytes, entries))
-}
-
-/// One streaming `git cat-file --batch` process for object-backed targets.
-struct ObjectBatch {
-    child: Child,
-    stdin: Option<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
-    stderr: Option<ChildStderr>,
-}
-
-impl ObjectBatch {
-    fn open(root: &Path) -> Result<ObjectBatch> {
-        let mut command = git::command(root, &["cat-file", "--batch"]);
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = command.spawn()?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or("git cat-file did not expose stdin")?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or("git cat-file did not expose stdout")?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or("git cat-file did not expose stderr")?;
-        Ok(ObjectBatch {
-            child,
-            stdin: Some(stdin),
-            stdout: BufReader::new(stdout),
-            stderr: Some(stderr),
-        })
-    }
-
-    fn read(&mut self, oid: &str) -> Result<Vec<u8>> {
-        let stdin = self.stdin.as_mut().ok_or("git object stream is closed")?;
-        stdin.write_all(oid.as_bytes())?;
-        stdin.write_all(b"\n")?;
-        stdin.flush()?;
-
-        let header = read_header(&mut self.stdout)?;
-        if header.ends_with(b" missing") {
-            return Err(format!("git is missing promisor object {oid}").into());
-        }
-        let mut fields = header.split(|byte| *byte == b' ');
-        let (Some(reported), Some(kind), Some(size), None) =
-            (fields.next(), fields.next(), fields.next(), fields.next())
-        else {
-            return Err("git returned a malformed object header".into());
-        };
-        if !reported.eq_ignore_ascii_case(oid.as_bytes()) || kind != b"blob" {
-            return Err("git returned a mismatched object header".into());
-        }
-        let size: usize = std::str::from_utf8(size)
-            .map_err(|_| "git returned a malformed object size")?
-            .parse()
-            .map_err(|_| "git returned a malformed object size")?;
-        let mut bytes = vec![0; size];
-        self.stdout.read_exact(&mut bytes)?;
-        let mut terminator = [0; 1];
-        self.stdout.read_exact(&mut terminator)?;
-        if terminator != *b"\n" {
-            return Err("git returned a malformed object body".into());
-        }
-        Ok(bytes)
-    }
-
-    fn finish(&mut self) -> Result<()> {
-        drop(self.stdin.take());
-        let status = self.child.wait()?;
-        if status.success() {
-            return Ok(());
-        }
-        let mut message = String::new();
-        if let Some(mut stderr) = self.stderr.take() {
-            let _ = stderr.read_to_string(&mut message);
-        }
-        Err(format!("git cat-file failed: {}", message.trim()).into())
-    }
-}
-
-impl Drop for ObjectBatch {
-    fn drop(&mut self) {
-        drop(self.stdin.take());
-        match self.child.try_wait() {
-            Ok(Some(_)) => {}
-            _ => {
-                let _ = self.child.kill();
-            }
-        }
-        let _ = self.child.wait();
-    }
-}
-
-fn read_header(reader: &mut impl Read) -> Result<Vec<u8>> {
-    let mut header = Vec::new();
-    let mut byte = [0; 1];
-    loop {
-        match reader.read(&mut byte) {
-            Ok(0) => return Err("git object stream ended early".into()),
-            Ok(_) => {
-                header.push(byte[0]);
-                if byte[0] == b'\n' {
-                    header.pop();
-                    return Ok(header);
-                }
-                if header.len() > 256 {
-                    return Err("git returned a malformed object header".into());
-                }
-            }
-            Err(error) if error.kind() == ErrorKind::Interrupted => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
 }

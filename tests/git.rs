@@ -429,6 +429,12 @@ case "$1" in
       *diff-missing-object*:ls-tree) printf '100644 blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tapp.ts\000'; exit 0 ;;
     esac
     ;;
+  cat-file)
+    case "$PWD" in
+      *diff-missing-object*) printf '%s missing\n' "$value" ;;
+    esac
+    exit 0
+    ;;
   ls-files) exit 0 ;;
   show)
     case "$PWD" in
