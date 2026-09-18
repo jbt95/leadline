@@ -9,6 +9,9 @@ use std::cell::RefCell;
 use std::path::Path;
 use tree_sitter::{Language as TsLanguage, Node, Parser, Tree};
 
+mod java;
+mod js;
+
 thread_local! {
     static THREAD_PARSER: RefCell<Parser> = RefCell::new(Parser::new());
 }
@@ -103,7 +106,7 @@ const CURSOR_CHILD_THRESHOLD: u32 = 8;
 /// Pushes `node`'s children onto `stack` so the next pop yields the first
 /// child.
 #[inline]
-fn push_children_reversed<'tree>(node: Node<'tree>, stack: &mut Vec<Node<'tree>>) {
+pub(super) fn push_children_reversed<'tree>(node: Node<'tree>, stack: &mut Vec<Node<'tree>>) {
     let count = node.child_count();
     if count <= CURSOR_CHILD_THRESHOLD {
         for index in (0..count).rev() {
@@ -250,9 +253,9 @@ pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDe
     let (language, tree) = parse_tree(path, source)?;
     let root = tree.root_node();
     Ok(match language {
-        Language::Java => extract_java_dependencies(root, source),
+        Language::Java => java::extract_java_dependencies(root, source),
         Language::JavaScript | Language::TypeScript | Language::Tsx => {
-            extract_javascript_dependencies(root, source)
+            js::extract_javascript_dependencies(root, source)
         }
     })
 }
@@ -273,9 +276,9 @@ pub(crate) fn parse_bundle(path: &str, source: &[u8]) -> Result<ParsedBundle> {
     Ok(ParsedBundle {
         analysis: analyze_tree(path, language, source, root),
         dependencies: match language {
-            Language::Java => extract_java_dependencies(root, source),
+            Language::Java => java::extract_java_dependencies(root, source),
             Language::JavaScript | Language::TypeScript | Language::Tsx => {
-                extract_javascript_dependencies(root, source)
+                js::extract_javascript_dependencies(root, source)
             }
         },
         tokens: tokenize_tree(language, source, root),
@@ -308,218 +311,6 @@ pub(crate) fn parse_sql_host(
         analyze_tree(path, language, source, root),
         host_sql_sites_from_tree(language, source, root),
     ))
-}
-
-fn extract_javascript_dependencies(root: Node<'_>, source: &[u8]) -> ParsedDependencies {
-    let mut references = Vec::new();
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        let found = match node.kind() {
-            "import_statement" | "export_statement" => node
-                .child_by_field_name("source")
-                .map(|literal| (RawDependencyKind::JavaScriptImport, literal)),
-            "call_expression" if is_dependency_call(node, source) => node
-                .child_by_field_name("arguments")
-                .and_then(single_string_argument)
-                .map(|literal| (RawDependencyKind::JavaScriptCall, literal)),
-            _ => None,
-        };
-        if let Some((kind, literal)) = found {
-            let line = node.start_position().row as u32 + 1;
-            match decode_javascript_string(literal, source) {
-                Some(specifier) => references.push(RawDependency {
-                    kind,
-                    specifier,
-                    line,
-                }),
-                // A literal in dependency position that cannot be decoded
-                // (bad hex, lone surrogate, unclosed escape) still names a
-                // reference; keep the raw text so graph reports it instead
-                // of silently dropping it.
-                None => references.push(RawDependency {
-                    kind: RawDependencyKind::JavaScriptUndecodable,
-                    specifier: raw_string_inner_text(literal, source),
-                    line,
-                }),
-            }
-        }
-        push_children_reversed(node, &mut stack);
-    }
-    ParsedDependencies {
-        references,
-        ..ParsedDependencies::default()
-    }
-}
-
-fn is_dependency_call(node: Node<'_>, source: &[u8]) -> bool {
-    node.child_by_field_name("function")
-        .is_some_and(|function| {
-            function.kind() == "import"
-                || (function.kind() == "identifier" && node_text(function, source) == "require")
-        })
-}
-
-fn single_string_argument(arguments: Node<'_>) -> Option<Node<'_>> {
-    let mut cursor = arguments.walk();
-    let mut named = arguments.named_children(&mut cursor);
-    let argument = named.next()?;
-    (argument.kind() == "string" && named.next().is_none()).then_some(argument)
-}
-
-fn raw_string_inner_text(node: Node<'_>, source: &[u8]) -> String {
-    let text = node_text(node, source);
-    let bytes = text.as_bytes();
-    if bytes.len() >= 2
-        && (bytes[0] == b'\'' || bytes[0] == b'"')
-        && bytes[bytes.len() - 1] == bytes[0]
-    {
-        text[1..text.len() - 1].to_owned()
-    } else {
-        text.to_owned()
-    }
-}
-
-fn decode_javascript_string(node: Node<'_>, source: &[u8]) -> Option<String> {
-    if node.kind() != "string" {
-        return None;
-    }
-    let text = node_text(node, source);
-    let quote = text.chars().next()?;
-    if !matches!(quote, '\'' | '"') || !text.ends_with(quote) || text.len() < 2 {
-        return None;
-    }
-    decode_javascript_escapes(&text[1..text.len() - 1])
-}
-
-fn decode_javascript_escapes(text: &str) -> Option<String> {
-    let mut decoded = String::new();
-    let mut chars = text.chars();
-    while let Some(character) = chars.next() {
-        if character != '\\' {
-            decoded.push(character);
-            continue;
-        }
-        let escaped = chars.next()?;
-        match escaped {
-            '\n' | '\r' => {
-                if escaped == '\r' && chars.clone().next() == Some('\n') {
-                    chars.next();
-                }
-            }
-            'b' => decoded.push('\u{0008}'),
-            'f' => decoded.push('\u{000c}'),
-            'n' => decoded.push('\n'),
-            'r' => decoded.push('\r'),
-            't' => decoded.push('\t'),
-            'v' => decoded.push('\u{000b}'),
-            '0' => decoded.push('\0'),
-            'x' => decoded.push(char::from_u32(decode_hex(&mut chars, 2)?)?),
-            'u' if chars.clone().next() == Some('{') => {
-                chars.next();
-                let mut value = String::new();
-                let mut closed = false;
-                for digit in chars.by_ref() {
-                    if digit == '}' {
-                        closed = true;
-                        break;
-                    }
-                    value.push(digit);
-                }
-                if !closed {
-                    return None;
-                }
-                decoded.push(char::from_u32(u32::from_str_radix(&value, 16).ok()?)?);
-            }
-            'u' => {
-                let first = decode_hex(&mut chars, 4)?;
-                let value = if (0xd800..=0xdbff).contains(&first) {
-                    if chars.next()? != '\\' || chars.next()? != 'u' {
-                        return None;
-                    }
-                    let second = decode_hex(&mut chars, 4)?;
-                    if !(0xdc00..=0xdfff).contains(&second) {
-                        return None;
-                    }
-                    0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00)
-                } else {
-                    first
-                };
-                decoded.push(char::from_u32(value)?);
-            }
-            other => decoded.push(other),
-        }
-    }
-    Some(decoded)
-}
-
-fn decode_hex(chars: &mut impl Iterator<Item = char>, digits: usize) -> Option<u32> {
-    let mut value = 0_u32;
-    for _ in 0..digits {
-        value = value.checked_mul(16)? + chars.next()?.to_digit(16)?;
-    }
-    Some(value)
-}
-
-fn extract_java_dependencies(root: Node<'_>, source: &[u8]) -> ParsedDependencies {
-    let mut parsed = ParsedDependencies::default();
-    let mut cursor = root.walk();
-    for node in root.named_children(&mut cursor) {
-        match node.kind() {
-            "package_declaration" => parsed.java_package = java_qualified_name(node, source),
-            "import_declaration" => {
-                if let Some(reference) = java_import(node, source) {
-                    parsed.references.push(reference);
-                }
-            }
-            "class_declaration"
-            | "interface_declaration"
-            | "enum_declaration"
-            | "record_declaration"
-            | "annotation_type_declaration" => {
-                if let Some(name) = node.child_by_field_name("name") {
-                    parsed
-                        .java_top_level_types
-                        .push(node_text(name, source).to_owned());
-                }
-            }
-            _ => {}
-        }
-    }
-    parsed
-}
-
-fn java_qualified_name(node: Node<'_>, source: &[u8]) -> Option<String> {
-    let mut cursor = node.walk();
-    node.named_children(&mut cursor)
-        .find(|child| matches!(child.kind(), "identifier" | "scoped_identifier"))
-        .map(|name| node_text(name, source).to_owned())
-}
-
-fn java_import(node: Node<'_>, source: &[u8]) -> Option<RawDependency> {
-    let specifier = java_qualified_name(node, source)?;
-    let mut cursor = node.walk();
-    let wildcard = node
-        .named_children(&mut cursor)
-        .any(|child| child.kind() == "asterisk");
-    let mut cursor = node.walk();
-    let is_static = node
-        .children(&mut cursor)
-        .any(|child| child.kind() == "static");
-    Some(RawDependency {
-        kind: if wildcard {
-            RawDependencyKind::JavaWildcard
-        } else if is_static {
-            RawDependencyKind::JavaStatic
-        } else {
-            RawDependencyKind::Java
-        },
-        specifier: if wildcard {
-            format!("{specifier}.*")
-        } else {
-            specifier
-        },
-        line: node.start_position().row as u32 + 1,
-    })
 }
 
 pub fn detect_language(path: &str) -> Option<Language> {
@@ -1086,7 +877,7 @@ fn is_operand(kind: &str) -> bool {
         )
 }
 
-fn node_text<'a>(node: Node<'_>, source: &'a [u8]) -> &'a str {
+pub(super) fn node_text<'a>(node: Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.byte_range()]).unwrap_or("")
 }
 
