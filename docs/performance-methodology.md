@@ -84,3 +84,14 @@ Repository: 120 synthetic TypeScript files x 12 functions each (`cargo bench --o
 | `index_refresh/warm_refresh` | 605.20 µs | 576.90–642.45 µs |
 
 Warm refresh is ~55x faster than cold analysis. Warm refresh of a repository this size must stay under 100 ms: a regression past that budget is a bug, not a trade-off.
+
+2026-09-18, leadline 0.11.0 → unreleased, Apple M2 Pro, 32 GiB, macOS 26.6.2 (Darwin 25.6.0 arm64), Rust 1.90.0, Criterion 0.8.2, same machine before and after (`cargo bench --offline --bench duplication`, `sample_size(10)`):
+
+| Case | Before (median) | After (median) | Delta |
+| --- | ---: | ---: | ---: |
+| `duplication_detection/unique/500` | 1.0988 s | 174.10 ms | −84% |
+| `duplication_detection/unique/2000` | 9.4678 s | 668.16 ms | −93% |
+| `duplication_detection/repeated/500` | 1.0486 s | 236.01 ms | −77% |
+| `duplication_detection/repeated/2000` | 6.7576 s | 910.26 ms | −87% |
+
+End-to-end self-debt (`./target/release/leadline debt --base HEAD~1 --json`, `/usr/bin/time -l`, median of 3, same machine and binary flags): 1.37 s / ~30.5 MB RSS before → 1.13 s / ~30 MB RSS after (−17%, RSS unchanged). The after column includes the rolling-hash correctness fix, which intentionally reports previously invisible clone groups (probe corpus: 8 → 17 groups at identical `duplicated_lines`).
