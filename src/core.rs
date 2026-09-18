@@ -12,6 +12,7 @@ pub const CRAP_SPEC: &str = "default";
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
+    Go,
     Java,
     JavaScript,
     TypeScript,
@@ -22,6 +23,7 @@ impl Language {
     /// Stable lowercase identifier for metrics labels.
     pub fn as_str(self) -> &'static str {
         match self {
+            Language::Go => "go",
             Language::Java => "java",
             Language::JavaScript => "javascript",
             Language::TypeScript => "typescript",

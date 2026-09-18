@@ -4,6 +4,10 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Added
+
+- Go language support: `analyze`, `check`, `changed`, and duplication tokenization handle `.go` sources (functions, methods, func literals, `switch`/`select`/`case`, `&&`/`||`).
+
 ### Changed
 
 - `changed` reads all base revision blobs with a single `ls-tree` plus one

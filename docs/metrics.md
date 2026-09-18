@@ -57,6 +57,15 @@ remaining deltas are bookkeeping, not scoring:
   show function-level values; leadline reports and gates per function,
   so thresholds are not 1:1.
 
+### Go counting policy
+
+Go follows the same table with these adjustments: `default:` arms count
+as Case (+1 cyclomatic, +0 cognitive), unlike Java/JS/TS where `default:`
+scores +0. `go`/`defer` statements are not decisions (they count toward
+logical LOC only). Method receivers are excluded from the parameter
+count. Go has no `?`-style error returns; explicit `if err != nil`
+checks count as ordinary `if` decisions.
+
 ## Cognitive complexity
 
 Add `1 + current nesting` for `if`, loops, `catch`, `switch`, and ternary expressions. An `else if` adds 1 and continues the original chain. A final `else` adds 1. A labeled `break` or `continue` adds 1. Structural constructs increase nesting for structural descendants.

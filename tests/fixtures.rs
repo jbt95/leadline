@@ -1,4 +1,4 @@
-use leadline::core::{FileAnalysis, FunctionAnalysis};
+use leadline::core::{FileAnalysis, FunctionAnalysis, FunctionKind};
 use std::path::Path;
 
 fn fixture(relative: &str) -> FileAnalysis {
@@ -65,6 +65,28 @@ fn tiny_fixtures_define_default_v1() {
     assert_complexity("java/arrow.java", "op", 1, 0, 0, 1);
     assert_complexity("javascript/recursion.js", "fact", 2, 2, 1, 1);
     assert_complexity("java/recursion.java", "fact", 2, 2, 1, 1);
+
+    assert_complexity("go/empty.go", "empty", 1, 0, 0, 0);
+    assert_complexity("go/decisions.go", "choose", 4, 5, 2, 1);
+    assert_complexity("go/logic.go", "logic", 3, 2, 0, 3);
+    assert_complexity("go/method.go", "add", 1, 0, 0, 1);
+    assert_complexity("go/recursion.go", "fact", 2, 2, 1, 1);
+    assert_complexity("go/loop.go", "sum", 2, 1, 1, 1);
+    assert_complexity("go/closure.go", "outer", 1, 0, 0, 1);
+    assert_complexity("go/closure.go", "double", 1, 0, 0, 1);
+}
+
+#[test]
+fn go_method_kind_and_parity() {
+    let file = fixture("go/method.go");
+    assert_eq!(function(&file, "add").kind, FunctionKind::Method);
+    let go_file = fixture("go/decisions.go");
+    let js_file = fixture("javascript/decisions.js");
+    let go_choose = &function(&go_file, "choose").metrics;
+    let js_choose = &function(&js_file, "choose").metrics;
+    assert_eq!(go_choose.cyclomatic, js_choose.cyclomatic);
+    assert_eq!(go_choose.cognitive, js_choose.cognitive);
+    assert_eq!(go_choose.max_nesting, js_choose.max_nesting);
 }
 
 #[test]

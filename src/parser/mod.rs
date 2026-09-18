@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::path::Path;
 use tree_sitter::{Language as TsLanguage, Node, Parser, Tree};
 
+mod go;
 mod java;
 mod js;
 
@@ -18,6 +19,7 @@ thread_local! {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RawDependencyKind {
+    GoImport,
     JavaScriptImport,
     JavaScriptCall,
     JavaScriptUndecodable,
@@ -218,6 +220,8 @@ fn normalize_leaf(node: Node<'_>, source: &[u8]) -> Option<String> {
     if matches!(
         kind,
         "identifier"
+            | "package_identifier"
+            | "blank_identifier"
             | "property_identifier"
             | "type_identifier"
             | "field_identifier"
@@ -233,6 +237,9 @@ fn normalize_leaf(node: Node<'_>, source: &[u8]) -> Option<String> {
     if kind.contains("number")
         || kind == "integer"
         || kind == "float"
+        || kind == "int_literal"
+        || kind == "float_literal"
+        || kind == "imaginary_literal"
         || kind == "decimal_integer_literal"
         || kind == "hex_integer_literal"
         || kind == "octal_integer_literal"
@@ -253,6 +260,7 @@ pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDe
     let (language, tree) = parse_tree(path, source)?;
     let root = tree.root_node();
     Ok(match language {
+        Language::Go => go::extract_go_dependencies(root, source),
         Language::Java => java::extract_java_dependencies(root, source),
         Language::JavaScript | Language::TypeScript | Language::Tsx => {
             js::extract_javascript_dependencies(root, source)
@@ -276,6 +284,7 @@ pub(crate) fn parse_bundle(path: &str, source: &[u8]) -> Result<ParsedBundle> {
     Ok(ParsedBundle {
         analysis: analyze_tree(path, language, source, root),
         dependencies: match language {
+            Language::Go => go::extract_go_dependencies(root, source),
             Language::Java => java::extract_java_dependencies(root, source),
             Language::JavaScript | Language::TypeScript | Language::Tsx => {
                 js::extract_javascript_dependencies(root, source)
@@ -321,6 +330,7 @@ pub fn detect_language(path: &str) -> Option<Language> {
         .as_str()
     {
         "java" => Some(Language::Java),
+        "go" => Some(Language::Go),
         "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
         "ts" | "mts" | "cts" => Some(Language::TypeScript),
         "tsx" => Some(Language::Tsx),
@@ -330,6 +340,7 @@ pub fn detect_language(path: &str) -> Option<Language> {
 
 fn grammar(language: Language) -> TsLanguage {
     match language {
+        Language::Go => tree_sitter_go::LANGUAGE.into(),
         Language::Java => tree_sitter_java::LANGUAGE.into(),
         Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
         Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
@@ -368,6 +379,10 @@ fn discover_tree<'tree>(
 }
 fn is_function(kind: &str, language: Language) -> bool {
     match language {
+        Language::Go => matches!(
+            kind,
+            "function_declaration" | "method_declaration" | "func_literal"
+        ),
         Language::Java => matches!(
             kind,
             "method_declaration"
@@ -425,11 +440,11 @@ fn analyze_node(
 
 fn function_kind(node: Node<'_>) -> FunctionKind {
     match node.kind() {
-        "method_definition" => FunctionKind::Method,
+        "method_definition" | "method_declaration" => FunctionKind::Method,
         "constructor_declaration" | "compact_constructor_declaration" => FunctionKind::Constructor,
         "lambda_expression" => FunctionKind::Lambda,
         "arrow_function" => FunctionKind::Arrow,
-        "function_expression" if node.child_by_field_name("name").is_none() => {
+        "function_expression" | "func_literal" if node.child_by_field_name("name").is_none() => {
             FunctionKind::Anonymous
         }
         _ => FunctionKind::Function,
@@ -571,8 +586,14 @@ fn decision_kind(node: Node<'_>, language: Language, source: &[u8]) -> Option<De
         | "while_statement"
         | "do_statement" => Some(DecisionKind::Loop),
         "catch_clause" => Some(DecisionKind::Catch),
-        "switch_statement" | "switch_expression" => Some(DecisionKind::Switch),
-        "switch_case" => Some(DecisionKind::Case),
+        "switch_statement"
+        | "switch_expression"
+        | "expression_switch_statement"
+        | "type_switch_statement"
+        | "select_statement" => Some(DecisionKind::Switch),
+        "switch_case" | "expression_case" | "type_case" | "communication_case" | "default_case" => {
+            Some(DecisionKind::Case)
+        }
         "switch_label" if node_text(node, source).trim_start().starts_with("case") => {
             Some(DecisionKind::Case)
         }
@@ -650,6 +671,29 @@ fn collect_logical(
 }
 
 fn function_name(node: Node<'_>, source: &[u8]) -> String {
+    if node.kind() == "func_literal" {
+        // The literal sits in the right-hand `expression_list`; the
+        // declaration is the grandparent.
+        let mut ancestor = node.parent();
+        if ancestor.is_some_and(|parent| parent.kind() == "expression_list") {
+            ancestor = ancestor.and_then(|parent| parent.parent());
+        }
+        if let Some(parent) = ancestor {
+            if parent.kind() == "short_var_declaration"
+                && let Some(left) = parent.child_by_field_name("left")
+            {
+                let mut cursor = left.walk();
+                if let Some(id) = left.named_children(&mut cursor).next() {
+                    return node_text(id, source).to_owned();
+                }
+            }
+            if parent.kind() == "var_spec"
+                && let Some(name) = parent.child_by_field_name("name")
+            {
+                return node_text(name, source).to_owned();
+            }
+        }
+    }
     if let Some(name) = node.child_by_field_name("name") {
         return node_text(name, source).to_owned();
     }
@@ -721,6 +765,19 @@ fn calls_self(root: Node<'_>, language: Language, name: &str, source: &[u8]) -> 
                     None
                 }
             }
+            Language::Go => {
+                if node.kind() == "call_expression" {
+                    node.child_by_field_name("function").and_then(|function| {
+                        match function.kind() {
+                            "identifier" => Some(function),
+                            "selector_expression" => function.child_by_field_name("field"),
+                            _ => None,
+                        }
+                    })
+                } else {
+                    None
+                }
+            }
         };
         if callee.is_some_and(|callee| node_text(callee, source) == name) {
             return true;
@@ -732,6 +789,23 @@ fn calls_self(root: Node<'_>, language: Language, name: &str, source: &[u8]) -> 
 
 fn parameter_count(node: Node<'_>) -> u32 {
     if let Some(parameters) = node.child_by_field_name("parameters") {
+        // Go groups names (`func f(a, b, c bool)` is one
+        // parameter_declaration with three `name` fields); only
+        // tree-sitter-go emits `parameter_list`, so this arm is Go-only.
+        // The receiver (`receiver` field) is never counted.
+        if parameters.kind() == "parameter_list" {
+            let mut cursor = parameters.walk();
+            return parameters
+                .named_children(&mut cursor)
+                .map(|declaration| {
+                    let mut inner = declaration.walk();
+                    (declaration
+                        .children_by_field_name("name", &mut inner)
+                        .count() as u32)
+                        .max(1)
+                })
+                .sum();
+        }
         return if matches!(
             parameters.kind(),
             "identifier" | "formal_parameter" | "spread_parameter"
@@ -789,6 +863,22 @@ fn is_logical_loc(kind: &str) -> bool {
             | "catch_clause"
             | "break_statement"
             | "continue_statement"
+            | "short_var_declaration"
+            | "var_spec"
+            | "const_spec"
+            | "assignment_statement"
+            | "inc_statement"
+            | "dec_statement"
+            | "send_statement"
+            | "go_statement"
+            | "defer_statement"
+            | "expression_case"
+            | "type_case"
+            | "communication_case"
+            | "default_case"
+            | "select_statement"
+            | "expression_switch_statement"
+            | "type_switch_statement"
     )
 }
 
@@ -827,6 +917,8 @@ fn is_operator(kind: &str) -> bool {
             | ">>>"
             | "++"
             | "--"
+            | ":="
+            | "<-"
             | "?"
             | ":"
             | "=>"
@@ -859,6 +951,11 @@ fn is_operand(kind: &str) -> bool {
             kind,
             "identifier"
                 | "number"
+                | "int_literal"
+                | "float_literal"
+                | "imaginary_literal"
+                | "rune_literal"
+                | "nil"
                 | "decimal_integer_literal"
                 | "hex_integer_literal"
                 | "octal_integer_literal"
@@ -976,6 +1073,8 @@ fn sql_call_target<'a>(
             };
             (name_node, node.child_by_field_name("arguments")?)
         }
+        // Task 3 wires Go Query/Exec-family detection here.
+        Language::Go => return None,
     };
     let name = node_text(name_node, source).to_owned();
     Some((name, first_named_child(arguments)))
