@@ -4,6 +4,14 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.13.2 - 2026-09-18
+
+### Fixed
+
+- Local metrics no longer drop samples under concurrent invocations: the
+  metrics store lock now blocks briefly instead of giving up after 80ms,
+  fixing the flaky `concurrent_invocations_are_not_lost` failure.
+
 ## 0.13.1 - 2026-09-18
 
 ### Fixed
