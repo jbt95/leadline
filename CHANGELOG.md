@@ -4,6 +4,18 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.13.0 - 2026-09-18
+
+### Added
+
+- OpenCode native plugin (`integrations/opencode/plugin-v2`) emits warn-mode
+  post-edit feedback automatically after successful `edit`/`write` calls via
+  the shared `postEditFeedback` adapter; silent on clean runs and analyzer
+  failures, never blocks edits.
+- The post-edit hook skips analysis when the edited file is definitely
+  outside Leadline's scope (Java/JS/TS/TSX); unknown tool input shapes fall
+  through to analysis.
+
 ## 0.12.0 - 2026-09-18
 
 ### Added
