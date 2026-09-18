@@ -210,13 +210,17 @@ Leadline itself never detects secrets: the shared runner delegates detection
 to an installed `gitleaks` binary (a prerequisite; a missing binary fails
 visibly, never silently). The pre-commit hook scans staged content and blocks
 the commit on findings; agent adapters scan the worktree at the earliest
-supported lifecycle event. Warn/block capability by host: the Git hook,
-Claude/Gemini checkpoints, and Pi's explicit `leadline_secret_check` tool
-block; Cline's `secretGate` runs the same shared wrapper (whether Cline
-honors exit `2` as blocking is unverified); Pi's and Cline's post-edit hooks
-only warn; and the OpenCode `leadline_secret_check` tool runs on demand in
-warn mode. Claude and Gemini only block on exit `2`, so the shared wrapper
-maps findings to exit `2` with the runner's redacted diagnostics on stderr;
+supported lifecycle event, scoped to files changed against HEAD (untracked
+files count; an empty change set skips the scan). Warn/block capability by
+host: the Git hook, the Gemini checkpoint, and Pi's explicit
+`leadline_secret_check` tool block; the Claude Code `Stop` hook runs checks
+only (the per-turn secret scan was removed: a whole-tree scan on every turn
+while the gate only evaluates changed paths); Cline's `secretGate` runs the
+same shared wrapper (whether Cline honors exit `2` as blocking is
+unverified); Pi's and Cline's post-edit hooks only warn; and the OpenCode
+`leadline_secret_check` tool runs on demand in warn mode. Claude and Gemini
+only block on exit `2`, so the shared wrapper maps findings to exit `2` with
+the runner's redacted diagnostics on stderr;
 an unavailable scanner or runner, a scan failure, a bad mode, or a missing
 git comparison target exits `1` (visible to the user, non-blocking) so an
 environment miss cannot loop a Stop hook. Worktree mode checks the git HEAD

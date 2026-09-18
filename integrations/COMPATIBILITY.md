@@ -5,7 +5,7 @@
 
 | Harness | Direct CLI | MCP | Skills / instructions | Hooks | Native plugin / extension | Secret gate | Recommended official integration | Supported versions (checked 2026-09-12) |
 |---|---|---|---|---|---|---|---|---|
-| Claude Code | Yes | Yes | Yes | Yes | Yes | block on findings (Stop hook exit 2); unavailable scanner warns non-blocking | Plugin + MCP + skill + optional hooks | Not yet validated live |
+| Claude Code | Yes | Yes | Yes | Yes | Yes | manual tool + pre-commit staged hook (secret scan removed from the Stop hook; unavailable scanner warns non-blocking) | Plugin + MCP + skill + optional hooks | Not yet validated live |
 | Pi | Yes | Via extension if desired | Yes | Extension events | Yes | warn after edit (post-edit warning; block via the explicit tool or pre-commit hook) | Native extension + skill | Not yet validated live |
 | OMP | Yes | Yes / interoperability | Yes | Yes | Yes | block via the explicit tool (findings fail the call); shared runner and pre-commit hook work wherever git does | Native extension + skill, MCP fallback | Not yet validated live |
 | OpenCode | Yes | Yes | Instructions | Plugin hooks | Yes | manual tool (`leadline_secret_check`, warn mode on demand) | Plugin (v1; v2 experimental) + MCP | Not yet validated live |

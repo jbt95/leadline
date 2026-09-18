@@ -4,9 +4,9 @@ Thin plugin around the `leadline` binary. No metrics are reimplemented here.
 
 ## Requires
 
-`leadline` on `PATH` (`leadline --version` must work). The `Stop` secret
-gate also needs `gitleaks`; without it the hook warns visibly and
-non-blocking. The plugin vendors the shared gate runner, so
+`leadline` on `PATH` (`leadline --version` must work). Secret gating (the
+pre-commit staged hook) also needs `gitleaks`; without it the hook warns
+visibly and non-blocking. The plugin vendors the shared gate runner, so
 `LEADLINE_SECRET_RUNNER` is only needed when you point the hook at a
 different runner.
 
@@ -38,8 +38,10 @@ claude plugin marketplace remove leadline
 ## Permissions
 
 Hooks shell out to `leadline changed` / `leadline check` (warn mode, always
-exit 0, print only on material regression) plus the `Stop` secret gate,
-which blocks on findings where the host supports it (see
+exit 0, print only on material regression). The `Stop` hook runs the check
+only: the per-turn secret scan was removed (a whole-tree scan on every turn
+while the gate only evaluates changed paths). Secret gating stays in the
+pre-commit staged hook and the on-demand check (see
 `docs/agent-integration-guide.md`).
 
 ## OS notes
