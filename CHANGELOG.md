@@ -18,6 +18,11 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
   file. Output is unchanged; clone-heavy repositories report substantially
   faster.
 
+- `debt` classifies findings from the before/after analyses it already built
+  instead of loading and re-analyzing both sides a second time, and therefore
+  reports one consistent view of the repository instead of a possible mid-run
+  mix of two.
+
 ## 0.11.0 - 2026-09-17
 
 ### Added

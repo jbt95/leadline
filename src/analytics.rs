@@ -41,11 +41,20 @@ pub struct ProjectRequest {
 
 /// Loads a source snapshot and builds the canonical Project.
 pub fn build(request: &ProjectRequest) -> Result<Project> {
+    Ok(build_with_analysis(request)?.0)
+}
+
+/// Builds the Project and returns the source analysis and snapshot context so
+/// callers such as `analyze_debt` can reuse them instead of re-loading.
+fn build_with_analysis(
+    request: &ProjectRequest,
+) -> Result<(Project, AnalysisReport, SnapshotContext)> {
     let (context, snapshot) = load(&request.path, request.target.clone())?;
     let analysis = crate::analyze_sources(&snapshot.entries, request.coverage.as_ref())?;
     let graph = analyze_dependencies_from_sources(&snapshot.entries)?;
     let mut budget = InputBudget::new();
-    build_from_parts(&context, &snapshot, &analysis, &graph, request, &mut budget)
+    let project = build_from_parts(&context, &snapshot, &analysis, &graph, request, &mut budget)?;
+    Ok((project, analysis, context))
 }
 
 fn build_from_parts(
@@ -257,7 +266,7 @@ pub struct DebtRequest {
 
 /// Compares complete before/after states with the current configuration.
 pub fn analyze_debt(request: &DebtRequest) -> Result<DebtReport> {
-    let before = build(&ProjectRequest {
+    let (before, before_analysis, _before_context) = build_with_analysis(&ProjectRequest {
         path: request.path.clone(),
         target: SnapshotTarget::Revision(request.base.clone()),
         window: request.window,
@@ -267,7 +276,7 @@ pub fn analyze_debt(request: &DebtRequest) -> Result<DebtReport> {
         snapshots_path: None,
         coverage: None,
     })?;
-    let after = build(&ProjectRequest {
+    let (after, after_analysis, after_context) = build_with_analysis(&ProjectRequest {
         path: request.path.clone(),
         target: request.target.clone(),
         window: request.window,
@@ -283,30 +292,15 @@ pub fn analyze_debt(request: &DebtRequest) -> Result<DebtReport> {
         BTreeMap::new()
     };
 
-    let (before_context, before_snapshot) = load(
-        &request.path,
-        SnapshotTarget::Revision(request.base.clone()),
-    )?;
-    let (after_context, after_snapshot) = load(&request.path, request.target.clone())?;
-    let before_analysis = crate::analyze_sources(&before_snapshot.entries, None)?;
-    let after_analysis = crate::analyze_sources(&after_snapshot.entries, None)?;
     let before_files: Vec<&crate::core::FileAnalysis> = before_analysis.files.iter().collect();
     let after_files: Vec<&crate::core::FileAnalysis> = after_analysis.files.iter().collect();
     let thresholds = after_context.config.thresholds.clone();
     let (findings, unknown) = classify(&before_files, &after_files, &thresholds);
 
-    // ponytail: both sides are loaded twice (Project build + threshold
-    // classification); reuse one pair of analyses if this dominates profiles.
     let before_entries = project_risk_entries(&before);
     let after_entries = project_risk_entries(&after);
     let risk_changes = compare_risks(&before_entries, &after_entries, &renames);
     let summary = summarize(&findings, unknown, &risk_changes);
-    let _ = (
-        before_context,
-        after_context,
-        before_snapshot,
-        after_snapshot,
-    );
     Ok(DebtReport {
         schema_version: DEBT_SCHEMA_VERSION,
         metric_profile: after_analysis.metric_profile,
