@@ -173,6 +173,23 @@ fn outcome_label(result: &Result<ExitCode, CliError>) -> &'static str {
     }
 }
 
+/// Encodes one JSON document straight to stdout instead of building the whole
+/// encoded string in memory first.
+fn print_json<T: serde::Serialize>(value: &T, pretty: bool) -> Result<(), CliError> {
+    let stdout = std::io::stdout();
+    let mut output = stdout.lock();
+    let encoded = if pretty {
+        serde_json::to_writer_pretty(&mut output, value)
+    } else {
+        serde_json::to_writer(&mut output, value)
+    };
+    encoded.map_err(|error| CliError::internal(error.to_string()))?;
+    use std::io::Write;
+    output
+        .write_all(b"\n")
+        .map_err(|error| CliError::internal(error.to_string()))
+}
+
 fn dispatch_command(args: Vec<String>) -> Result<ExitCode, CliError> {
     let Some(command) = args.first().map(String::as_str) else {
         return Err(CliError::usage(usage()));
@@ -725,11 +742,7 @@ fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
                 .map_err(|error| CliError::internal(error.to_string()))?
         );
     } else if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&report, true)?;
     } else {
         print!("{}", leadline::report::terminal_hotspots(&report));
     }
@@ -853,11 +866,7 @@ fn risk_command(args: &[String]) -> Result<ExitCode, CliError> {
                 .map_err(|error| CliError::internal(error.to_string()))?
         );
     } else if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&report, true)?;
     } else {
         let total = report.risks.len();
         report.risks.truncate(limit);
@@ -1016,11 +1025,7 @@ fn project_command(args: &[String]) -> Result<ExitCode, CliError> {
                 .map_err(|error| CliError::internal(error.to_string()))?
         );
     } else if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&report, true)?;
     } else {
         print!("{}", leadline::report::terminal_project(&report));
     }
@@ -1142,11 +1147,7 @@ fn debt_command(args: &[String]) -> Result<ExitCode, CliError> {
                 .map_err(|error| CliError::internal(error.to_string()))?
         );
     } else if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&report, true)?;
     } else {
         print!("{}", leadline::report::terminal_debt(&report));
     }
@@ -1286,11 +1287,7 @@ fn mutation_command(args: &[String]) -> Result<ExitCode, CliError> {
             "mutation": mutation,
             "test_relationships": relationships,
         });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&envelope)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&envelope, true)?;
     } else {
         print!(
             "{}",
@@ -1336,11 +1333,7 @@ fn duplication_command(args: &[String]) -> Result<ExitCode, CliError> {
     let complete = match &outcome {
         leadline::analytics::DuplicationOutcome::Single(report) => {
             if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(report)
-                        .map_err(|error| CliError::internal(error.to_string()))?
-                );
+                print_json(report, true)?;
             } else {
                 print!("{}", leadline::report::terminal_duplication(report));
             }
@@ -1348,11 +1341,7 @@ fn duplication_command(args: &[String]) -> Result<ExitCode, CliError> {
         }
         leadline::analytics::DuplicationOutcome::Drift(report) => {
             if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(report)
-                        .map_err(|error| CliError::internal(error.to_string()))?
-                );
+                print_json(report, true)?;
             } else {
                 print!("{}", leadline::report::terminal_duplication_drift(report));
             }
@@ -1399,11 +1388,7 @@ fn policy_command(args: &[String]) -> Result<ExitCode, CliError> {
         leadline::analytics::analyze_policy(&path, SnapshotTarget::Worktree, base.as_deref())
             .map_err(|error| CliError::incomplete(error.to_string()))?;
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&report, true)?;
     } else {
         print!("{}", leadline::report::terminal_policy(&report));
     }
@@ -1519,11 +1504,7 @@ fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
                 .map_err(|error| CliError::internal(error.to_string()))?
         );
     } else if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&report, true)?;
     } else {
         print!("{}", leadline::pg_plan::terminal_text(&report));
     }
@@ -1659,11 +1640,7 @@ fn security_command(args: &[String]) -> Result<ExitCode, CliError> {
             .map_err(|error| CliError::internal(error.to_string()))?
         );
     } else if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&report, true)?;
     } else {
         print!("{}", leadline::security::terminal_text(&report));
     }
@@ -1869,11 +1846,7 @@ fn vulnerabilities_command(args: &[String]) -> Result<ExitCode, CliError> {
             .map_err(|error| CliError::internal(error.to_string()))?
         );
     } else if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&report, true)?;
     } else {
         print!("{}", leadline::vulnerabilities::terminal_text(&report));
     }
@@ -1983,11 +1956,7 @@ fn sql_command(args: &[String]) -> Result<ExitCode, CliError> {
                 .map_err(|error| CliError::internal(error.to_string()))?
         );
     } else if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&report, true)?;
     } else {
         print!("{}", leadline::sql::terminal_text(&report));
     }
@@ -2090,11 +2059,7 @@ fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
                 .map_err(|error| CliError::internal(error.to_string()))?
         );
     } else if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&report, true)?;
     } else {
         print!("{}", leadline::report::terminal_coupling(&report));
     }
@@ -2160,11 +2125,7 @@ fn dependencies_command(args: &[String]) -> Result<ExitCode, CliError> {
                 .map_err(|error| CliError::internal(error.to_string()))?
         );
     } else if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&report, true)?;
     } else {
         print!("{}", leadline::report::terminal_dependencies(&report));
     }
@@ -2252,11 +2213,7 @@ fn impact_command(args: &[String]) -> Result<ExitCode, CliError> {
                 .map_err(|error| CliError::internal(error.to_string()))?
         );
     } else if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&report, true)?;
     } else {
         print!("{}", leadline::report::terminal_impact(&report));
     }
@@ -3522,30 +3479,17 @@ impl CommonOptions {
         thresholds: &Thresholds,
     ) -> Result<(), CliError> {
         if self.agent_json {
-            println!(
-                "{}",
-                serde_json::to_string(&leadline::agent::analyze_agent_json_budgeted(
-                    report,
-                    &self.budget
-                ))
-                .map_err(|error| CliError::internal(error.to_string()))?
-            );
+            print_json(
+                &leadline::agent::analyze_agent_json_budgeted(report, &self.budget),
+                false,
+            )?;
         } else if self.sarif {
-            println!(
-                "{}",
-                serde_json::to_string(&leadline::sarif::analysis_to_sarif(report, thresholds))
-                    .map_err(|error| CliError::internal(error.to_string()))?
-            );
+            print_json(
+                &leadline::sarif::analysis_to_sarif(report, thresholds),
+                false,
+            )?;
         } else if self.json {
-            let encoded = if self.pretty {
-                serde_json::to_string_pretty(report)
-            } else {
-                serde_json::to_string(report)
-            };
-            println!(
-                "{}",
-                encoded.map_err(|error| CliError::internal(error.to_string()))?
-            );
+            print_json(report, self.pretty)?;
         } else if has_findings {
             let terminal = leadline::report::terminal(report);
             if terminal.is_empty() {
