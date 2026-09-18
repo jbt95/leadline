@@ -551,3 +551,77 @@ pub fn analyze_mutation(
     };
     Ok((mutation, relationships))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{DuplicationConfig, parse_str};
+    use crate::source_snapshot::SourceEntry;
+
+    #[test]
+    fn bundle_parts_excludes_duplication_candidates_without_dropping_analysis() {
+        let body: &[u8] = concat!(
+            "export function shared(a: number, b: number): number {\n",
+            "    let total = 0;\n",
+            "    let scale = 1;\n",
+            "    let offset = a + b;\n",
+            "    for (let index = 0; index < a; index += 1) {\n",
+            "        total += index * b * scale;\n",
+            "        total -= offset % 3;\n",
+            "        total += index % 5;\n",
+            "        scale = scale + 1;\n",
+            "    }\n",
+            "    while (total > 1000) {\n",
+            "        total = total / 2;\n",
+            "        scale = scale - 1;\n",
+            "    }\n",
+            "    return total + a - b + scale;\n",
+            "}\n",
+        )
+        .as_bytes();
+        let entries = vec![
+            SourceEntry {
+                path: "src/keep.ts".to_owned(),
+                bytes: body.to_vec(),
+            },
+            SourceEntry {
+                path: "src/skip.ts".to_owned(),
+                bytes: body.to_vec(),
+            },
+        ];
+
+        // Sanity: with default settings the identical bodies do clone.
+        let (_, _, baseline) = bundle_parts(&entries, &DuplicationConfig::default()).unwrap();
+        assert!(
+            !baseline.groups.is_empty(),
+            "identical bodies must clone without excludes: {baseline:?}"
+        );
+
+        let config: DuplicationConfig = parse_str(
+            "[duplication]\nexclude = [\"src/skip.ts\"]\nmin_tokens = 12\nmin_lines = 5\n",
+        )
+        .unwrap()
+        .duplication;
+
+        let (analysis, graph, duplication) = bundle_parts(&entries, &config).unwrap();
+
+        assert_eq!(
+            analysis.files.len(),
+            2,
+            "excluded file stays in the analysis"
+        );
+        assert_eq!(
+            graph.files.len(),
+            2,
+            "excluded file stays in the dependency graph"
+        );
+        assert!(
+            duplication.diagnostics.is_empty(),
+            "exclusion is not a diagnostic: {duplication:?}"
+        );
+        assert!(
+            duplication.groups.is_empty(),
+            "one remaining candidate cannot form a clone group: {duplication:?}"
+        );
+    }
+}
