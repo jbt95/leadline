@@ -115,7 +115,10 @@ pub(crate) fn read_revision_blobs(
     args.extend(paths.iter().map(String::as_str));
     let output = run(root, &args)?;
     let mut oids: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
-    if let Some(records) = output.stdout.strip_suffix(&[0]) {
+    if !output.stdout.is_empty() {
+        let Some(records) = output.stdout.strip_suffix(&[0]) else {
+            return Err("git returned an unterminated entry list".into());
+        };
         for record in records.split(|byte| *byte == 0) {
             let Some(tab) = record.iter().position(|byte| *byte == b'\t') else {
                 return Err("git returned a malformed tree entry".into());

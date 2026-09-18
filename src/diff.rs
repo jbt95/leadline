@@ -272,9 +272,13 @@ pub fn analyze_changes(path: &Path, options: &ChangeOptions) -> Result<ChangedRe
         .map(|(_, before_path)| before_path.clone())
         .collect();
     let before_blobs = git::read_revision_blobs(&root, &options.base, &before_paths)?;
+    let after_paths: Vec<String> = analyzable
+        .iter()
+        .map(|(relative, _)| relative.clone())
+        .collect();
     let after_blobs = match &options.target {
         ComparisonTarget::Revision(revision) => {
-            git::read_revision_blobs(&root, revision, &ordered)?
+            git::read_revision_blobs(&root, revision, &after_paths)?
         }
         _ => std::collections::BTreeMap::new(),
     };
