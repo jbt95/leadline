@@ -4,6 +4,14 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.13.1 - 2026-09-18
+
+### Fixed
+
+- Update integration tests retry the test-binary exec when the kernel
+  reports it busy (`ETXTBSY`) under parallel load on Linux, fixing the
+  flaky `plain_update_with_a_new_release_does_not_probe_harnesses` failure.
+
 ## 0.13.0 - 2026-09-18
 
 ### Added
