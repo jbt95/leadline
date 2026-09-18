@@ -182,7 +182,7 @@ pub fn detect_with_limits(
     }
 
     let min_tokens = config.min_tokens;
-    let power = power_base(min_tokens);
+    let power = power_base(min_tokens - 1);
     let mut buckets: BTreeMap<u64, Vec<(usize, usize)>> = BTreeMap::new();
     for (file_index, file) in tokens.iter().enumerate() {
         if file.ids.len() < min_tokens {

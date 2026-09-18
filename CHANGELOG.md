@@ -15,12 +15,18 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 - Duplication comparison groups candidates by exact token-id run instead of
   formatting a joined-text key per comparison and indexes occurrences per
-  file. Output is unchanged; clone-heavy repositories report substantially
-  faster.
+  file; clone-heavy repositories report substantially faster.
 
 - `debt` classifies findings from the before/after analyses it already built
   instead of loading and re-analyzing both sides a second time, so
   classification and Project views on each side come from the same snapshot.
+
+### Fixed
+
+- Duplication missed repeated token runs at different offsets because the
+  rolling-hash slide removed the outgoing token with an off-by-one power.
+  Detection now matches every aligned window, so clone reports include
+  previously invisible groups.
 
 ## 0.11.0 - 2026-09-17
 

@@ -46,6 +46,17 @@ export function beta(value: number): number {
 }
 "#;
 
+/// Two separated copies of a nine-token expression (`1 + 2 * 3 - 4 / 5`),
+/// plus a third copy that starts on the second copy's final token and so
+/// overlaps its already-recorded span.
+const REPEATED: &str = r#"
+function value(): number {
+  return 1 + 2 * 3 - 4 / 5;
+}
+const limit = 10;
+const total = 1 + 2 * 3 - 4 / 5 + 6 * 7 - 8 / 9 * limit;
+"#;
+
 #[test]
 fn detects_type_two_clones_across_files() {
     let report = detect(
@@ -83,6 +94,35 @@ fn identical_files_with_shared_content_form_one_group() {
         .map(|occurrence| occurrence.path.as_str())
         .collect();
     assert!(paths.contains(&"src/a.ts") && paths.contains(&"src/copy.ts"));
+}
+
+#[test]
+fn repeated_runs_at_different_offsets_are_reported_once() {
+    // Same-file repeats at different offsets share one group; the third copy
+    // overlapping the second one must not add another occurrence.
+    let report = detect(&[entry("src/repeat.ts", REPEATED)], &config(9, 1));
+    assert!(report.complete, "{:?}", report.reason);
+    assert_eq!(report.comparisons, 3, "{:?}", report.groups);
+    assert_eq!(report.groups.len(), 1, "{:?}", report.groups);
+    let group = &report.groups[0];
+    assert_eq!(group.token_count, 9);
+    assert_eq!(group.occurrences.len(), 2, "{:?}", group.occurrences);
+    // The fixture's leading newline puts the copies on lines 3 and 6; the
+    // third copy overlaps the second at its first token and is rejected.
+    let spans: Vec<(u32, u32, usize, u32)> = group
+        .occurrences
+        .iter()
+        .map(|occurrence| {
+            (
+                occurrence.start_line,
+                occurrence.end_line,
+                occurrence.token_count,
+                occurrence.duplicated_lines,
+            )
+        })
+        .collect();
+    assert_eq!(spans, vec![(3, 3, 9, 1), (6, 6, 9, 1)]);
+    assert_eq!(report.duplicated_lines, 2);
 }
 
 #[test]
