@@ -98,6 +98,19 @@ fn resolves_javascript_and_typescript_references_and_reports_cycles() {
 }
 
 #[test]
+fn go_imports_are_ignored_in_the_graph() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "main.go",
+        "package main\n\nimport (\n\t\"fmt\"\n\t\"github.com/example/mod/pkg\"\n)\n\nfunc main() { fmt.Println(\"hi\") }\n",
+    );
+    let report = analyze_dependencies(&root, &[]).unwrap();
+    assert!(edge_pairs(&report).is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn supports_js_tsx_reexports_and_unique_emitted_javascript_resolution() {
     let root = temporary_directory();
     write(

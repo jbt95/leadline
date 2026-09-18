@@ -7,6 +7,7 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 ### Added
 
 - Go language support: `analyze`, `check`, `changed`, and duplication tokenization handle `.go` sources (functions, methods, func literals, `switch`/`select`/`case`, `&&`/`||`).
+- Go dependency graph records module imports as ignored (never file-relative), and SQL risk analysis recognizes Go `Query`/`Exec`-family calls with `+`-concat and `Sprintf` dynamic detection.
 
 ### Changed
 

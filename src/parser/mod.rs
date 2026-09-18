@@ -413,7 +413,7 @@ fn analyze_node(
     walk_function(node, language, source, &mut logical_loc, &mut events);
     let start_line = node.start_position().row as u32 + 1;
     let end_line = node.end_position().row as u32 + 1;
-    let kind = function_kind(node);
+    let kind = function_kind(node, language);
     let start_byte = node.start_byte() as u64;
     let end_byte = node.end_byte() as u64;
     let name = function_name(node, source);
@@ -438,9 +438,12 @@ fn analyze_node(
     )
 }
 
-fn function_kind(node: Node<'_>) -> FunctionKind {
+fn function_kind(node: Node<'_>, language: Language) -> FunctionKind {
+    if language == Language::Go && node.kind() == "method_declaration" {
+        return FunctionKind::Method;
+    }
     match node.kind() {
-        "method_definition" | "method_declaration" => FunctionKind::Method,
+        "method_definition" => FunctionKind::Method,
         "constructor_declaration" | "compact_constructor_declaration" => FunctionKind::Constructor,
         "lambda_expression" => FunctionKind::Lambda,
         "arrow_function" => FunctionKind::Arrow,
@@ -988,7 +991,19 @@ pub(crate) struct HostSqlSite {
 }
 
 /// Terminal query/execute call names across supported host languages.
-const HOST_SQL_CALLS: &[&str] = &["query", "execute", "executeQuery", "executeUpdate", "raw"];
+const HOST_SQL_CALLS: &[&str] = &[
+    "query",
+    "execute",
+    "executeQuery",
+    "executeUpdate",
+    "raw",
+    "Query",
+    "QueryRow",
+    "QueryContext",
+    "QueryRowContext",
+    "Exec",
+    "ExecContext",
+];
 
 fn is_loop_kind(kind: &str) -> bool {
     matches!(
@@ -1023,8 +1038,16 @@ fn host_sql_sites_from_tree(language: Language, source: &[u8], root: Node<'_>) -
         if let Some((name, first_argument)) = sql_call_target(node, language, source)
             && HOST_SQL_CALLS.contains(&name.as_str())
         {
-            let dynamic =
-                first_argument.is_some_and(|argument| subtree_is_dynamic(argument, language));
+            let dynamic = first_argument.is_some_and(|argument| subtree_is_dynamic(argument, language))
+                    || name.contains("Sprintf")
+                    // `db.Query(fmt.Sprintf(...))` nests the Sprintf call in the
+                    // argument, so the top-level callee name never carries the
+                    // signal; the nested call builds the query text dynamically
+                    // by construction.
+                    || (language == Language::Go
+                        && first_argument.is_some_and(|argument| {
+                            subtree_contains_sprintf(argument, source)
+                        }));
             let inside_loop = has_loop_ancestor(node, language);
             if seen.insert((node.start_byte(), node.end_byte(), dynamic, inside_loop)) {
                 sites.push(HostSqlSite {
@@ -1073,8 +1096,18 @@ fn sql_call_target<'a>(
             };
             (name_node, node.child_by_field_name("arguments")?)
         }
-        // Task 3 wires Go Query/Exec-family detection here.
-        Language::Go => return None,
+        Language::Go => {
+            if node.kind() != "call_expression" {
+                return None;
+            }
+            let function = node.child_by_field_name("function")?;
+            let name_node = match function.kind() {
+                "identifier" => function,
+                "selector_expression" => function.child_by_field_name("field")?,
+                _ => return None,
+            };
+            (name_node, node.child_by_field_name("arguments")?)
+        }
     };
     let name = node_text(name_node, source).to_owned();
     Some((name, first_named_child(arguments)))
@@ -1100,6 +1133,33 @@ fn subtree_is_dynamic(root: Node<'_>, language: Language) -> bool {
         }
         if node.kind() == "binary_expression" && has_plus_operator(node) {
             return true;
+        }
+        push_children_reversed(node, &mut stack);
+    }
+    false
+}
+
+/// True when the subtree holds a `Sprintf`-family call (Go only):
+/// `fmt.Sprintf("...%v...", x)` builds the query text dynamically by
+/// construction. Nested function bodies are not entered, mirroring
+/// `subtree_is_dynamic`.
+fn subtree_contains_sprintf(root: Node<'_>, source: &[u8]) -> bool {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.id() != root.id() && is_function(node.kind(), Language::Go) {
+            continue;
+        }
+        if node.kind() == "call_expression"
+            && let Some(function) = node.child_by_field_name("function")
+        {
+            let callee = match function.kind() {
+                "identifier" => Some(function),
+                "selector_expression" => function.child_by_field_name("field"),
+                _ => None,
+            };
+            if callee.is_some_and(|name| node_text(name, source).contains("Sprintf")) {
+                return true;
+            }
         }
         push_children_reversed(node, &mut stack);
     }
@@ -1185,6 +1245,24 @@ class Dao {
         assert!(sites[0].dynamic);
         assert!(!sites[0].inside_loop);
         assert_eq!(sites[0].line, 4);
+    }
+
+    #[test]
+    fn host_sql_sites_detect_go_query_and_sprintf() {
+        let source = b"package dao\n\nimport \"database/sql\"\n\nfunc find(db *sql.DB, name string) {\n\tdb.Query(\"SELECT * FROM users WHERE name = '\" + name + \"'\")\n}\n\nfunc all(db *sql.DB) {\n\tdb.Query(fmt.Sprintf(\"SELECT * FROM users WHERE active = %v\", true))\n}\n";
+        let sites = host_sql_sites("dao.go", source).unwrap();
+        assert_eq!(sites.len(), 2, "{sites:?}");
+        assert!(sites[0].dynamic, "{sites:?}");
+        assert!(!sites[0].inside_loop, "{sites:?}");
+        assert!(sites[1].dynamic, "{sites:?}");
+    }
+
+    #[test]
+    fn host_sql_sites_ignore_go_parameterized_query() {
+        let source = b"package dao\n\nfunc get(db *sql.DB, id int) {\n\tdb.QueryRow(\"SELECT * FROM users WHERE id = $1\", id)\n}\n";
+        let sites = host_sql_sites("dao.go", source).unwrap();
+        assert_eq!(sites.len(), 1, "{sites:?}");
+        assert!(!sites[0].dynamic, "{sites:?}");
     }
 
     #[test]

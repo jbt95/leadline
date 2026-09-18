@@ -80,6 +80,10 @@ fn tiny_fixtures_define_default_v1() {
 fn go_method_kind_and_parity() {
     let file = fixture("go/method.go");
     assert_eq!(function(&file, "add").kind, FunctionKind::Method);
+    // tree-sitter-java also emits `method_declaration`; only Go maps it to
+    // Method, so Java methods keep their pre-Go Function classification.
+    let java_file = fixture("java/decisions.java");
+    assert_eq!(function(&java_file, "choose").kind, FunctionKind::Function);
     let go_file = fixture("go/decisions.go");
     let js_file = fixture("javascript/decisions.js");
     let go_choose = &function(&go_file, "choose").metrics;
