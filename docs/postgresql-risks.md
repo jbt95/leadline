@@ -1,7 +1,7 @@
 # Static PostgreSQL risk analysis
 
 `leadline sql [PATH]` flags high-signal PostgreSQL query risks in `.sql`
-files and obvious query call sites in Java, JavaScript, TypeScript, and TSX —
+files and obvious query call sites in Go, Java, JavaScript, TypeScript, and TSX —
 without executing SQL, connecting to a database, or adding a parser
 dependency. Findings are review prompts, not proof of runtime behavior or
 index usage: estimates reflect the planner's view, and every rule is a
