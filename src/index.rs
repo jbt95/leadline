@@ -82,8 +82,10 @@ impl AnalysisIndex {
 
     pub fn save(&self, dir: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
-        let json = serde_json::to_string(self).map_err(std::io::Error::other)?;
-        std::fs::write(dir.join(INDEX_FILE_NAME), json)
+        let file = std::fs::File::create(dir.join(INDEX_FILE_NAME))?;
+        let mut writer = std::io::BufWriter::new(file);
+        serde_json::to_writer(&mut writer, self).map_err(std::io::Error::other)?;
+        std::io::Write::flush(&mut writer)
     }
 }
 
@@ -626,11 +628,22 @@ pub fn warm_report(
     excludes: &[String],
 ) -> crate::Result<(crate::core::AnalysisReport, Reuse)> {
     let previous = AnalysisIndex::open(index_dir);
+    warm_report_with(&previous, root, scope, config_fingerprint, excludes)
+}
+
+/// Warm report against an index the caller already holds open.
+pub fn warm_report_with(
+    previous: &AnalysisIndex,
+    root: &Path,
+    scope: &str,
+    config_fingerprint: &str,
+    excludes: &[String],
+) -> crate::Result<(crate::core::AnalysisReport, Reuse)> {
     if root.is_file() {
-        let (report, _, reuse) = refresh_file_index(root, &previous, config_fingerprint)?;
+        let (report, _, reuse) = refresh_file_index(root, previous, config_fingerprint)?;
         return Ok((report, reuse));
     }
     let entries = load_entries(root, excludes)?;
-    let (report, _, reuse) = refresh_files(Some(&previous), scope, config_fingerprint, &entries)?;
+    let (report, _, reuse) = refresh_files(Some(previous), scope, config_fingerprint, &entries)?;
     Ok((report, reuse))
 }

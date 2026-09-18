@@ -10,6 +10,9 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
   files, and duplication interns token ids in a hash map. Output is unchanged.
 - JSON output streams directly to stdout instead of materializing the full
   encoded document first, lowering peak memory on large reports.
+- Warm `analyze`/`check` runs no longer rewrite an unchanged index, the index
+  save streams through a buffered writer, and the MCP server reuses the parsed
+  index across tool calls until the file changes on disk.
 
 ## 0.13.2 - 2026-09-18
 

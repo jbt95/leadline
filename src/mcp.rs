@@ -17,9 +17,11 @@ use crate::config::RegressionLimits;
 use crate::core::{
     FunctionAnalysis, FunctionMetrics, METRIC_PROFILE, OUTPUT_SCHEMA_VERSION, Thresholds,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::SystemTime;
 
 /// Maximum entries returned in any result array before truncation kicks in.
 const MAX_ENTRIES: usize = 200;
@@ -2501,6 +2503,50 @@ fn index_directory(
         .map(|configured| config_dir(path).join(&configured.path)))
 }
 
+struct CachedIndex {
+    modified: Option<SystemTime>,
+    len: u64,
+    index: Arc<crate::index::AnalysisIndex>,
+}
+
+static INDEX_CACHE: OnceLock<Mutex<HashMap<std::path::PathBuf, CachedIndex>>> = OnceLock::new();
+
+/// Opens the index at `dir` once per file identity (path + mtime + length) and
+/// reuses the parsed value afterwards. A missing file caches the empty index.
+fn cached_index(dir: &std::path::Path) -> Arc<crate::index::AnalysisIndex> {
+    let path = dir.join(crate::index::INDEX_FILE_NAME);
+    let metadata = std::fs::metadata(&path).ok();
+    let cache = INDEX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = cache.lock().ok().and_then(|cache| {
+        cache
+            .get(&path)
+            .map(|cached| (cached.modified, cached.len, Arc::clone(&cached.index)))
+    }) {
+        let (modified, len, index) = cached;
+        let fresh = metadata.as_ref().map_or(modified.is_none(), |metadata| {
+            metadata.modified().ok() == modified && metadata.len() == len
+        });
+        if fresh {
+            return index;
+        }
+    }
+    let index = Arc::new(crate::index::AnalysisIndex::open(dir));
+    let (modified, len) = metadata.map_or((None, 0), |metadata| {
+        (metadata.modified().ok(), metadata.len())
+    });
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(
+            path,
+            CachedIndex {
+                modified,
+                len,
+                index: Arc::clone(&index),
+            },
+        );
+    }
+    index
+}
+
 /// Report for `analyze` and `check`: reuse a stored index when one is
 /// resolved and no coverage is applied, else measure the path cold.
 ///
@@ -2516,15 +2562,17 @@ fn analyze_read_only(
     let index_dir = index_directory(params, config, path)?;
     if coverage.is_none()
         && let Some(dir) = index_dir
-        && let Ok((report, reuse)) = crate::index::warm_report(
+    {
+        let previous = cached_index(&dir);
+        if let Ok((report, reuse)) = crate::index::warm_report_with(
+            &previous,
             Path::new(path),
-            &dir,
             &crate::index::scope_label(Path::new(path)),
             &crate::config::fingerprint(&config_dir(path)),
             excludes,
-        )
-    {
-        return Ok((report, Some(reuse)));
+        ) {
+            return Ok((report, Some(reuse)));
+        }
     }
     let report = crate::analyze_path_with_excludes(Path::new(path), coverage, excludes)
         .map_err(|error| (-32602, error.to_string()))?;
@@ -3532,5 +3580,42 @@ mod tests {
                 .0,
             -32602
         );
+    }
+
+    #[test]
+    fn cached_index_reuses_the_parsed_index_until_the_file_changes() {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "leadline-mcp-index-cache-{}-{id}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut first = crate::index::AnalysisIndex::empty(".", "none");
+        first.scope = "first".to_owned();
+        first.save(&dir).unwrap();
+        let a = cached_index(&dir);
+        let b = cached_index(&dir);
+        assert!(Arc::ptr_eq(&a, &b));
+        assert_eq!(a.scope, "first");
+
+        // A rewrite with a different length must invalidate on its own; the
+        // test never sleeps, so a coarse mtime granularity cannot hide it.
+        let mut second = crate::index::AnalysisIndex::empty(".", "none");
+        second.scope = "second-with-a-longer-scope".to_owned();
+        second.save(&dir).unwrap();
+        let c = cached_index(&dir);
+        assert!(!Arc::ptr_eq(&a, &c));
+        assert_eq!(c.scope, "second-with-a-longer-scope");
+
+        // A deleted index must not keep serving the last parsed value.
+        std::fs::remove_file(dir.join(crate::index::INDEX_FILE_NAME)).unwrap();
+        let d = cached_index(&dir);
+        assert!(!Arc::ptr_eq(&c, &d));
+        assert!(d.files.is_empty());
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

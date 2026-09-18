@@ -3295,7 +3295,13 @@ fn analyze_with_index(
         )
         .map_err(|error| CliError::incomplete(error.to_string()))?
     };
-    if let Err(error) = index.save(dir) {
+    // A fully reused run rebuilds the same index; rewriting it costs a full
+    // serialize and file write per invocation for no change. Files with parse
+    // errors are re-analyzed but never stored, so compare the rebuilt index
+    // against the stored one instead of counting analyzed files.
+    if index != previous
+        && let Err(error) = index.save(dir)
+    {
         eprintln!(
             "leadline: index warning: cannot save index in {}: {error}",
             dir.display()
