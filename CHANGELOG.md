@@ -19,6 +19,10 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 - `project`, `debt`, and trend capture parse each source file once and derive
   metrics, dependencies, and clone tokens from the same tree instead of
   parsing three times; SQL host analysis parses each file once as well.
+- Walkers traverse wide child lists with a tree cursor instead of re-scanning from
+  the first child for every index, removing the quadratic blowup on the nodes that
+  malformed error recovery produces while keeping ordinary nodes on the indexed
+  fast path.
 
 ## 0.13.2 - 2026-09-18
 

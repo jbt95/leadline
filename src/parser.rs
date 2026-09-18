@@ -94,6 +94,64 @@ fn parse_tree(path: &str, source: &[u8]) -> Result<(Language, Tree)> {
     Ok((language, tree))
 }
 
+/// Child count at or below which direct indexing is cheaper than a cursor
+/// pass. `Node::child(i)` rescans from the first child, so the index loop is
+/// quadratic on the wide nodes error recovery produces; ordinary nodes stay
+/// on the indexed fast path.
+const CURSOR_CHILD_THRESHOLD: u32 = 8;
+
+/// Pushes `node`'s children onto `stack` so the next pop yields the first
+/// child.
+#[inline]
+fn push_children_reversed<'tree>(node: Node<'tree>, stack: &mut Vec<Node<'tree>>) {
+    let count = node.child_count();
+    if count <= CURSOR_CHILD_THRESHOLD {
+        for index in (0..count).rev() {
+            stack.push(node.child(index).expect("child index is in bounds"));
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    if cursor.goto_first_child() {
+        let start = stack.len();
+        stack.push(cursor.node());
+        while cursor.goto_next_sibling() {
+            stack.push(cursor.node());
+        }
+        stack[start..].reverse();
+    }
+}
+
+/// Tuple-stack variant for walks that carry nesting state.
+#[inline]
+fn push_children_reversed_with<'tree>(
+    node: Node<'tree>,
+    nesting: u32,
+    inside_logical: bool,
+    stack: &mut Vec<(Node<'tree>, u32, bool)>,
+) {
+    let count = node.child_count();
+    if count <= CURSOR_CHILD_THRESHOLD {
+        for index in (0..count).rev() {
+            stack.push((
+                node.child(index).expect("child index is in bounds"),
+                nesting,
+                inside_logical,
+            ));
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    if cursor.goto_first_child() {
+        let start = stack.len();
+        stack.push((cursor.node(), nesting, inside_logical));
+        while cursor.goto_next_sibling() {
+            stack.push((cursor.node(), nesting, inside_logical));
+        }
+        stack[start..].reverse();
+    }
+}
+
 /// One normalized leaf token for duplication analysis (`tokens`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NormalizedToken {
@@ -134,9 +192,7 @@ fn tokenize_tree(language: Language, source: &[u8], root: Node<'_>) -> Tokenized
                 });
             }
         } else {
-            for index in (0..node.child_count()).rev() {
-                stack.push(node.child(index).expect("child index is in bounds"));
-            }
+            push_children_reversed(node, &mut stack);
         }
     }
     debug_assert!(
@@ -287,9 +343,7 @@ fn extract_javascript_dependencies(root: Node<'_>, source: &[u8]) -> ParsedDepen
                 }),
             }
         }
-        for index in (0..node.child_count()).rev() {
-            stack.push(node.child(index).expect("child index is in bounds"));
-        }
+        push_children_reversed(node, &mut stack);
     }
     ParsedDependencies {
         references,
@@ -518,9 +572,7 @@ fn discover_tree<'tree>(
                 end_column: end.column as u32 + 1,
             });
         }
-        for index in (0..node.child_count()).rev() {
-            stack.push(node.child(index).expect("child index is in bounds"));
-        }
+        push_children_reversed(node, &mut stack);
     }
 }
 fn is_function(kind: &str, language: Language) -> bool {
@@ -710,13 +762,12 @@ fn walk_function(
             events.push(Event::NestingDepth(child_nesting));
         }
 
-        for index in (0..node.child_count()).rev() {
-            stack.push((
-                node.child(index).expect("child index is in bounds"),
-                child_nesting,
-                inside_logical || this_logical,
-            ));
-        }
+        push_children_reversed_with(
+            node,
+            child_nesting,
+            inside_logical || this_logical,
+            &mut stack,
+        );
     }
 }
 
@@ -803,9 +854,7 @@ fn collect_logical(
             }
             continue;
         }
-        for index in (0..current.child_count()).rev() {
-            stack.push(current.child(index).expect("child index is in bounds"));
-        }
+        push_children_reversed(current, &mut stack);
     }
 }
 
@@ -885,9 +934,7 @@ fn calls_self(root: Node<'_>, language: Language, name: &str, source: &[u8]) -> 
         if callee.is_some_and(|callee| node_text(callee, source) == name) {
             return true;
         }
-        for index in (0..node.child_count()).rev() {
-            stack.push(node.child(index).expect("child index is in bounds"));
-        }
+        push_children_reversed(node, &mut stack);
     }
     false
 }
@@ -1100,9 +1147,7 @@ fn host_sql_sites_from_tree(language: Language, source: &[u8], root: Node<'_>) -
                 });
             }
         }
-        for index in (0..node.child_count()).rev() {
-            stack.push(node.child(index).expect("child index is in bounds"));
-        }
+        push_children_reversed(node, &mut stack);
     }
     sites.sort_by_key(|site| (site.line, site.end_line));
     sites
@@ -1166,9 +1211,7 @@ fn subtree_is_dynamic(root: Node<'_>, language: Language) -> bool {
         if node.kind() == "binary_expression" && has_plus_operator(node) {
             return true;
         }
-        for index in (0..node.child_count()).rev() {
-            stack.push(node.child(index).expect("child index is in bounds"));
-        }
+        push_children_reversed(node, &mut stack);
     }
     false
 }
