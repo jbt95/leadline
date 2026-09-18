@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.12.0 - 2026-09-18
+
 ### Added
 
 - `leadline update --integrations`: after the binary update, probe installed

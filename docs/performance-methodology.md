@@ -85,7 +85,7 @@ Repository: 120 synthetic TypeScript files x 12 functions each (`cargo bench --o
 
 Warm refresh is ~55x faster than cold analysis. Warm refresh of a repository this size must stay under 100 ms: a regression past that budget is a bug, not a trade-off.
 
-2026-09-18, leadline 0.11.0 → unreleased, Apple M2 Pro, 32 GiB, macOS 26.6.2 (Darwin 25.6.0 arm64), Rust 1.90.0, Criterion 0.8.2, same machine before and after (`cargo bench --offline --bench duplication`, `sample_size(10)`):
+2026-09-18, leadline 0.11.0 → 0.12.0, Apple M2 Pro, 32 GiB, macOS 26.6.2 (Darwin 25.6.0 arm64), Rust 1.90.0, Criterion 0.8.2, same machine before and after (`cargo bench --offline --bench duplication`, `sample_size(10)`):
 
 | Case | Before (median) | After (median) | Delta |
 | --- | ---: | ---: | ---: |
