@@ -11,7 +11,7 @@
 // `leadline` server's `check` tool as `leadline_check`, and a native tool
 // with the same name is silently shadowed by that namespaced tool.
 import { Plugin } from "@opencode/plugin";
-import { runChanged, runCheck, runFunction, runSecretGate, secretGateMessage } from "../../agent-adapter-ts/core/index.js";
+import { DEFAULT_BASE, postEditFeedback, runChanged, runCheck, runFunction, runSecretGate, secretGateMessage } from "../../agent-adapter-ts/core/index.js";
 
 interface ChangedInput {
   base?: string;
@@ -120,6 +120,28 @@ export default Plugin.define({
           });
         },
       });
+    });
+    await ctx.tool.hook("execute.after", async (event) => {
+      if (event.status !== "completed") {
+        return;
+      }
+      if (event.tool !== "edit" && event.tool !== "write") {
+        return;
+      }
+      const directory = await directoryFor(event.sessionID);
+      const note = await postEditFeedback({ base: DEFAULT_BASE }, "warn", directory);
+      if (note === null) {
+        return;
+      }
+      const prior = event.result.content;
+      const text = `leadline:\n${note}`;
+      if (typeof prior === "string") {
+        event.result.content = `${prior}\n${text}`;
+        return;
+      }
+      if (Array.isArray(prior)) {
+        event.result.content = [...prior, { type: "text" as const, text }];
+      }
     });
   },
 });
