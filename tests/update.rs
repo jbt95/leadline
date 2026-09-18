@@ -66,12 +66,31 @@ fn copied_binary(root: &Path) -> PathBuf {
     copy
 }
 
+/// Spawns `command` to completion, retrying when the kernel reports the
+/// freshly copied test binary as busy (`ETXTBSY`). Under parallel load a
+/// copy immediately followed by an exec can transiently observe the file as
+/// still open for writing; the next attempt succeeds.
+fn spawn_output(command: &mut Command) -> std::process::Output {
+    let mut attempts = 0;
+    loop {
+        match command.output() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 10 =>
+            {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            outcome => return outcome.unwrap(),
+        }
+    }
+}
+
 fn run_update(binary: &Path, release: &Path) -> std::process::Output {
-    Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .arg("update")
-        .env("LEADLINE_BASE_URL", format!("file://{}", release.display()))
-        .output()
-        .unwrap()
+        .env("LEADLINE_BASE_URL", format!("file://{}", release.display()));
+    spawn_output(&mut command)
 }
 
 const PI_LISTING: &str = "User packages:\n  npm:pi-web-access\n    /tmp/x\n  git:github.com/jbt95/leadline\n    /tmp/leadline\n";
@@ -112,7 +131,7 @@ fn run_binary(binary: &Path, args: &[&str], envs: &[(&str, &str)]) -> std::proce
     for (key, value) in envs {
         command.env(key, value);
     }
-    command.output().unwrap()
+    spawn_output(&mut command)
 }
 
 /// Shared setup for `--integrations` tests: a current-version release tree,
@@ -203,7 +222,7 @@ fn update_replaces_the_binary_with_the_latest_release() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("99.0.0"), "stdout: {stdout}");
 
-    let version = Command::new(&binary).arg("--version").output().unwrap();
+    let version = spawn_output(Command::new(&binary).arg("--version"));
     assert_eq!(
         String::from_utf8_lossy(&version.stdout).trim(),
         "leadline 99.0.0"
@@ -646,6 +665,32 @@ fn plain_update_with_a_new_release_does_not_probe_harnesses() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(!log.exists(), "plain update probed a harness");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn spawn_retries_while_the_binary_is_busy() {
+    // Holding the binary open for writing makes exec fail with `ETXTBSY` on
+    // Linux; releasing it from another thread lets the retry succeed. (macOS
+    // permits the first exec, so this passes there without retrying.)
+    let root = temporary_directory();
+    let binary = copied_binary(&root);
+    let handle = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&binary)
+        .unwrap();
+    let closer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        drop(handle);
+    });
+    let output = spawn_output(Command::new(&binary).arg("--version"));
+    closer.join().unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("leadline "),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
     std::fs::remove_dir_all(&root).unwrap();
 }
 
