@@ -4,6 +4,7 @@ use crate::core::METRIC_PROFILE;
 use crate::parser::{ParsedDependencies, RawDependency, RawDependencyKind, extract_dependencies};
 use crate::source_snapshot::SourceEntry;
 use crate::{Result, normalized_relative_path};
+use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -67,29 +68,48 @@ enum Resolution {
 pub fn analyze_dependencies(path: &Path, excludes: &[String]) -> Result<DependencyReport> {
     let discovered = crate::discovery::discover_with_excludes(path, excludes)?;
     let root = analysis_root(path);
-    let mut parsed_files = Vec::with_capacity(discovered.len());
-    for file in discovered {
-        let display_path = normalized_relative_path(&file, root);
-        let source = std::fs::read(&file)?;
-        let parsed = extract_dependencies(&display_path, &source)?;
-        parsed_files.push(ParsedFile {
-            path: display_path,
-            parsed,
-        });
-    }
-    Ok(dependency_report(parsed_files))
+    let outcomes: Vec<(String, Result<ParsedDependencies>)> = discovered
+        .par_iter()
+        .map(|file| {
+            let display_path = normalized_relative_path(file, root);
+            let parsed = std::fs::read(file)
+                .map_err(crate::Error::from)
+                .and_then(|source| extract_dependencies(&display_path, &source));
+            (display_path, parsed)
+        })
+        .collect();
+    report_from_parsed(outcomes)
 }
 
 /// Extracts and resolves dependencies among in-memory source entries.
 pub fn analyze_dependencies_from_sources(entries: &[SourceEntry]) -> Result<DependencyReport> {
-    let mut parsed_files = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let parsed = extract_dependencies(&entry.path, &entry.bytes)?;
-        parsed_files.push(ParsedFile {
-            path: entry.path.clone(),
-            parsed,
-        });
-    }
+    let outcomes: Vec<(String, Result<ParsedDependencies>)> = entries
+        .par_iter()
+        .map(|entry| {
+            (
+                entry.path.clone(),
+                extract_dependencies(&entry.path, &entry.bytes),
+            )
+        })
+        .collect();
+    report_from_parsed(outcomes)
+}
+
+/// Sorts extraction outcomes by path, then resolves the first error in path
+/// order so failures stay deterministic under parallel extraction.
+pub(crate) fn report_from_parsed(
+    mut outcomes: Vec<(String, Result<ParsedDependencies>)>,
+) -> Result<DependencyReport> {
+    outcomes.sort_by(|left, right| left.0.cmp(&right.0));
+    let parsed_files = outcomes
+        .into_iter()
+        .map(|(path, parsed)| {
+            Ok(ParsedFile {
+                path,
+                parsed: parsed?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     Ok(dependency_report(parsed_files))
 }
 

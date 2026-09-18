@@ -9,8 +9,9 @@ use crate::config::DuplicationConfig;
 use crate::core::Language;
 use crate::parser::normalized_tokens;
 use crate::source_snapshot::SourceEntry;
+use rayon::prelude::*;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub const DUPLICATION_SCHEMA_VERSION: u32 = 1;
 pub const DUPLICATION_PROFILE: &str = "tokens";
@@ -105,36 +106,68 @@ pub fn detect(entries: &[SourceEntry], config: &DuplicationConfig) -> Duplicatio
     detect_with_limits(entries, config, TOKEN_CEILING, COMPARISON_CEILING)
 }
 
-/// Test seam: exercises ceilings without building multi-million-token corpora.
-pub fn detect_with_limits(
-    entries: &[SourceEntry],
+#[derive(Default)]
+pub(crate) struct TokenizedFiles {
+    pub(crate) files: Vec<(String, crate::parser::TokenizedSource)>,
+    pub(crate) diagnostics: Vec<DuplicationDiagnostic>,
+    pub(crate) total_tokens: usize,
+}
+
+/// Tokenizes every entry in parallel, preserving input order in the result.
+///
+/// Excluded and unreadable entries are skipped exactly as the serial loop
+/// did; files with parse errors become diagnostics.
+pub(crate) fn tokenize(entries: &[SourceEntry], config: &DuplicationConfig) -> TokenizedFiles {
+    let excluded = ExcludeMatcher::new(&config.excludes);
+    enum Outcome {
+        Skipped,
+        Diagnostic(String),
+        Tokens(String, crate::parser::TokenizedSource),
+    }
+    let outcomes: Vec<Outcome> = entries
+        .par_iter()
+        .map(|entry| {
+            if excluded.matches(&entry.path) {
+                return Outcome::Skipped;
+            }
+            match normalized_tokens(&entry.path, &entry.bytes) {
+                Err(_) => Outcome::Skipped,
+                Ok(tokenized) if tokenized.parse_errors > 0 => {
+                    Outcome::Diagnostic(entry.path.clone())
+                }
+                Ok(tokenized) => Outcome::Tokens(entry.path.clone(), tokenized),
+            }
+        })
+        .collect();
+    let mut tokenized = TokenizedFiles::default();
+    for outcome in outcomes {
+        match outcome {
+            Outcome::Skipped => {}
+            Outcome::Diagnostic(path) => tokenized.diagnostics.push(DuplicationDiagnostic {
+                path,
+                reason: "parse errors exclude the file from clone candidates".to_owned(),
+            }),
+            Outcome::Tokens(path, tokens) => {
+                tokenized.total_tokens += tokens.tokens.len();
+                tokenized.files.push((path, tokens));
+            }
+        }
+    }
+    tokenized
+}
+
+/// Detects clones over already-tokenized files.
+pub(crate) fn detect_tokenized(
+    tokenized: TokenizedFiles,
     config: &DuplicationConfig,
     token_ceiling: usize,
     comparison_ceiling: usize,
 ) -> DuplicationReport {
-    let excluded = ExcludeMatcher::new(&config.excludes);
-    let mut files = Vec::new();
-    let mut diagnostics = Vec::new();
-    let mut total_tokens = 0usize;
-    for entry in entries {
-        if excluded.matches(&entry.path) {
-            continue;
-        }
-        let tokenized = match normalized_tokens(&entry.path, &entry.bytes) {
-            Ok(tokenized) => tokenized,
-            Err(_) => continue,
-        };
-        if tokenized.parse_errors > 0 {
-            diagnostics.push(DuplicationDiagnostic {
-                path: entry.path.clone(),
-                reason: "parse errors exclude the file from clone candidates".to_owned(),
-            });
-            continue;
-        }
-        total_tokens += tokenized.tokens.len();
-        files.push((entry.path.clone(), tokenized));
-    }
-
+    let TokenizedFiles {
+        files,
+        diagnostics,
+        total_tokens,
+    } = tokenized;
     let mut report = DuplicationReport {
         schema_version: DUPLICATION_SCHEMA_VERSION,
         analyzer_version: env!("CARGO_PKG_VERSION"),
@@ -153,7 +186,7 @@ pub fn detect_with_limits(
         return report;
     }
 
-    let mut token_ids: BTreeMap<String, u32> = BTreeMap::new();
+    let mut token_ids: HashMap<String, u32> = HashMap::new();
     let mut tokens = Vec::new();
     for (path, tokenized) in files {
         let mut ids = Vec::with_capacity(tokenized.tokens.len());
@@ -301,6 +334,21 @@ pub fn detect_with_limits(
         report.duplicated_lines = 0;
     }
     report
+}
+
+/// Test seam: exercises ceilings without building multi-million-token corpora.
+pub fn detect_with_limits(
+    entries: &[SourceEntry],
+    config: &DuplicationConfig,
+    token_ceiling: usize,
+    comparison_ceiling: usize,
+) -> DuplicationReport {
+    detect_tokenized(
+        tokenize(entries, config),
+        config,
+        token_ceiling,
+        comparison_ceiling,
+    )
 }
 
 const BASE: u64 = 1_000_003;

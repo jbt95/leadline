@@ -4,6 +4,11 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Changed
+
+- Dependency extraction and duplication tokenization run in parallel across
+  files, and duplication interns token ids in a hash map. Output is unchanged.
+
 ## 0.13.2 - 2026-09-18
 
 ### Fixed
