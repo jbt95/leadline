@@ -11,6 +11,13 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
   OpenCode local plugin paths are reported with restart guidance and never
   modified. Failures do not stop later updates and exit `3`.
 
+### Changed
+
+- Duplication comparison groups candidates by exact token-id run instead of
+  formatting a joined-text key per comparison and indexes occurrences per
+  file. Output is unchanged; clone-heavy repositories report substantially
+  faster.
+
 ## 0.11.0 - 2026-09-17
 
 ### Added

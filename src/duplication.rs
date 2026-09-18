@@ -203,7 +203,7 @@ pub fn detect_with_limits(
         }
     }
 
-    let mut groups: BTreeMap<String, GroupBuilder> = BTreeMap::new();
+    let mut groups: BTreeMap<u64, Vec<GroupBuilder>> = BTreeMap::new();
     let mut comparisons = 0usize;
     let mut incomplete_reason = None;
     'buckets: for candidates in buckets.values() {
@@ -242,22 +242,47 @@ pub fn detect_with_limits(
                     length += 1;
                 }
                 let language = tokens[left_file].language;
-                let texts = &tokens[left_file].texts[start_left..start_left + length];
-                let key = format!("{language:?}\u{1}{}", texts.join("\u{1}"));
-                let builder = groups.entry(key).or_insert_with(|| GroupBuilder {
-                    id: String::new(),
-                    language,
-                    texts: texts.to_vec(),
-                    occurrences: Vec::new(),
-                });
-                insert_occurrence(builder, left_file, start_left, length, min_tokens);
-                insert_occurrence(builder, right_file, start_right, length, min_tokens);
+                let run = &tokens[left_file].ids[start_left..start_left + length];
+                let bucket = groups.entry(run_hash(language, run)).or_default();
+                let index = match bucket
+                    .iter()
+                    .position(|builder| builder.language == language && builder.ids == run)
+                {
+                    Some(index) => index,
+                    None => {
+                        bucket.push(GroupBuilder {
+                            id: String::new(),
+                            language,
+                            texts: tokens[left_file].texts[start_left..start_left + length]
+                                .to_vec(),
+                            ids: run.to_vec(),
+                            occurrences: Vec::new(),
+                            by_file: std::collections::HashMap::new(),
+                        });
+                        bucket.len() - 1
+                    }
+                };
+                insert_occurrence(
+                    &mut bucket[index],
+                    left_file,
+                    start_left,
+                    length,
+                    min_tokens,
+                );
+                insert_occurrence(
+                    &mut bucket[index],
+                    right_file,
+                    start_right,
+                    length,
+                    min_tokens,
+                );
             }
         }
     }
 
     let mut groups: Vec<CloneGroup> = groups
         .into_values()
+        .flatten()
         .filter_map(|mut builder| builder.finish(&tokens, config.min_lines as u32))
         .collect();
     groups.sort_by(|left, right| {
@@ -299,14 +324,14 @@ fn insert_occurrence(
         return;
     }
     let end = start + length - 1;
-    for existing in &builder.occurrences {
-        if existing.file == file
-            && start < existing.start + existing.length
-            && existing.start < end + 1
-        {
+    let indices = builder.by_file.entry(file).or_default();
+    for &index in indices.iter() {
+        let existing = &builder.occurrences[index];
+        if start < existing.start + existing.length && existing.start < end + 1 {
             return;
         }
     }
+    indices.push(builder.occurrences.len());
     builder.occurrences.push(OccurrenceBuilder {
         file,
         start,
@@ -318,7 +343,22 @@ struct GroupBuilder {
     id: String,
     language: Language,
     texts: Vec<String>,
+    ids: Vec<u32>,
     occurrences: Vec<OccurrenceBuilder>,
+    by_file: std::collections::HashMap<usize, Vec<usize>>,
+}
+
+fn run_hash(language: Language, run: &[u32]) -> u64 {
+    let mut hash: u64 = match language {
+        Language::Java => 0x9e37_79b9_7f4a_7c15,
+        Language::JavaScript => 0xc2b2_ae3d_27d4_eb4f,
+        Language::TypeScript => 0x1656_67b1_9e37_79f9,
+        Language::Tsx => 0x27d4_eb2f_1656_67b1,
+    };
+    for id in run {
+        hash = hash.wrapping_mul(BASE).wrapping_add(u64::from(*id));
+    }
+    hash
 }
 
 #[derive(Clone)]
