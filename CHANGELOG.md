@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.14.0 - 2026-09-19
+
 ### Added
 
 - Go language support: `analyze`, `check`, `changed`, and duplication tokenization handle `.go` sources (functions, methods, func literals, `switch`/`select`/`case`, `&&`/`||`).
