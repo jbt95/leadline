@@ -4,6 +4,7 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 - Duplication detection stores token text once in a reverse table instead of retaining it for every occurrence.
+- Telemetry records per-invocation CPU seconds and peak resident memory with sampled utilization and resident-size histograms, and MCP records sessions, protocol errors, per-method counts, in-flight calls and payload sizes; sampling is off unless LEADLINE_METRICS_DIR is set and costs under one percent.
 
 ## 0.14.0 - 2026-09-19
 

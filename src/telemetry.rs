@@ -123,6 +123,78 @@ pub fn record_process_cost(surface: &str, operation: &str, outcome: &str, cost: 
     });
 }
 
+/// One MCP server session ended.
+pub fn record_mcp_session(transport: &str, outcome: &str, duration: Duration) {
+    mutate(|state| {
+        state.increment(
+            "leadline_mcp_sessions_total",
+            &[("transport", transport), ("outcome", outcome)],
+            1,
+        );
+        state.observe(
+            "leadline_mcp_session_seconds",
+            &[("transport", transport)],
+            duration.as_secs_f64(),
+        );
+    });
+}
+
+/// One MCP protocol or transport failure.
+pub fn record_mcp_error(transport: &str, reason: &str) {
+    mutate(|state| {
+        state.increment(
+            "leadline_mcp_errors_total",
+            &[("transport", transport), ("reason", reason)],
+            1,
+        );
+    });
+}
+
+/// One MCP JSON-RPC request, by resolved method label.
+pub fn record_mcp_method(method: &str, notification: bool) {
+    mutate(|state| {
+        state.increment(
+            "leadline_mcp_requests_total",
+            &[("method", method_label(method, notification))],
+            1,
+        );
+    });
+}
+
+/// Current number of tool calls executing.
+pub fn set_mcp_inflight(transport: &str, inflight: u64) {
+    mutate(|state| {
+        state.set(
+            "leadline_mcp_inflight_calls",
+            &[("transport", transport)],
+            inflight,
+        );
+    });
+}
+
+/// Bytes in and out for one request line or body.
+pub fn record_mcp_payload(method: &str, notification: bool, request: u64, response: u64) {
+    mutate(|state| {
+        let labels = [("method", method_label(method, notification))];
+        state.observe("leadline_mcp_request_bytes", &labels, request as f64);
+        state.observe("leadline_mcp_response_bytes", &labels, response as f64);
+    });
+}
+
+/// Maps one JSON-RPC method onto the closed `method` label set.
+pub fn method_label(method: &str, notification: bool) -> &'static str {
+    if notification {
+        return "notification";
+    }
+    match method {
+        "initialize" => "initialize",
+        "tools/list" => "tools_list",
+        "tools/call" => "tools_call",
+        "ping" => "ping",
+        _ => "unknown",
+    }
+}
+
 /// One metric family the store knows how to render. Unknown families read
 /// from a tampered store are dropped rather than rendered.
 struct Family {

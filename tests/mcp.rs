@@ -2800,3 +2800,119 @@ fn debt_and_project_compare_a_git_repo() {
     );
     assert_eq!(error_of(&missing)["code"], -32602);
 }
+
+// ---------------------------------------------------------------------------
+// Telemetry over the HTTP transport
+// ---------------------------------------------------------------------------
+
+/// Metrics directory for one test, following this file's fixture naming.
+fn metrics_directory() -> PathBuf {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let dir =
+        std::env::temp_dir().join(format!("leadline-mcp-metrics-{}-{id}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Posts one JSON-RPC body to the HTTP transport and returns the raw response.
+fn post_json(port: u16, body: &str) -> String {
+    use std::io::{Read as _, Write as _};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).expect("write");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read");
+    response
+}
+
+#[test]
+fn mcp_records_sessions_methods_and_payloads() {
+    let metrics = metrics_directory();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("free port");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["mcp", "--port", &port.to_string()])
+        .env("LEADLINE_METRICS_DIR", &metrics)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("server starts");
+
+    let mut ready = false;
+    for _ in 0..100 {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(ready, "server never accepted a connection");
+
+    let listed = post_json(
+        port,
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#,
+    );
+    assert!(listed.contains("tools"), "{listed}");
+    let fixture = fixture_dir("export function alpha(x: number) { return x > 1 ? x : 1; }\n");
+    let called = post_json(
+        port,
+        &request(
+            "tools/call",
+            serde_json::json!({
+                "name": "repo_summary",
+                "arguments": { "path": fixture.to_str().unwrap() }
+            }),
+        ),
+    );
+    assert!(called.contains("summary"), "{called}");
+    let _ = post_json(
+        port,
+        r#"{"jsonrpc":"2.0","id":2,"method":"nope","params":{}}"#,
+    );
+    let _ = post_json(
+        port,
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nope","arguments":{}}}"#,
+    );
+    let _ = post_json(port, "not json");
+
+    child.kill().ok();
+    child.wait().ok();
+
+    let text = std::fs::read_to_string(metrics.join("leadline.prom")).expect("metrics rendered");
+    assert!(
+        text.contains(r#"leadline_mcp_requests_total{method="tools_list"} 1"#),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#"leadline_mcp_requests_total{method="unknown"} 1"#),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#"leadline_mcp_requests_total{method="tools_call"} 2"#),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#"leadline_mcp_errors_total{reason="method_not_found",transport="http"} 1"#),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#"leadline_mcp_errors_total{reason="parse_error",transport="http"} 1"#),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#"leadline_mcp_errors_total{reason="tool_error",transport="http"} 1"#),
+        "{text}"
+    );
+    assert!(text.contains("leadline_mcp_request_bytes_count"), "{text}");
+    assert!(text.contains("leadline_mcp_response_bytes_count"), "{text}");
+    assert!(
+        text.contains(r#"leadline_mcp_inflight_calls{transport="http"} 0"#),
+        "{text}"
+    );
+}

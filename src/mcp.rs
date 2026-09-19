@@ -71,6 +71,19 @@ const TOOL_NAMES: [&str; 20] = [
 /// until EOF would deadlock them into a request timeout. Lines past
 /// [`MAX_STDIO_LINE`] fail instead of growing a buffer without bound.
 pub fn serve() -> crate::Result<()> {
+    let _ = TRANSPORT.set("stdio");
+    let started = std::time::Instant::now();
+    let outcome = serve_stdio();
+    crate::telemetry::record_mcp_session(
+        "stdio",
+        if outcome.is_ok() { "clean" } else { "error" },
+        started.elapsed(),
+    );
+    outcome
+}
+
+/// The stdio request loop, which ends at EOF on stdin.
+fn serve_stdio() -> crate::Result<()> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
@@ -239,6 +252,8 @@ pub fn serve_http(host: &str, port: u16) -> crate::Result<()> {
 /// Accept loop for an already-bound listener: one worker per connection up
 /// to a fixed ceiling, then fail fast with 503 instead of growing threads.
 pub fn serve_listener(listener: std::net::TcpListener) {
+    let _ = TRANSPORT.set("http");
+    let started = std::time::Instant::now();
     let limiter = std::sync::Arc::new(ConnectionLimiter::default());
     for stream in listener.incoming() {
         match stream {
@@ -250,12 +265,14 @@ pub fn serve_listener(listener: std::net::TcpListener) {
                     });
                 }
                 None => {
+                    crate::telemetry::record_mcp_error("http", "http_busy");
                     write_response(stream, 503, &http_error("too many concurrent connections"));
                 }
             },
             Err(error) => eprintln!("leadline: MCP connection failed: {error}"),
         }
     }
+    crate::telemetry::record_mcp_session("http", "clean", started.elapsed());
 }
 
 /// Open-connection counter with a fixed ceiling.
@@ -348,6 +365,16 @@ fn handle_connection(stream: std::net::TcpStream) {
         Ok(request) => route_http(&request, loopback_only),
         Err(response) => response,
     };
+    match status {
+        // A 503 from this path is a body-budget refusal, already recorded
+        // where the reservation failed; the connection-limit 503 is recorded
+        // in the accept loop.
+        403 => crate::telemetry::record_mcp_error("http", "origin_rejected"),
+        400 | 411 | 413 | 431 => {
+            crate::telemetry::record_mcp_error("http", "http_bad_request");
+        }
+        _ => {}
+    }
     write_response(stream, status, &body);
 }
 
@@ -443,7 +470,9 @@ fn read_request(
     if content_length > MAX_HTTP_BODY {
         return Err((413, http_error("request body too large")));
     }
-    let reservation = reserve_body_bytes(content_length)?;
+    let reservation = reserve_body_bytes(content_length).inspect_err(|_| {
+        crate::telemetry::record_mcp_error("http", "body_budget_exhausted");
+    })?;
     // `read_exact` would keep the single timeout for every inner read, letting
     // a trickling client stretch one body far past the deadline; re-arm per
     // chunk instead.
@@ -743,11 +772,15 @@ pub fn handle_request(raw: &str) -> Option<String> {
     }
     let value: serde_json::Value = match serde_json::from_str(raw) {
         Ok(value) => value,
-        Err(_) => return Some(parse_error_response()),
+        Err(_) => {
+            crate::telemetry::record_mcp_error(transport(), "parse_error");
+            return Some(parse_error_response());
+        }
     };
     if let serde_json::Value::Array(batch) = value {
         // An empty batch is an invalid request, not a notification.
         if batch.is_empty() {
+            crate::telemetry::record_mcp_error(transport(), "invalid_request");
             return Some(
                 error_response(serde_json::Value::Null, -32600, "Invalid Request").to_string(),
             );
@@ -755,6 +788,7 @@ pub fn handle_request(raw: &str) -> Option<String> {
         // An oversized batch is rejected, but a batch of notifications must
         // still never draw a response.
         if batch.len() > MAX_BATCH_REQUESTS {
+            crate::telemetry::record_mcp_error(transport(), "batch_too_large");
             let expects_response = batch.iter().any(|item| item.get("id").is_some());
             return expects_response.then(|| batch_error_response(-32600, "Invalid Request"));
         }
@@ -767,6 +801,7 @@ pub fn handle_request(raw: &str) -> Option<String> {
                 let text = response.to_string();
                 total += text.len();
                 if total > MAX_RESPONSE_BYTES {
+                    crate::telemetry::record_mcp_error(transport(), "response_too_large");
                     return Some(batch_error_response(
                         -32603,
                         "batch response exceeds the size limit",
@@ -782,6 +817,7 @@ pub fn handle_request(raw: &str) -> Option<String> {
         // size before returning it.
         let rendered = format!("[{}]", parts.join(","));
         if rendered.len() > MAX_RESPONSE_BYTES {
+            crate::telemetry::record_mcp_error(transport(), "response_too_large");
             return Some(batch_error_response(
                 -32603,
                 "batch response exceeds the size limit",
@@ -789,9 +825,22 @@ pub fn handle_request(raw: &str) -> Option<String> {
         }
         return Some(rendered);
     }
+    let notification = value.get("id").is_none();
+    let method = value
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
     let response = handle_single(&value)?;
     let text = response.to_string();
+    crate::telemetry::record_mcp_payload(
+        &method,
+        notification,
+        raw.len() as u64,
+        text.len() as u64,
+    );
     if text.len() > MAX_RESPONSE_BYTES {
+        crate::telemetry::record_mcp_error(transport(), "response_too_large");
         let id = value
             .get("id")
             .cloned()
@@ -835,6 +884,7 @@ fn handle_single(request: &serde_json::Value) -> Option<serde_json::Value> {
         return Some(error_response(id, -32600, "Invalid Request"));
     }
     let method = method.unwrap_or_default().to_owned();
+    crate::telemetry::record_mcp_method(&method, id.is_none());
     if let Some(id) = &id
         && !valid_id(id)
     {
@@ -868,7 +918,12 @@ fn handle_single(request: &serde_json::Value) -> Option<serde_json::Value> {
     }
     match dispatch_method(&method, &params) {
         Ok(result) => Some(success_response(id, result)),
-        Err((code, message)) => Some(error_response(id, code, &message)),
+        Err((code, message)) => {
+            if code == -32601 {
+                crate::telemetry::record_mcp_error(transport(), "method_not_found");
+            }
+            Some(error_response(id, code, &message))
+        }
     }
 }
 
@@ -881,14 +936,22 @@ fn dispatch_method(
         "initialize" => Ok(initialize_result(params)),
         "ping" => Ok(serde_json::json!({})),
         "tools/list" => Ok(tools_list_result()),
-        "tools/call" => dispatch_tools_call(params).map(tool_result),
+        "tools/call" => dispatch_tools_call(params)
+            .map(tool_result)
+            .inspect_err(|_| {
+                crate::telemetry::record_mcp_error(transport(), "tool_error");
+            }),
         name if TOOL_NAMES.contains(&name) => {
             // Direct tool methods are an extension; they take named parameters
             // only, so an array must not silently fall back to default paths.
             if params.is_array() {
                 return Err((-32602, "tool parameters must be an object".to_owned()));
             }
-            dispatch_tool(name, params).map(tool_result)
+            dispatch_tool(name, params)
+                .map(tool_result)
+                .inspect_err(|_| {
+                    crate::telemetry::record_mcp_error(transport(), "tool_error");
+                })
         }
         _ => Err((-32601, "Method not found".to_owned())),
     }
@@ -940,6 +1003,8 @@ fn dispatch_tool(
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, (i64, String)> {
     let started = std::time::Instant::now();
+    let _inflight = Inflight::enter(transport());
+    let sampler = crate::telemetry::Sampler::start("mcp", name);
     let result = dispatch_tool_inner(name, params);
     let outcome = match &result {
         Ok(payload)
@@ -952,8 +1017,40 @@ fn dispatch_tool(
         Err((code, _)) if *code == -32602 => "usage_error",
         Err(_) => "internal_error",
     };
+    let cost = sampler.finish();
+    crate::telemetry::record_process_cost("mcp", name, outcome, &cost);
     crate::telemetry::record_invocation("mcp", name, outcome, started.elapsed());
     result
+}
+
+/// The transport this process serves, set once when a server starts.
+static TRANSPORT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// Transport label for this process; a direct `handle_request` call is a
+/// stdio-style session.
+fn transport() -> &'static str {
+    TRANSPORT.get().copied().unwrap_or("stdio")
+}
+
+/// Tool calls currently executing, reported as a gauge on entry and exit so an
+/// early return cannot leave it stuck.
+static INFLIGHT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+struct Inflight(&'static str);
+
+impl Inflight {
+    fn enter(transport: &'static str) -> Self {
+        let count = INFLIGHT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        crate::telemetry::set_mcp_inflight(transport, count);
+        Self(transport)
+    }
+}
+
+impl Drop for Inflight {
+    fn drop(&mut self) {
+        let count = INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed) - 1;
+        crate::telemetry::set_mcp_inflight(self.0, count);
+    }
 }
 
 fn dispatch_tool_inner(
