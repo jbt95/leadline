@@ -3,6 +3,7 @@
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
+- Duplication detection stores token text once in a reverse table instead of retaining it for every occurrence.
 
 ## 0.14.0 - 2026-09-19
 

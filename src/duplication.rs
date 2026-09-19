@@ -96,7 +96,6 @@ pub struct DuplicationDriftReport {
 struct TokenFile {
     path: String,
     language: Language,
-    texts: Vec<String>,
     lines: Vec<u32>,
     ids: Vec<u32>,
 }
@@ -187,10 +186,10 @@ pub(crate) fn detect_tokenized(
     }
 
     let mut token_ids: HashMap<String, u32> = HashMap::new();
+    let mut token_texts = Vec::new();
     let mut tokens = Vec::new();
     for (path, tokenized) in files {
         let mut ids = Vec::with_capacity(tokenized.tokens.len());
-        let mut texts = Vec::with_capacity(tokenized.tokens.len());
         let mut lines = Vec::with_capacity(tokenized.tokens.len());
         for token in tokenized.tokens {
             let id = match token_ids.get(&token.text) {
@@ -198,21 +197,21 @@ pub(crate) fn detect_tokenized(
                 None => {
                     let id = token_ids.len() as u32;
                     token_ids.insert(token.text.clone(), id);
+                    token_texts.push(token.text);
                     id
                 }
             };
             ids.push(id);
-            texts.push(token.text);
             lines.push(token.line);
         }
         tokens.push(TokenFile {
             path,
             language: tokenized.language,
-            texts,
             lines,
             ids,
         });
     }
+    drop(token_ids);
 
     let min_tokens = config.min_tokens;
     let power = power_base(min_tokens - 1);
@@ -286,8 +285,6 @@ pub(crate) fn detect_tokenized(
                         bucket.push(GroupBuilder {
                             id: String::new(),
                             language,
-                            texts: tokens[left_file].texts[start_left..start_left + length]
-                                .to_vec(),
                             ids: run.to_vec(),
                             occurrences: Vec::new(),
                             by_file: std::collections::HashMap::new(),
@@ -316,7 +313,7 @@ pub(crate) fn detect_tokenized(
     let mut groups: Vec<CloneGroup> = groups
         .into_values()
         .flatten()
-        .filter_map(|mut builder| builder.finish(&tokens, config.min_lines as u32))
+        .filter_map(|mut builder| builder.finish(&tokens, &token_texts, config.min_lines as u32))
         .collect();
     groups.sort_by(|left, right| {
         left.id
@@ -390,7 +387,6 @@ fn insert_occurrence(
 struct GroupBuilder {
     id: String,
     language: Language,
-    texts: Vec<String>,
     ids: Vec<u32>,
     occurrences: Vec<OccurrenceBuilder>,
     by_file: std::collections::HashMap<usize, Vec<usize>>,
@@ -418,11 +414,20 @@ struct OccurrenceBuilder {
 }
 
 impl GroupBuilder {
-    fn finish(&mut self, tokens: &[TokenFile], min_lines: u32) -> Option<CloneGroup> {
+    fn finish(
+        &mut self,
+        tokens: &[TokenFile],
+        token_texts: &[String],
+        min_lines: u32,
+    ) -> Option<CloneGroup> {
         let language = self.language;
         let id_source = format!(
             "{DUPLICATION_PROFILE}\u{1}{language:?}\u{1}{}",
-            self.texts.join("\u{1}")
+            self.ids
+                .iter()
+                .map(|&id| token_texts[id as usize].as_str())
+                .collect::<Vec<_>>()
+                .join("\u{1}")
         );
         self.id = blake3::hash(id_source.as_bytes()).to_hex().to_string();
         let mut ordered = self.occurrences.clone();
@@ -446,7 +451,7 @@ impl GroupBuilder {
                 continue;
             }
             per_file_end.insert(occurrence.file, end + 1);
-            let context = occurrence_context(&self.id, file, start, occurrence.length);
+            let context = occurrence_context(&self.id, file, token_texts, start, occurrence.length);
             let ordinal = context_ordinals
                 .entry((occurrence.file, context.clone()))
                 .or_default();
@@ -470,19 +475,33 @@ impl GroupBuilder {
         Some(CloneGroup {
             id: self.id.clone(),
             language,
-            token_count: self.texts.len(),
+            token_count: self.ids.len(),
             occurrences,
             status: None,
         })
     }
 }
 
-fn occurrence_context(group_id: &str, file: &TokenFile, start: usize, length: usize) -> String {
+fn occurrence_context(
+    group_id: &str,
+    file: &TokenFile,
+    token_texts: &[String],
+    start: usize,
+    length: usize,
+) -> String {
     let left_start = start.saturating_sub(CONTEXT_TOKENS);
-    let left = file.texts[left_start..start].join("\u{2}");
+    let left = file.ids[left_start..start]
+        .iter()
+        .map(|&id| token_texts[id as usize].as_str())
+        .collect::<Vec<_>>()
+        .join("\u{2}");
     let right_start = start + length;
-    let right_end = (right_start + CONTEXT_TOKENS).min(file.texts.len());
-    let right = file.texts[right_start..right_end].join("\u{2}");
+    let right_end = (right_start + CONTEXT_TOKENS).min(file.ids.len());
+    let right = file.ids[right_start..right_end]
+        .iter()
+        .map(|&id| token_texts[id as usize].as_str())
+        .collect::<Vec<_>>()
+        .join("\u{2}");
     format!("{group_id}\u{1}{left}\u{1}{right}")
 }
 
