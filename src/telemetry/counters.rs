@@ -135,7 +135,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(any(unix, windows))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     fn reads_plausible_process_counters() {
         let first = read().expect("this platform reports process counters");
         let mut spin = 0u64;

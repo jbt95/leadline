@@ -21,14 +21,14 @@ changes, no file is created, and no measurable work is performed.
 | --- | --- | --- | --- |
 | `leadline_invocations_total` | counter | `surface` (`cli`/`mcp`), `operation`, `outcome` | One per invocation or tool call. `outcome` is `success`, `gate_failed`, `usage_error`, `incomplete`, `input_error`, or `internal_error` (`gate_failed` mirrors exit `1`; `other` exists as a defensive fallback and no current command produces it). |
 | `leadline_invocation_duration_seconds` | histogram | `surface`, `operation`, `outcome` | Wall-clock duration: cumulative `_bucket` samples over fixed bounds (`0.005`–`30` seconds, plus `+Inf`), with `_count` and `_sum`. Percentiles: `histogram_quantile(0.9, sum by (le, operation) (rate(leadline_invocation_duration_seconds_bucket[1h])))`; the mean is still `_sum` / `_count`. |
-| `leadline_invocation_cpu_seconds` | histogram | `surface`, `operation`, `outcome` | CPU seconds (user plus system) the invocation consumed: the CLI process total, or, on MCP, the delta across one tool call. Same `_bucket`/`_count`/`_sum` shape as duration, with its own bounds (`0.005`–`300` seconds). |
+| `leadline_invocation_cpu_seconds` | histogram | `surface`, `operation`, `outcome` | CPU seconds (user plus system) the invocation consumed, measured from just after start-up: the whole command on the CLI, the delta across one tool call on MCP. Same `_bucket`/`_count`/`_sum` shape as duration, with its own bounds (`0.005`–`300` seconds). |
 | `leadline_invocation_max_rss_bytes` | histogram | `surface`, `operation`, `outcome` | Peak resident set size at finish, in bytes (`16` MiB–`16` GiB bounds). On MCP this is the server's high-water mark, not a per-call figure. |
 | `leadline_invocation_cpu_ratio` | histogram | `surface`, `operation` | Sampled CPU utilization in cores, one observation per sample tick; values above `1` are honest parallel work. Bounds `0.05`–`16`. |
 | `leadline_invocation_rss_bytes` | histogram | `surface`, `operation` | Sampled resident bytes over the run, same bounds as peak RSS. |
 | `leadline_live_cpu_millicores` | gauge | `surface`, `operation` | Latest sampled utilization, `1000` = one core; written at most once per second. |
 | `leadline_live_rss_bytes` | gauge | `surface`, `operation` | Latest sampled resident bytes; written at most once per second. |
-| `leadline_mcp_sessions_total` | counter | `transport`, `outcome` | One per MCP server session; `outcome` is `clean` or `error`. |
-| `leadline_mcp_session_seconds` | histogram | `transport` | MCP session lifetime, bounds `0.1`–`14400` seconds. |
+| `leadline_mcp_sessions_total` | counter | `transport`, `outcome` | One per MCP server session that ends, `outcome` `clean` or `error`; today only `transport="stdio"` emits it, because an HTTP server runs until the process is killed. |
+| `leadline_mcp_session_seconds` | histogram | `transport` | MCP session lifetime, bounds `0.1`–`14400` seconds; stdio sessions only. |
 | `leadline_mcp_errors_total` | counter | `transport`, `reason` | Protocol and transport failures by `reason`: `parse_error`, `invalid_request`, `method_not_found`, `tool_error`, `batch_too_large`, `response_too_large`, `http_bad_request`, `http_busy`, `origin_rejected`, or `body_budget_exhausted`. |
 | `leadline_mcp_requests_total` | counter | `method` | One per JSON-RPC request (a batch counts per request). `method` is `initialize`, `tools_list`, `tools_call`, `ping`, `notification`, or `unknown`. |
 | `leadline_mcp_inflight_calls` | gauge | `transport` | Tool calls currently executing. |
@@ -56,13 +56,14 @@ resident bytes, and appends both to in-memory histograms; the
 `leadline_live_*` gauges are written at most once per second. At the end of
 the invocation the thread stops and its aggregates merge into the store.
 Short commands record their single end-of-run reading, so `cpu_seconds` and
-`max_rss_bytes` are always present even though the sampled series carry one
-observation.
+`max_rss_bytes` are always present, and the utilization and resident-size
+histograms carry that one observation instead of nothing.
 
 The two surfaces report cost differently:
 
 - On the CLI, `leadline_invocation_cpu_seconds` and
-  `leadline_invocation_max_rss_bytes` describe the whole process.
+  `leadline_invocation_max_rss_bytes` describe the whole command, measured
+  from just after start-up.
 - On MCP, `cpu_seconds` is the delta across one tool call, while
   `max_rss_bytes` is the server's high-water mark for the process, not a
   per-call figure — a cheap tool call inside a large server still reads as
@@ -203,8 +204,9 @@ records `gate_failed` when its result reports `passed: false`. The `check`
 and `debt` tools record finding counts exactly like their CLI counterparts
 (`leadline_findings_total`, severity and language breakdowns included). The
 server also records its own traffic: `leadline_mcp_sessions_total` and
-`leadline_mcp_session_seconds` cover session lifetime and how each one ended
-(`transport` is `stdio` or `http`; sessions end `clean` or `error`),
+`leadline_mcp_session_seconds` cover stdio session lifetime and how each one
+ended (`transport` is `stdio` here; an HTTP server runs until its host kills
+it, so it records no session row),
 `leadline_mcp_requests_total` counts every JSON-RPC request by method,
 `leadline_mcp_errors_total` counts protocol and transport failures by reason,
 `leadline_mcp_inflight_calls` shows concurrency, and
@@ -220,9 +222,10 @@ metrics are the one exception.
 - Anything that inherits the variable records, including `cargo test` runs
   and scripts. Unset it for measurement runs you want kept clean, or point it
   at a separate directory.
-- `leadline mcp` now records the server session itself
+- `leadline mcp` records stdio server sessions
   (`leadline_mcp_sessions_total`, `leadline_mcp_session_seconds`) alongside
-  its tool calls.
+  its tool calls; an HTTP server killed by its host records no session row,
+  only its requests, errors, payloads, and in-flight gauge.
 - On MCP, `leadline_invocation_max_rss_bytes` is the server's high-water
   mark, not what one tool call allocated; `cpu_seconds` is the per-call
   delta.

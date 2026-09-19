@@ -253,7 +253,6 @@ pub fn serve_http(host: &str, port: u16) -> crate::Result<()> {
 /// to a fixed ceiling, then fail fast with 503 instead of growing threads.
 pub fn serve_listener(listener: std::net::TcpListener) {
     let _ = TRANSPORT.set("http");
-    let started = std::time::Instant::now();
     let limiter = std::sync::Arc::new(ConnectionLimiter::default());
     for stream in listener.incoming() {
         match stream {
@@ -272,7 +271,6 @@ pub fn serve_listener(listener: std::net::TcpListener) {
             Err(error) => eprintln!("leadline: MCP connection failed: {error}"),
         }
     }
-    crate::telemetry::record_mcp_session("http", "clean", started.elapsed());
 }
 
 /// Open-connection counter with a fixed ceiling.
@@ -794,6 +792,18 @@ pub fn handle_request(raw: &str) -> Option<String> {
         }
         // Serialize as we go so one batch cannot retain an unbounded number
         // of complete responses before the limit is known.
+        let (first_method, first_notification) = batch
+            .first()
+            .map(|item| {
+                (
+                    item.get("method")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    item.get("id").is_none(),
+                )
+            })
+            .unwrap_or_default();
         let mut parts: Vec<String> = Vec::new();
         let mut total = 0usize;
         for item in &batch {
@@ -823,6 +833,12 @@ pub fn handle_request(raw: &str) -> Option<String> {
                 "batch response exceeds the size limit",
             ));
         }
+        crate::telemetry::record_mcp_payload(
+            &first_method,
+            first_notification,
+            raw.len() as u64,
+            rendered.len() as u64,
+        );
         return Some(rendered);
     }
     let notification = value.get("id").is_none();
@@ -831,7 +847,11 @@ pub fn handle_request(raw: &str) -> Option<String> {
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_owned();
-    let response = handle_single(&value)?;
+    let Some(response) = handle_single(&value) else {
+        // A notification produces no response but still carries its bytes.
+        crate::telemetry::record_mcp_payload(&method, notification, raw.len() as u64, 0);
+        return None;
+    };
     let text = response.to_string();
     crate::telemetry::record_mcp_payload(
         &method,
@@ -867,6 +887,7 @@ fn handle_single(request: &serde_json::Value) -> Option<serde_json::Value> {
     let object = match request.as_object() {
         Some(object) => object,
         None => {
+            crate::telemetry::record_mcp_error(transport(), "invalid_request");
             return Some(error_response(
                 serde_json::Value::Null,
                 -32600,
@@ -880,6 +901,7 @@ fn handle_single(request: &serde_json::Value) -> Option<serde_json::Value> {
     // A request without `id` is a notification only when it carries a valid
     // method; anything else is an invalid request that still gets a response.
     if jsonrpc != Some("2.0") || method.is_none() {
+        crate::telemetry::record_mcp_error(transport(), "invalid_request");
         let id = id.filter(valid_id).unwrap_or(serde_json::Value::Null);
         return Some(error_response(id, -32600, "Invalid Request"));
     }
@@ -888,6 +910,7 @@ fn handle_single(request: &serde_json::Value) -> Option<serde_json::Value> {
     if let Some(id) = &id
         && !valid_id(id)
     {
+        crate::telemetry::record_mcp_error(transport(), "invalid_request");
         return Some(error_response(
             serde_json::Value::Null,
             -32600,

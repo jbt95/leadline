@@ -307,7 +307,7 @@ const FAMILIES: &[Family] = &[
         help: "CPU cores in use, sampled during leadline invocations.",
         kind: Kind::Summary,
         label_keys: &["surface", "operation"],
-        buckets: &[0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 2.0, 4.0, 8.0, 16.0],
+        buckets: sampler::RATIO_BUCKETS,
     },
     Family {
         name: "leadline_invocation_rss_bytes",

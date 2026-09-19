@@ -178,3 +178,14 @@ Warm refresh is ~55x faster than cold analysis. Warm refresh of a repository thi
 | `duplication_detection/repeated/2000` | 6.7576 s | 910.26 ms | −87% |
 
 End-to-end self-debt (`./target/release/leadline debt --base HEAD~1 --json`, `/usr/bin/time -l`, median of 3, same machine and binary flags): 1.37 s / ~30.5 MB RSS before → 1.13 s / ~30 MB RSS after (−17%, RSS unchanged). The after column includes the rolling-hash correctness fix, which intentionally reports previously invisible clone groups (probe corpus: 8 → 17 groups at identical `duplicated_lines`).
+
+2026-09-19, leadline 0.14.0, Apple M2 Pro, 32 GiB, macOS 26.6.0 (Darwin 25.6.0 arm64), Rust 1.90.0, Criterion 0.8.2, same machine and the same frozen baseline (`--baseline before-duplication`, `--warm-up-time 0.1 --measurement-time 0.2 --sample-size 10`). The change interns duplication token text once instead of per occurrence; every paired JSON stayed byte-identical with identical exit codes.
+
+| Case | Change [low, median, high] |
+| --- | --- |
+| `duplication_detection/unique/500` | [−1.13%, −0.65%, −0.20%] |
+| `duplication_detection/unique/2000` | [+0.22%, +0.55%, +0.91%] |
+| `duplication_detection/repeated/500` | [+0.48%, +1.35%, +2.35%] |
+| `duplication_detection/repeated/2000` | [−1.28%, −1.08%, −0.89%] |
+
+Peak RSS (`/usr/bin/time -l`, same session): `duplication dup-scale/500` 18.19 → 16.28 MiB (−10.5%), `dup-scale/100` 9.08 → 8.38 MiB (−7.7%), `bench-repo-diverse/src` 28.41 → 22.42 MiB (−21.1%), and self-duplication 22.64 → 21.50 MiB (−5.0%). The single-file 200,000-function shape still fails: both the before and after binaries are killed at a 3 GiB watchdog inside ~3.6 s with no JSON, which is the documented capacity limit rather than a regression.

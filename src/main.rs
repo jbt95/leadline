@@ -109,13 +109,9 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
     let result = dispatch_command(args);
     if let Some(sampler) = sampler {
         let cost = sampler.finish();
-        leadline::telemetry::record_process_cost("cli", &operation, outcome_label(&result), &cost);
-        leadline::telemetry::record_invocation(
-            "cli",
-            &operation,
-            outcome_label(&result),
-            started.elapsed(),
-        );
+        let outcome = outcome_label(&result);
+        leadline::telemetry::record_process_cost("cli", &operation, outcome, &cost);
+        leadline::telemetry::record_invocation("cli", &operation, outcome, started.elapsed());
     }
     result
 }

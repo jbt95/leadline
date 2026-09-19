@@ -10,13 +10,12 @@ use std::time::{Duration, Instant};
 
 /// Gap between counter reads.
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(100);
-/// Samples kept per invocation (60 s at the interval above).
-const SAMPLE_WINDOW: u64 = 600;
 /// Live gauges are written at most this often.
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Bucket bounds for sampled CPU utilization, in cores.
-const RATIO_BUCKETS: &[f64] = &[0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 2.0, 4.0, 8.0, 16.0];
+/// Bucket bounds for sampled CPU utilization, in cores. The store's family
+/// table renders the same list, so a divergence would silently drop rows.
+pub(crate) const RATIO_BUCKETS: &[f64] = &[0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 2.0, 4.0, 8.0, 16.0];
 
 /// One invocation's cumulative distribution over a family's fixed bounds.
 ///
@@ -105,6 +104,11 @@ pub struct Sampler {
 struct Inner {
     stop: Arc<(Mutex<bool>, Condvar)>,
     handle: Option<std::thread::JoinHandle<Aggregate>>,
+    /// When sampling began, for a run shorter than one tick.
+    started: Instant,
+    /// Process CPU at sampling start, so the reported cost is a delta: the
+    /// whole command for the CLI, one tool call for MCP.
+    cpu_at_start: Option<f64>,
 }
 
 #[derive(Default)]
@@ -138,6 +142,8 @@ impl Sampler {
     /// Starts sampling regardless of configuration. Callers that need the
     /// real gate use [`Sampler::start`]; this exists for measurement code.
     pub(crate) fn spawn(surface: &str, operation: &str) -> Sampler {
+        let started = Instant::now();
+        let cpu_at_start = counters::read().map(|sample| sample.cpu_seconds);
         let stop = Arc::new((Mutex::new(false), Condvar::new()));
         let thread_stop = Arc::clone(&stop);
         let surface = surface.to_owned();
@@ -147,12 +153,17 @@ impl Sampler {
             .spawn(move || sample_loop(&surface, &operation, &thread_stop))
             .ok();
         Sampler {
-            inner: Some(Inner { stop, handle }),
+            inner: Some(Inner {
+                stop,
+                handle,
+                started,
+                cpu_at_start,
+            }),
         }
     }
 
     /// The no-op sampler used when telemetry is disabled.
-    pub(crate) fn disabled() -> Sampler {
+    fn disabled() -> Sampler {
         Sampler { inner: None }
     }
 
@@ -168,13 +179,29 @@ impl Sampler {
             *stopped = true;
             cvar.notify_all();
         }
-        let aggregate = inner
+        let mut aggregate = inner
             .handle
             .and_then(|handle| handle.join().ok())
             .unwrap_or_default();
         let end = counters::read();
+        let elapsed = inner.started.elapsed().as_secs_f64();
+        let cpu_seconds = match (inner.cpu_at_start, end) {
+            (Some(start), Some(end)) => (end.cpu_seconds - start).max(0.0),
+            // Without a start reading the total is the best available figure.
+            (None, Some(end)) => end.cpu_seconds,
+            _ => 0.0,
+        };
+        // A run shorter than one tick still carries a single observation.
+        if aggregate.cpu_ratio.is_empty() && elapsed > 0.0 && cpu_seconds > 0.0 {
+            aggregate.cpu_ratio.observe(cpu_seconds / elapsed);
+        }
+        if aggregate.rss_bytes.is_empty()
+            && let Some(rss) = end.and_then(|sample| sample.rss_bytes)
+        {
+            aggregate.rss_bytes.observe(rss as f64);
+        }
         ProcessCost {
-            cpu_seconds: end.map(|sample| sample.cpu_seconds).unwrap_or_default(),
+            cpu_seconds,
             peak_rss_bytes: end.and_then(|sample| sample.peak_rss_bytes),
             cpu_ratio: aggregate.cpu_ratio,
             rss_bytes: aggregate.rss_bytes,
@@ -186,7 +213,6 @@ fn sample_loop(surface: &str, operation: &str, stop: &Arc<(Mutex<bool>, Condvar)
     let mut aggregate = Aggregate::new();
     let mut previous: Option<(Instant, ProcessSample)> = None;
     let mut last_flush = Instant::now();
-    let mut ticks = 0u64;
     loop {
         {
             let (lock, cvar) = &**stop;
@@ -194,7 +220,7 @@ fn sample_loop(surface: &str, operation: &str, stop: &Arc<(Mutex<bool>, Condvar)
             let (stopped, _) = cvar
                 .wait_timeout(stopped, SAMPLE_INTERVAL)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if *stopped || ticks >= SAMPLE_WINDOW {
+            if *stopped {
                 break;
             }
         }
@@ -202,13 +228,12 @@ fn sample_loop(surface: &str, operation: &str, stop: &Arc<(Mutex<bool>, Condvar)
         let Some(sample) = counters::read() else {
             continue;
         };
-        ticks += 1;
         if let Some((previous_at, previous_sample)) = previous {
             let wall = now.duration_since(previous_at).as_secs_f64();
             if wall > 0.0 {
-                aggregate
-                    .cpu_ratio
-                    .observe(((sample.cpu_seconds - previous_sample.cpu_seconds) / wall).max(0.0));
+                let ratio = ((sample.cpu_seconds - previous_sample.cpu_seconds) / wall).max(0.0);
+                aggregate.cpu_ratio.observe(ratio);
+                aggregate.live_cpu_millicores = Some((ratio * 1000.0).round() as u64);
             }
         }
         if let Some(rss) = sample.rss_bytes {
@@ -216,7 +241,6 @@ fn sample_loop(surface: &str, operation: &str, stop: &Arc<(Mutex<bool>, Condvar)
             aggregate.live_rss_bytes = Some(rss);
         }
         if last_flush.elapsed() >= FLUSH_INTERVAL {
-            aggregate.live_cpu_millicores = mean_millicores(&aggregate.cpu_ratio);
             super::record_live(
                 surface,
                 operation,
@@ -228,16 +252,6 @@ fn sample_loop(surface: &str, operation: &str, stop: &Arc<(Mutex<bool>, Condvar)
         previous = Some((now, sample));
     }
     aggregate
-}
-
-/// Mean observed utilization in millicores, or `None` before the first
-/// completed interval.
-fn mean_millicores(histogram: &Histogram) -> Option<u64> {
-    if histogram.is_empty() {
-        return None;
-    }
-    let mean = histogram.sum / histogram.count as f64;
-    Some((mean.max(0.0) * 1000.0).round() as u64)
 }
 
 #[cfg(test)]
