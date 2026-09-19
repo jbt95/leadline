@@ -29,10 +29,13 @@ authorities are rejected, as are files over 64 MiB, aggregate input over
 
 `properties.security-severity` on the result wins, then the matching rule's
 value, then the SARIF `level` (`note`/`warning`/`error` map to
-`low`/`medium`/`high`). Labels map case-insensitively (`moderate` is `medium`);
+`low`/`medium`/`high`). A gitleaks result carrying none of those defaults to
+`high` — gitleaks emits no severity signal, and a detected secret is a
+concrete credential exposure the shared secret gate must block. Labels map
+case-insensitively (`moderate` is `medium`);
 numeric 0–10 scores map `<4` low, `<7` medium, `<9` high, `>=9` critical.
-Missing or unparseable severity stays `unknown`, which sits below every gate
-threshold and never violates.
+Otherwise missing or unparseable severity stays `unknown`, which sits below
+every gate threshold and never violates.
 
 ## New versus changed
 
