@@ -1413,4 +1413,37 @@ await db.query('SELECT 1 ' + tail);
         ];
         assert!(parse_bundles(&invalid).is_err());
     }
+    #[test]
+    fn go_dependencies_preserve_grouped_import_order_and_paths() {
+        let source = br#"package dao
+
+import (
+	"fmt"
+	`github.com/example/mod/pkg`
+	"database/sql"
+)
+
+func outer(db *sql.DB) {
+	nested := func() {
+		_ = fmt.Sprint(sql.ErrNoRows)
+	}
+	_ = nested
+	_ = wrap(one(two(three(db))))
+}
+"#;
+        let parsed = extract_dependencies("dao.go", source).unwrap();
+        let references: Vec<_> = parsed
+            .references
+            .iter()
+            .map(|reference| (reference.kind, reference.specifier.as_str(), reference.line))
+            .collect();
+        assert_eq!(
+            references,
+            vec![
+                (RawDependencyKind::GoImport, "fmt", 4),
+                (RawDependencyKind::GoImport, "github.com/example/mod/pkg", 5,),
+                (RawDependencyKind::GoImport, "database/sql", 6),
+            ]
+        );
+    }
 }
