@@ -27,11 +27,101 @@ use std::time::Duration;
 pub const METRICS_DIR_VAR: &str = "LEADLINE_METRICS_DIR";
 
 /// Version of the on-disk store; a mismatch starts a fresh store.
-pub const STATE_SCHEMA_VERSION: u32 = 2;
+pub const STATE_SCHEMA_VERSION: u32 = 3;
 
 const STATE_FILE_NAME: &str = "state.json";
 const PROM_FILE_NAME: &str = "leadline.prom";
 const LOCK_FILE_NAME: &str = "state.lock";
+
+mod counters;
+mod sampler;
+
+pub use counters::ProcessSample;
+pub use sampler::{ProcessCost, Sampler};
+
+/// Reads this process's CPU time and resident memory, or `None` when the
+/// platform cannot report them. Exposed for measurement code and tests.
+pub fn process_sample() -> Option<ProcessSample> {
+    counters::read()
+}
+
+/// Starts the sampler regardless of configuration, for measuring the
+/// sampler's own overhead. Normal callers use [`Sampler::start`].
+pub fn sampler_for_measurement(surface: &str, operation: &str) -> Sampler {
+    Sampler::spawn(surface, operation)
+}
+
+/// True when telemetry is configured; the sampler checks this before it
+/// spawns anything.
+fn enabled() -> bool {
+    metrics_directory().is_some()
+}
+
+/// Writes the live gauges of one running invocation.
+fn record_live(surface: &str, operation: &str, millicores: Option<u64>, rss_bytes: Option<u64>) {
+    mutate(|state| {
+        if let Some(millicores) = millicores {
+            state.set(
+                "leadline_live_cpu_millicores",
+                &[("surface", surface), ("operation", operation)],
+                millicores,
+            );
+        }
+        if let Some(rss_bytes) = rss_bytes {
+            state.set(
+                "leadline_live_rss_bytes",
+                &[("surface", surface), ("operation", operation)],
+                rss_bytes,
+            );
+        }
+    });
+}
+
+/// Records one invocation's CPU time, peak memory, and sampled distributions.
+/// Empty histograms record nothing, so a sampler that never ticked leaves only
+/// the end-of-run readings.
+pub fn record_process_cost(surface: &str, operation: &str, outcome: &str, cost: &ProcessCost) {
+    mutate(|state| {
+        if cost.cpu_seconds > 0.0 {
+            state.observe(
+                "leadline_invocation_cpu_seconds",
+                &[
+                    ("surface", surface),
+                    ("operation", operation),
+                    ("outcome", outcome),
+                ],
+                cost.cpu_seconds,
+            );
+        }
+        if let Some(peak) = cost.peak_rss_bytes {
+            state.observe(
+                "leadline_invocation_max_rss_bytes",
+                &[
+                    ("surface", surface),
+                    ("operation", operation),
+                    ("outcome", outcome),
+                ],
+                peak as f64,
+            );
+        }
+        let ratio = cost.cpu_ratio();
+        state.observe_histogram(
+            "leadline_invocation_cpu_ratio",
+            &[("surface", surface), ("operation", operation)],
+            &ratio.counts,
+            ratio.count,
+            ratio.sum,
+        );
+        let rss = cost.rss_histogram();
+        state.observe_histogram(
+            "leadline_invocation_rss_bytes",
+            &[("surface", surface), ("operation", operation)],
+            &rss.counts,
+            rss.count,
+            rss.sum,
+        );
+    });
+}
 
 /// One metric family the store knows how to render. Unknown families read
 /// from a tampered store are dropped rather than rendered.
@@ -41,6 +131,8 @@ struct Family {
     kind: Kind,
     /// Exact label key set; a row with any other key is dropped.
     label_keys: &'static [&'static str],
+    /// Cumulative upper bounds for `Kind::Summary`; empty for counters and gauges.
+    buckets: &'static [f64],
 }
 
 #[derive(Clone, Copy)]
@@ -50,42 +142,170 @@ enum Kind {
     Summary,
 }
 
+/// Resident-memory histogram bounds in bytes: 16 MiB … 16 GiB.
+const RSS_BUCKETS: &[f64] = &[
+    16_777_216.0,
+    33_554_432.0,
+    67_108_864.0,
+    134_217_728.0,
+    268_435_456.0,
+    536_870_912.0,
+    1_073_741_824.0,
+    2_147_483_648.0,
+    4_294_967_296.0,
+    8_589_934_592.0,
+    17_179_869_184.0,
+];
+
+/// MCP payload histogram bounds in bytes: 256 B … 32 MiB.
+const PAYLOAD_BUCKETS: &[f64] = &[
+    256.0,
+    1024.0,
+    4096.0,
+    16384.0,
+    65536.0,
+    262_144.0,
+    1_048_576.0,
+    4_194_304.0,
+    16_777_216.0,
+    33_554_432.0,
+];
+
 const FAMILIES: &[Family] = &[
     Family {
         name: "leadline_invocations_total",
         help: "Leadline invocations by surface, operation, and outcome.",
         kind: Kind::Counter,
         label_keys: &["surface", "operation", "outcome"],
+        buckets: &[],
     },
     Family {
         name: "leadline_invocation_duration_seconds",
         help: "Wall-clock duration of leadline invocations in seconds.",
         kind: Kind::Summary,
         label_keys: &["surface", "operation", "outcome"],
+        buckets: DURATION_BUCKETS,
     },
     Family {
         name: "leadline_findings_total",
         help: "Findings reported by gating commands, by operation, kind, and state.",
         kind: Kind::Counter,
         label_keys: &["surface", "operation", "kind", "state"],
+        buckets: &[],
     },
     Family {
         name: "leadline_security_findings_total",
         help: "Scanner finding violations by operation, family, and severity.",
         kind: Kind::Counter,
         label_keys: &["surface", "operation", "kind", "severity"],
+        buckets: &[],
     },
     Family {
         name: "leadline_parse_errors_total",
         help: "Parse errors by operation and language.",
         kind: Kind::Counter,
         label_keys: &["surface", "operation", "language"],
+        buckets: &[],
     },
     Family {
         name: "leadline_debt_functions",
         help: "Standing function debt in the most recent debt run, by state.",
         kind: Kind::Gauge,
         label_keys: &["surface", "state"],
+        buckets: &[],
+    },
+    Family {
+        name: "leadline_invocation_cpu_seconds",
+        help: "CPU seconds (user plus system) consumed by leadline invocations.",
+        kind: Kind::Summary,
+        label_keys: &["surface", "operation", "outcome"],
+        buckets: &[
+            0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 300.0,
+        ],
+    },
+    Family {
+        name: "leadline_invocation_max_rss_bytes",
+        help: "Peak resident set size of leadline invocations in bytes.",
+        kind: Kind::Summary,
+        label_keys: &["surface", "operation", "outcome"],
+        buckets: RSS_BUCKETS,
+    },
+    Family {
+        name: "leadline_invocation_cpu_ratio",
+        help: "CPU cores in use, sampled during leadline invocations.",
+        kind: Kind::Summary,
+        label_keys: &["surface", "operation"],
+        buckets: &[0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 2.0, 4.0, 8.0, 16.0],
+    },
+    Family {
+        name: "leadline_invocation_rss_bytes",
+        help: "Resident set size in bytes, sampled during leadline invocations.",
+        kind: Kind::Summary,
+        label_keys: &["surface", "operation"],
+        buckets: RSS_BUCKETS,
+    },
+    Family {
+        name: "leadline_live_cpu_millicores",
+        help: "CPU cores in use now, in millicores (1000 = one core).",
+        kind: Kind::Gauge,
+        label_keys: &["surface", "operation"],
+        buckets: &[],
+    },
+    Family {
+        name: "leadline_live_rss_bytes",
+        help: "Resident set size of the running invocation in bytes.",
+        kind: Kind::Gauge,
+        label_keys: &["surface", "operation"],
+        buckets: &[],
+    },
+    Family {
+        name: "leadline_mcp_sessions_total",
+        help: "MCP server sessions by transport and outcome.",
+        kind: Kind::Counter,
+        label_keys: &["transport", "outcome"],
+        buckets: &[],
+    },
+    Family {
+        name: "leadline_mcp_session_seconds",
+        help: "MCP server session lifetime in seconds.",
+        kind: Kind::Summary,
+        label_keys: &["transport"],
+        buckets: &[0.1, 1.0, 10.0, 60.0, 300.0, 1800.0, 3600.0, 14400.0],
+    },
+    Family {
+        name: "leadline_mcp_errors_total",
+        help: "MCP protocol and transport failures by transport and reason.",
+        kind: Kind::Counter,
+        label_keys: &["transport", "reason"],
+        buckets: &[],
+    },
+    Family {
+        name: "leadline_mcp_requests_total",
+        help: "MCP JSON-RPC requests by method.",
+        kind: Kind::Counter,
+        label_keys: &["method"],
+        buckets: &[],
+    },
+    Family {
+        name: "leadline_mcp_inflight_calls",
+        help: "MCP tool calls currently executing.",
+        kind: Kind::Gauge,
+        label_keys: &["transport"],
+        buckets: &[],
+    },
+    Family {
+        name: "leadline_mcp_request_bytes",
+        help: "MCP request bytes by method.",
+        kind: Kind::Summary,
+        label_keys: &["method"],
+        buckets: PAYLOAD_BUCKETS,
+    },
+    Family {
+        name: "leadline_mcp_response_bytes",
+        help: "MCP response bytes by method.",
+        kind: Kind::Summary,
+        label_keys: &["method"],
+        buckets: PAYLOAD_BUCKETS,
     },
 ];
 
@@ -103,6 +323,35 @@ const LABEL_VALUES: &[(&str, &[&str])] = &[
             "input_error",
             "internal_error",
             "other",
+            "clean",
+            "error",
+        ],
+    ),
+    ("transport", &["http", "stdio"]),
+    (
+        "method",
+        &[
+            "initialize",
+            "tools_list",
+            "tools_call",
+            "ping",
+            "notification",
+            "unknown",
+        ],
+    ),
+    (
+        "reason",
+        &[
+            "parse_error",
+            "invalid_request",
+            "method_not_found",
+            "tool_error",
+            "batch_too_large",
+            "response_too_large",
+            "http_bad_request",
+            "http_busy",
+            "origin_rejected",
+            "body_budget_exhausted",
         ],
     ),
     (
@@ -205,37 +454,55 @@ impl MetricState {
     }
 
     /// Records one observation for a histogram family (count, sum, and
-    /// cumulative buckets).
+    /// cumulative buckets) using that family's own bounds.
     fn observe(&mut self, metric: &str, labels: &[(&str, &str)], value: f64) {
+        let Some(buckets) = family_for(metric).map(|family| family.buckets) else {
+            return;
+        };
+        let mut counts = vec![0u64; buckets.len()];
+        for (slot, bound) in counts.iter_mut().zip(buckets.iter()) {
+            if value <= *bound {
+                *slot = 1;
+            }
+        }
+        self.observe_histogram(metric, labels, &counts, 1, value);
+    }
+
+    /// Merges `count` observations into a cumulative histogram row. A counts
+    /// slice that does not match the family's bucket count is dropped, which
+    /// is also how an empty sampler result records nothing.
+    fn observe_histogram(
+        &mut self,
+        metric: &str,
+        labels: &[(&str, &str)],
+        counts: &[u64],
+        count: u64,
+        sum: f64,
+    ) {
+        let Some(family) = family_for(metric) else {
+            return;
+        };
+        if count == 0 || counts.len() != family.buckets.len() {
+            return;
+        }
         let labels = labels_map(labels);
         if let Some(row) = self
             .summaries
             .iter_mut()
             .find(|row| row.metric == metric && row.labels == labels)
         {
-            row.count = row.count.saturating_add(1);
-            row.sum += value;
-            if row.buckets.len() != DURATION_BUCKETS.len() {
-                row.buckets.resize(DURATION_BUCKETS.len(), 0);
-            }
-            for (slot, bound) in row.buckets.iter_mut().zip(DURATION_BUCKETS.iter()) {
-                if value <= *bound {
-                    *slot = slot.saturating_add(1);
-                }
+            row.count = row.count.saturating_add(count);
+            row.sum += sum;
+            for (slot, add) in row.buckets.iter_mut().zip(counts.iter()) {
+                *slot = slot.saturating_add(*add);
             }
         } else {
-            let mut buckets = vec![0u64; DURATION_BUCKETS.len()];
-            for (slot, bound) in buckets.iter_mut().zip(DURATION_BUCKETS.iter()) {
-                if value <= *bound {
-                    *slot = 1;
-                }
-            }
             self.summaries.push(SummaryRow {
                 metric: metric.to_owned(),
                 labels,
-                count: 1,
-                sum: value,
-                buckets,
+                count,
+                sum,
+                buckets: counts.to_vec(),
             });
         }
     }
@@ -280,7 +547,7 @@ fn valid_row(row: &Row) -> bool {
 
 fn valid_summary_row(row: &SummaryRow) -> bool {
     family_for(&row.metric).is_some_and(|family| {
-        valid_labels(family, &row.labels) && row.buckets.len() == DURATION_BUCKETS.len()
+        valid_labels(family, &row.labels) && row.buckets.len() == family.buckets.len()
     })
 }
 
@@ -597,7 +864,7 @@ fn render(state: &MetricState) -> String {
                 ));
                 for row in rows {
                     let labels = labels_text(&row.labels);
-                    for (bound, count) in DURATION_BUCKETS.iter().zip(row.buckets.iter()) {
+                    for (bound, count) in family.buckets.iter().zip(row.buckets.iter()) {
                         output.push_str(&format!(
                             "{}_bucket{} {}\n",
                             family.name,
@@ -1056,5 +1323,76 @@ mod tests {
         assert_eq!(language_label("src/view.tsx"), Some("tsx"));
         assert_eq!(language_label("notes.md"), None);
         assert_eq!(language_label("Makefile"), None);
+    }
+
+    #[test]
+    fn histogram_families_use_their_own_bucket_counts() {
+        let mut state = MetricState::default();
+        state.observe(
+            "leadline_mcp_session_seconds",
+            &[("transport", "stdio")],
+            2.0,
+        );
+        state.observe(
+            "leadline_invocation_duration_seconds",
+            &[
+                ("surface", "cli"),
+                ("operation", "check"),
+                ("outcome", "success"),
+            ],
+            0.4,
+        );
+        let text = render(&state);
+        let session_buckets = text
+            .lines()
+            .filter(|line| line.starts_with("leadline_mcp_session_seconds_bucket"))
+            .count();
+        let duration_buckets = text
+            .lines()
+            .filter(|line| line.starts_with("leadline_invocation_duration_seconds_bucket"))
+            .count();
+        assert_eq!(session_buckets, 9, "{text}");
+        assert_eq!(duration_buckets, 13, "{text}");
+    }
+
+    #[test]
+    fn summary_rows_with_the_wrong_bucket_count_are_dropped() {
+        let mut state = MetricState::default();
+        state.summaries.push(SummaryRow {
+            metric: "leadline_mcp_session_seconds".to_owned(),
+            labels: labels_map(&[("transport", "stdio")]),
+            count: 1,
+            sum: 1.0,
+            buckets: vec![0u64; 3],
+        });
+        state.prune();
+        assert!(state.summaries.is_empty(), "{:?}", state.summaries);
+    }
+
+    #[test]
+    fn observed_histograms_merge_into_cumulative_buckets() {
+        let mut state = MetricState::default();
+        state.observe(
+            "leadline_mcp_session_seconds",
+            &[("transport", "http")],
+            2.0,
+        );
+        // Cumulative counts, as the sampler produces them: every bound at or
+        // above the sample is incremented.
+        state.observe_histogram(
+            "leadline_mcp_session_seconds",
+            &[("transport", "http")],
+            &[1, 3, 0, 0, 0, 0, 0, 0],
+            4,
+            5.0,
+        );
+        let row = state
+            .summaries
+            .iter()
+            .find(|row| row.metric == "leadline_mcp_session_seconds")
+            .expect("row");
+        assert_eq!(row.count, 5);
+        assert_eq!(row.sum, 7.0);
+        assert_eq!(row.buckets, vec![1, 3, 1, 1, 1, 1, 1, 1]);
     }
 }

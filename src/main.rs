@@ -94,15 +94,22 @@ fn main() -> ExitCode {
 ///
 /// Telemetry is best-effort and never changes the outcome. `mcp` is skipped
 /// here because its duration spans the whole server session; its tool calls
-/// are recorded individually.
+/// are recorded individually. CPU time and resident memory are sampled for the
+/// duration of the command when metrics are enabled.
 fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
     let operation = args
         .first()
         .map_or("none", |raw| cli_operation(raw))
         .to_owned();
     let started = Instant::now();
+    // `mcp` serves for the whole session, so its cost is sampled per tool call
+    // rather than around the server loop.
+    let sampler =
+        (operation != "mcp").then(|| leadline::telemetry::Sampler::start("cli", &operation));
     let result = dispatch_command(args);
-    if operation != "mcp" {
+    if let Some(sampler) = sampler {
+        let cost = sampler.finish();
+        leadline::telemetry::record_process_cost("cli", &operation, outcome_label(&result), &cost);
         leadline::telemetry::record_invocation(
             "cli",
             &operation,

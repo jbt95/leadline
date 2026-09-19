@@ -359,6 +359,7 @@ dependencies = [
  "blake3",
  "criterion",
  "ignore",
+ "libc",
  "quick-xml",
  "rayon",
  "serde",
@@ -369,6 +370,7 @@ dependencies = [
  "tree-sitter-java",
  "tree-sitter-javascript",
  "tree-sitter-typescript",
+ "windows-sys",
 ]
 
 [[package]]
