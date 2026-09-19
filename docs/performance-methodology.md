@@ -31,6 +31,14 @@ cargo bench --bench analyzer -- --warm-up-time 0.1 --measurement-time 0.2 --samp
 
 ## Memory (RSS)
 
+Criterion reports CPU/wall time only, never peak RSS. Every RSS claim
+must come from `/usr/bin/time -l` on a release binary on the same
+machine as its paired Criterion run. The existing Criterion CPU benches
+(`analyzer`, `duplication`, `source_snapshot`) stay unchanged: the
+current dependency result (~39 ms for 10,000 entries) is already below
+the stored 105 ms baseline, so no graph rewrite or benchmark-only
+abstraction is warranted.
+
 End-to-end time plus peak resident memory via platform tools:
 
 ```console
@@ -39,6 +47,81 @@ cargo build --release
 ```
 
 On macOS, `time -l` reports elapsed time and maximum resident set size.
+
+### Large-file capacity procedure
+
+Generate function-count fixtures with the same Python loop, substituting
+only the function count (10k/50k/100k/200k). Keep every generated
+fixture under `/private/var/folders/87/p63_20194376y08q0_vf16n80000gp/T/opencode/`; never commit a large
+corpus:
+
+```console
+/usr/bin/python3 - <<'PY'
+from pathlib import Path
+
+results = Path("/private/var/folders/87/p63_20194376y08q0_vf16n80000gp/T/opencode/leadline-perf-results")
+results.mkdir(parents=True, exist_ok=True)
+for count in (10_000, 50_000, 100_000, 200_000):
+    with (results / f"functions-{count}.ts").open("w") as output:
+        for index in range(count):
+            output.write(f"function f{index}(x: number): number {{\n")
+            output.write("  if (x > 1) {\n    return x + 1;\n  }\n")
+            output.write("  return x;\n}\n")
+PY
+```
+
+Source-byte control: a single 17.7 MB one-line TypeScript comment proves
+scaling is driven by function cardinality, not source bytes:
+
+```console
+/usr/bin/python3 -c "from pathlib import Path; Path('/private/var/folders/87/p63_20194376y08q0_vf16n80000gp/T/opencode/leadline-perf-results/comment-17mb.ts').write_text('// ' + 'x' * (17_700_000 - 3) + '\n')"
+```
+
+Measure each fixture with and without JSON serialization, recording wall
+time, user time, peak RSS, and exit code:
+
+```console
+cargo build --offline --release
+/usr/bin/time -l ./target/release/leadline analyze /private/var/folders/87/p63_20194376y08q0_vf16n80000gp/T/opencode/leadline-perf-results/functions-200000.ts > /dev/null
+/usr/bin/time -l ./target/release/leadline analyze /private/var/folders/87/p63_20194376y08q0_vf16n80000gp/T/opencode/leadline-perf-results/functions-200000.ts --json > /dev/null
+```
+
+Reference shape (2026-09-18, Mac14,9/M2 Pro, same-session release
+binary): the 17.7 MB comment takes ~0.11 s at ~22 MB RSS, while the
+same-size 200,000-function file takes ~3.98 s at ~1,078 MB RSS. RSS
+scales approximately linearly in function count (10k: ~60 MB;
+50k: ~273 MB; 100k: ~542 MB; 200k: ~1,078 MB).
+
+### Clone-ceiling procedure
+
+On identical clone-heavy files the existing 10M comparison ceiling is
+reached at 500 files: wall time then stays near 3.3 s while token/file
+storage keeps growing (100 files: complete; 500–2,000 files: ceiling
+report with rising RSS). Measure with the release binary and keep the
+JSON output for the identity comparison below:
+
+```console
+cargo build --offline --release
+results=/private/var/folders/87/p63_20194376y08q0_vf16n80000gp/T/opencode/leadline-perf-results
+mkdir -p "$results"
+/usr/bin/time -l ./target/release/leadline duplication CLONE_CORPUS --json > "$results/dup-clone.json"
+```
+
+Record wall time, user time, peak RSS, exit code, and whether the result
+is `complete` or a comparison-ceiling report. A run that terminates
+abnormally without producing JSON (as seen for a single 200,000-function
+file at ~4.7 GB RSS) is a capacity finding, not a timed result: report
+the RSS high-water mark and the absence of output.
+
+Output identity: a performance change must leave reports byte-identical.
+Compare before/after JSON bytes and exit codes on the same corpora:
+
+```console
+cmp "$results/dup-before.json" "$results/dup-after.json"
+```
+
+Any byte difference or exit-code change disqualifies the run as a pure
+performance comparison.
 
 ## Recording results
 
