@@ -4,6 +4,9 @@
   "private": true,
   "description": "Deterministic function-level complexity analysis for Java, JavaScript, TypeScript, and TSX.",
   "keywords": ["pi-package", "pi-extension", "complexity", "static-analysis"],
+  "exports": {
+    "./server": "./integrations/opencode/plugin-v2/index.ts"
+  },
   "pi": {
     "extensions": ["./integrations/pi/index.ts"],
     "skills": ["./integrations/common/leadline-skill"]
