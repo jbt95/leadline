@@ -4,6 +4,14 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.15.1 - 2026-09-20
+
+### Fixed
+
+- The sampling thread publishes every CPU-ratio observation it records, and
+  the sampler test waits for two of them instead of sleeping a fixed 320 ms,
+  fixing the flaky `a_live_sampler_records_samples` failure on loaded runners.
+
 ## 0.15.0 - 2026-09-20
 
 ### Added
