@@ -1,6 +1,6 @@
 [package]
 name = "leadline"
-version = "0.14.0"
+version = "0.15.0"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"

@@ -3,8 +3,23 @@
 All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
-- Duplication detection stores token text once in a reverse table instead of retaining it for every occurrence.
-- Telemetry records per-invocation CPU seconds and peak resident memory with sampled utilization and resident-size histograms, and MCP records sessions, protocol errors, per-method counts, in-flight calls and payload sizes; sampling is off unless LEADLINE_METRICS_DIR is set and costs under one percent.
+
+## 0.15.0 - 2026-09-20
+
+### Added
+
+- Telemetry records per-invocation CPU seconds and peak resident memory, with sampled utilization and resident-size histograms and live gauges for the running invocation. Sampling reads the process counters every 100 ms through one platform seam — `getrusage` plus `proc_pid_rusage` on macOS, `getrusage` plus `/proc/self/statm` on Linux, `GetProcessTimes` plus `GetProcessMemoryInfo` on Windows — and costs under one percent: 1.8 µs per read, 11.7 ms of CPU per 5 s of sampling.
+- MCP telemetry covers server sessions, protocol and transport failures by reason, JSON-RPC requests by method, in-flight tool calls, and request/response payload sizes, alongside the existing per-tool invocations.
+
+### Changed
+
+- Duplication detection stores token text once in a reverse table instead of retaining it for every occurrence (peak RSS −7.7 % to −21 % on the measured corpora, byte-identical reports).
+- The metrics store schema moves to `3`, and each histogram family carries its own cumulative buckets instead of sharing the duration bounds.
+
+### Fixed
+
+- MCP tool calls report their own CPU and memory delta rather than the server's cumulative total, the live utilization gauge reports the latest sample instead of a running mean, and a run shorter than one sampling tick still records a single observation.
+- MCP payload bytes are recorded for batches and notifications as well as single requests, and every invalid-request path records its reason.
 
 ## 0.14.0 - 2026-09-19
 
