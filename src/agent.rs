@@ -262,6 +262,71 @@ pub fn coupling_agent_json(report: &CouplingReport) -> Value {
     })
 }
 
+/// Unused-code projection. The entry set travels with the rows so an agent can
+/// see what "unused" was measured against, and the honesty fields (`complete`,
+/// `reason`, `unresolved`, `export_star_files`) travel with them too.
+pub fn unused_agent_json(report: &crate::unused::UnusedReport) -> Value {
+    let entry_points: Vec<Value> = report
+        .entry_points
+        .iter()
+        .map(|entry| {
+            json!({
+                "path": entry.path,
+                "source": entry.source,
+            })
+        })
+        .collect();
+    let unused_files: Vec<Value> = report
+        .unused_files
+        .iter()
+        .map(|file| json!({ "path": file.path }))
+        .collect();
+    let unused_dependencies: Vec<Value> = report
+        .unused_dependencies
+        .iter()
+        .map(|dependency| {
+            json!({
+                "manifest": dependency.manifest,
+                "package": dependency.package,
+                "kind": dependency.kind,
+            })
+        })
+        .collect();
+    let unused_exports: Vec<Value> = report
+        .unused_exports
+        .iter()
+        .map(|export| {
+            json!({
+                "path": export.path,
+                "name": export.name,
+                "line": export.line,
+                "kind": export.kind,
+            })
+        })
+        .collect();
+    json!({
+        "schema_version": report.schema_version,
+        "metric_profile": report.metric_profile,
+        "analyzer_version": report.analyzer_version,
+        "complete": report.complete,
+        "reason": report.reason,
+        "summary": {
+            "files_analyzed": report.files_analyzed,
+            "entry_points": report.entry_points.len(),
+            "unused_files": report.unused_files.len(),
+            "unused_dependencies": report.unused_dependencies.len(),
+            "unused_exports": report.unused_exports.len(),
+            "excluded_test_files": report.excluded_test_files,
+            "unresolved": report.unresolved,
+        },
+        "entry_points": entry_points,
+        "unused_files": unused_files,
+        "unused_dependencies": unused_dependencies,
+        "unused_exports": unused_exports,
+        "export_star_files": report.export_star_files,
+    })
+}
+
 /// Compact agent-oriented view of a dependency graph report.
 ///
 /// Drops per-edge confidence (always high by construction); keeps the fan

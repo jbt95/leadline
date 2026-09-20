@@ -117,7 +117,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
 }
 
 /// Every command [`dispatch_command`] accepts, so metric labels stay bounded.
-const CLI_OPERATIONS: [&str; 29] = [
+const CLI_OPERATIONS: [&str; 31] = [
     "analyze",
     "function",
     "changed",
@@ -129,6 +129,8 @@ const CLI_OPERATIONS: [&str; 29] = [
     "security",
     "coupling",
     "dependencies",
+    "unused",
+    "report",
     "impact",
     "test-targets",
     "project",
@@ -223,6 +225,8 @@ fn dispatch_command(args: Vec<String>) -> Result<ExitCode, CliError> {
         "security" => security_command(&args[1..]),
         "coupling" => coupling_command(&args[1..]),
         "dependencies" => dependencies_command(&args[1..]),
+        "report" => report_command(&args[1..]),
+        "unused" => unused_command(&args[1..]),
         "impact" => impact_command(&args[1..]),
         "test-targets" => test_targets_command(&args[1..]),
         "project" => project_command(&args[1..]),
@@ -1423,6 +1427,7 @@ fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut json = false;
     let mut agent_json = false;
     let mut sarif = false;
+    let mut ci_format: Option<leadline::render::CiFormat> = None;
     let mut top: Option<usize> = None;
     let mut index = 0;
     while index < args.len() {
@@ -1465,7 +1470,7 @@ fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
             "--json" => json = true,
             "--format" => {
                 index += 1;
-                parse_scan_format(args.get(index), &mut agent_json, &mut sarif)?;
+                parse_scan_format(args.get(index), &mut agent_json, &mut sarif, &mut ci_format)?;
             }
             "--top" => {
                 index += 1;
@@ -1500,6 +1505,14 @@ fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
             ))
             .map_err(|error| CliError::internal(error.to_string()))?
         );
+    } else if let Some(format) = ci_format {
+        let document = serde_json::json!({ "sql_violations": &report.violations });
+        print_ci_document(
+            &document,
+            0,
+            &leadline::render::GateLimits::default(),
+            format,
+        )?;
     } else if sarif {
         println!(
             "{}",
@@ -1538,6 +1551,7 @@ fn security_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut json = false;
     let mut agent_json = false;
     let mut sarif = false;
+    let mut ci_format: Option<leadline::render::CiFormat> = None;
     let mut top: Option<usize> = None;
     let mut index = 0;
     while index < args.len() {
@@ -1583,7 +1597,7 @@ fn security_command(args: &[String]) -> Result<ExitCode, CliError> {
             "--json" => json = true,
             "--format" => {
                 index += 1;
-                parse_scan_format(args.get(index), &mut agent_json, &mut sarif)?;
+                parse_scan_format(args.get(index), &mut agent_json, &mut sarif, &mut ci_format)?;
             }
             "--top" => {
                 index += 1;
@@ -1634,6 +1648,14 @@ fn security_command(args: &[String]) -> Result<ExitCode, CliError> {
             ))
             .map_err(|error| CliError::internal(error.to_string()))?
         );
+    } else if let Some(format) = ci_format {
+        let document = serde_json::json!({ "security_violations": &report.findings });
+        print_ci_document(
+            &document,
+            0,
+            &leadline::render::GateLimits::default(),
+            format,
+        )?;
     } else if sarif {
         println!(
             "{}",
@@ -1690,21 +1712,57 @@ fn comparison_from_flags(
     })
 }
 
-/// Parse one `--format agent-json|sarif` value into its output flags.
+/// Maps the gate's thresholds onto the renderer's limits.
+fn gate_limits(thresholds: &Thresholds) -> leadline::render::GateLimits {
+    leadline::render::GateLimits {
+        cognitive: thresholds.cognitive.map(f64::from),
+        cyclomatic: thresholds.cyclomatic.map(f64::from),
+        max_nesting: thresholds.max_nesting.map(f64::from),
+        crap: thresholds.crap,
+    }
+}
+
+/// Renders one CI format from a check-shaped document, using the same limits
+/// the gate applied so a live run and `report --from` agree byte for byte.
+fn print_ci_document(
+    document: &serde_json::Value,
+    files: usize,
+    limits: &leadline::render::GateLimits,
+    format: leadline::render::CiFormat,
+) -> Result<(), CliError> {
+    let findings =
+        leadline::render::findings_from_check_json(document, limits).map_err(CliError::usage)?;
+    let summary = leadline::render::GateSummary {
+        passed: findings.is_empty(),
+        files,
+        violations: findings.len(),
+    };
+    print!("{}", leadline::render::render(&findings, &summary, format));
+    Ok(())
+}
+
+/// Parse one `--format` value into its output flags: the `agent-json` and
+/// `sarif` projections, or one of the CI-facing renderers.
 fn parse_scan_format(
     raw: Option<&String>,
     agent_json: &mut bool,
     sarif: &mut bool,
+    ci_format: &mut Option<leadline::render::CiFormat>,
 ) -> Result<(), CliError> {
     let value = raw.ok_or_else(|| CliError::usage("--format requires a value"))?;
     match value.as_str() {
         "agent-json" => *agent_json = true,
         "sarif" => *sarif = true,
-        _ => {
-            return Err(CliError::usage(format!(
-                "unknown --format '{value}': expected 'agent-json' or 'sarif'"
-            )));
-        }
+        _ => match leadline::render::parse_format(value) {
+            Some(format) => *ci_format = Some(format),
+            None => {
+                return Err(CliError::usage(format!(
+                    "unknown --format '{value}': expected 'agent-json', 'sarif', 'codeclimate', \
+                     'gitlab-codequality', 'github-annotations', 'github-summary', 'markdown', \
+                     'badge', or 'compact'"
+                )));
+            }
+        },
     }
     Ok(())
 }
@@ -1757,6 +1815,7 @@ fn vulnerabilities_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut json = false;
     let mut agent_json = false;
     let mut sarif = false;
+    let mut ci_format: Option<leadline::render::CiFormat> = None;
     let mut top: Option<usize> = None;
     let mut index = 0;
     while index < args.len() {
@@ -1790,7 +1849,7 @@ fn vulnerabilities_command(args: &[String]) -> Result<ExitCode, CliError> {
             "--json" => json = true,
             "--format" => {
                 index += 1;
-                parse_scan_format(args.get(index), &mut agent_json, &mut sarif)?;
+                parse_scan_format(args.get(index), &mut agent_json, &mut sarif, &mut ci_format)?;
             }
             "--top" => {
                 index += 1;
@@ -1840,6 +1899,14 @@ fn vulnerabilities_command(args: &[String]) -> Result<ExitCode, CliError> {
             ))
             .map_err(|error| CliError::internal(error.to_string()))?
         );
+    } else if let Some(format) = ci_format {
+        let document = serde_json::json!({ "vulnerability_violations": &report.findings });
+        print_ci_document(
+            &document,
+            0,
+            &leadline::render::GateLimits::default(),
+            format,
+        )?;
     } else if sarif {
         println!(
             "{}",
@@ -1874,6 +1941,7 @@ fn sql_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut json = false;
     let mut agent_json = false;
     let mut sarif = false;
+    let mut ci_format: Option<leadline::render::CiFormat> = None;
     let mut top: Option<usize> = None;
     let mut index = 0;
     while index < args.len() {
@@ -1909,7 +1977,7 @@ fn sql_command(args: &[String]) -> Result<ExitCode, CliError> {
             "--json" => json = true,
             "--format" => {
                 index += 1;
-                parse_scan_format(args.get(index), &mut agent_json, &mut sarif)?;
+                parse_scan_format(args.get(index), &mut agent_json, &mut sarif, &mut ci_format)?;
             }
             "--top" => {
                 index += 1;
@@ -1952,6 +2020,14 @@ fn sql_command(args: &[String]) -> Result<ExitCode, CliError> {
             ))
             .map_err(|error| CliError::internal(error.to_string()))?
         );
+    } else if let Some(format) = ci_format {
+        let document = serde_json::json!({ "sql_violations": &report.findings });
+        print_ci_document(
+            &document,
+            0,
+            &leadline::render::GateLimits::default(),
+            format,
+        )?;
     } else if sarif {
         println!(
             "{}",
@@ -2066,6 +2142,158 @@ fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
     } else {
         print!("{}", leadline::report::terminal_coupling(&report));
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Unused files, dependencies, and exports relative to declared entry points.
+///
+/// Informational: it reports candidates and never gates, because dynamic
+/// access can hide a use that static reachability cannot see.
+fn unused_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut path = PathBuf::from(".");
+    let mut has_path = false;
+    let mut json = false;
+    let mut agent_json = false;
+    let mut include_tests = false;
+    let mut entries: Vec<String> = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => json = true,
+            "--format" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
+                if value != "agent-json" {
+                    return Err(CliError::usage(format!(
+                        "unknown --format '{value}': expected 'agent-json'"
+                    )));
+                }
+                agent_json = true;
+            }
+            "--include-tests" => include_tests = true,
+            "--entry" => {
+                index += 1;
+                entries.push(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--entry requires a pattern"))?
+                        .clone(),
+                );
+            }
+            value if !value.starts_with('-') && !has_path => {
+                path = PathBuf::from(value);
+                has_path = true;
+            }
+            value => {
+                return Err(CliError::usage(format!("unknown unused option '{value}'")));
+            }
+        }
+        index += 1;
+    }
+    if json && agent_json {
+        return Err(CliError::usage(
+            "--json and --format agent-json are exclusive",
+        ));
+    }
+    let config = load_config_for(&path)?;
+    let excludes: &[String] = config
+        .as_ref()
+        .map(|selected| selected.analysis_excludes.as_slice())
+        .unwrap_or(&[]);
+    let mut unused_config = config
+        .as_ref()
+        .map(|selected| selected.unused.clone())
+        .unwrap_or_default();
+    if include_tests {
+        unused_config.include_tests = true;
+    }
+    let report = leadline::unused::analyze_unused(&path, excludes, &entries, &unused_config)
+        .map_err(|error| CliError::incomplete(error.to_string()))?;
+    if report.files_analyzed == 0 {
+        return Err(CliError::incomplete(format!(
+            "no supported files found under {}",
+            path.display()
+        )));
+    }
+    if agent_json {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::agent::unused_agent_json(&report))
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if json {
+        print_json(&report, true)?;
+    } else {
+        print!("{}", leadline::report::terminal_unused(&report));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Re-render a saved `check --json` report through one CI format, without
+/// re-analyzing. Threshold flags re-apply the gate's limits, because the
+/// saved document carries metrics but not the reasons a row failed.
+fn report_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut from: Option<PathBuf> = None;
+    let mut format: Option<leadline::render::CiFormat> = None;
+    let mut limits = leadline::render::GateLimits::default();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--from" => {
+                index += 1;
+                from = Some(PathBuf::from(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--from requires a file"))?,
+                ));
+            }
+            "--format" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
+                format = leadline::render::parse_format(value);
+                if format.is_none() {
+                    return Err(CliError::usage(format!(
+                        "unknown --format '{value}': expected 'codeclimate', \
+                         'gitlab-codequality', 'github-annotations', 'github-summary', \
+                         'markdown', 'badge', or 'compact'"
+                    )));
+                }
+            }
+            "--cognitive" => {
+                index += 1;
+                limits.cognitive = Some(parse_floor(args.get(index), "--cognitive")?);
+            }
+            "--cyclomatic" => {
+                index += 1;
+                limits.cyclomatic = Some(parse_floor(args.get(index), "--cyclomatic")?);
+            }
+            "--max-nesting" => {
+                index += 1;
+                limits.max_nesting = Some(parse_floor(args.get(index), "--max-nesting")?);
+            }
+            "--crap" => {
+                index += 1;
+                limits.crap = Some(parse_floor(args.get(index), "--crap")?);
+            }
+            value => {
+                return Err(CliError::usage(format!("unknown report option '{value}'")));
+            }
+        }
+        index += 1;
+    }
+    let from = from.ok_or_else(|| CliError::usage("report requires --from FILE"))?;
+    let format = format.ok_or_else(|| CliError::usage("report requires --format NAME"))?;
+    let bytes = std::fs::read(&from)
+        .map_err(|error| CliError::usage(format!("cannot read {}: {error}", from.display())))?;
+    let document: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| CliError::usage(format!("{} is not JSON: {error}", from.display())))?;
+    let files = document
+        .get("files")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    print_ci_document(&document, files, &limits, format)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -3322,6 +3550,9 @@ struct CommonOptions {
     json: bool,
     agent_json: bool,
     sarif: bool,
+    /// CI-facing renderer selected by `--format`; mutually exclusive with the
+    /// json, agent-json, and sarif projections.
+    ci_format: Option<leadline::render::CiFormat>,
     pretty: bool,
     coverage: Option<CoverageMap>,
     budget: Budget,
@@ -3358,6 +3589,7 @@ impl CommonOptions {
         let mut json = false;
         let mut agent_json = false;
         let mut sarif = false;
+        let mut ci_format: Option<leadline::render::CiFormat> = None;
         let mut coverage = CoverageMap::default();
         let mut has_coverage = false;
         let mut has_path = path != Path::new(".");
@@ -3370,7 +3602,12 @@ impl CommonOptions {
                 "--json" => json = true,
                 "--format" => {
                     index += 1;
-                    parse_scan_format(args.get(index), &mut agent_json, &mut sarif)?;
+                    parse_scan_format(
+                        args.get(index),
+                        &mut agent_json,
+                        &mut sarif,
+                        &mut ci_format,
+                    )?;
                 }
                 "--top" => {
                     index += 1;
@@ -3463,6 +3700,7 @@ impl CommonOptions {
             json,
             agent_json,
             sarif,
+            ci_format,
             // `analyze --json` stays pretty-printed; other commands stay compact.
             pretty: command == "analyze",
             coverage: has_coverage.then_some(coverage),
@@ -3606,7 +3844,30 @@ impl CommonOptions {
             },
         );
         let internal = |error: serde_json::Error| CliError::internal(error.to_string());
-        if self.agent_json {
+        if let Some(format) = self.ci_format {
+            // One document, one code path: the CI renderers read exactly what
+            // `--json` writes, so `report --from` over a saved run produces
+            // byte-identical output to a live run with the same limits.
+            let mut document = serde_json::to_value(report).map_err(internal)?;
+            if let Some(security) = security {
+                document["security_violations"] =
+                    serde_json::to_value(&security.violations).map_err(internal)?;
+            }
+            if let Some(vulnerabilities) = vulnerabilities {
+                document["vulnerability_violations"] =
+                    serde_json::to_value(&vulnerabilities.violations).map_err(internal)?;
+            }
+            if let Some(sql) = sql {
+                document["sql_violations"] =
+                    serde_json::to_value(&sql.violations).map_err(internal)?;
+            }
+            print_ci_document(
+                &document,
+                report.files.len(),
+                &gate_limits(gate.thresholds),
+                format,
+            )?;
+        } else if self.agent_json {
             let mut value = serde_json::to_value(leadline::agent::analyze_agent_json_budgeted(
                 report,
                 &self.budget,

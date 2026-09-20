@@ -48,6 +48,7 @@ pub struct Config {
     pub architecture_rules: Vec<ArchitectureRule>,
     pub vulnerabilities: VulnerabilityConfig,
     pub sql: SqlConfig,
+    pub unused: UnusedConfig,
     pub index: Option<IndexConfig>,
 }
 
@@ -89,6 +90,15 @@ impl Default for SqlConfig {
             migration_roots: Vec::new(),
         }
     }
+}
+
+/// Unused-code detection settings.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UnusedConfig {
+    /// Entry-point patterns, gitignore-style and analysis-root-relative.
+    pub entries: Vec<String>,
+    /// Whether test files are analyzed as ordinary candidates.
+    pub include_tests: bool,
 }
 
 /// Analysis index settings; `[index]` presence enables the warm path.
@@ -179,6 +189,7 @@ impl Default for Config {
             architecture_rules: Vec::new(),
             vulnerabilities: VulnerabilityConfig::default(),
             sql: SqlConfig::default(),
+            unused: UnusedConfig::default(),
             index: None,
         }
     }
@@ -222,6 +233,9 @@ impl Config {
         }
         for pattern in &self.duplication.excludes {
             validate_analysis_pattern("duplication exclude", pattern)?;
+        }
+        for pattern in &self.unused.entries {
+            validate_analysis_pattern("unused entry", pattern)?;
         }
         let mut names = std::collections::BTreeSet::new();
         for rule in &self.architecture_rules {
@@ -407,6 +421,7 @@ pub fn parse_str(text: &str) -> Result<Config, ConfigError> {
             "thresholds" => read_thresholds(&mut config, value)?,
             "regressions" => read_regressions(&mut config, value)?,
             "duplication" => read_duplication(&mut config, value)?,
+            "unused" => read_unused(&mut config, value)?,
             "sql" => read_sql(&mut config, value)?,
             "index" => config.index = read_index(value)?,
             "vulnerabilities" => read_vulnerabilities(&mut config, value)?,
@@ -791,6 +806,49 @@ fn read_duplication(config: &mut Config, value: &Value) -> Result<(), ConfigErro
                 return Err(ConfigError::new(format!(
                     "unknown key `{key}` in [duplication]"
                 )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_unused(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| ConfigError::new("expected table for [unused]".to_string()))?;
+    for (key, item) in table {
+        match key.as_str() {
+            "entries" => {
+                let array = item.as_array().ok_or_else(|| {
+                    ConfigError::new(format!(
+                        "expected array for `entries`, got {}",
+                        item.type_str()
+                    ))
+                })?;
+                let mut entries = Vec::with_capacity(array.len());
+                for entry in array {
+                    match entry.as_str() {
+                        Some(pattern) => entries.push(pattern.to_string()),
+                        None => {
+                            return Err(ConfigError::new(format!(
+                                "expected string in `entries` array, got {}",
+                                entry.type_str()
+                            )));
+                        }
+                    }
+                }
+                config.unused.entries = entries;
+            }
+            "include_tests" => {
+                config.unused.include_tests = item.as_bool().ok_or_else(|| {
+                    ConfigError::new(format!(
+                        "expected bool for `include_tests`, got {}",
+                        item.type_str()
+                    ))
+                })?;
+            }
+            _ => {
+                return Err(ConfigError::new(format!("unknown key `{key}` in [unused]")));
             }
         }
     }

@@ -1,5 +1,5 @@
 use leadline::config::{
-    Config, DuplicationConfig, RegressionLimits, Severity, SqlConfig, Thresholds,
+    Config, DuplicationConfig, RegressionLimits, Severity, SqlConfig, Thresholds, UnusedConfig,
     VulnerabilityConfig, load_from, parse_str,
 };
 
@@ -17,6 +17,9 @@ cognitive = 15
 cyclomatic = 10
 crap = 30.0
 max_nesting = 4
+[unused]
+entries = ["src/cli.ts"]
+include_tests = true
 "#;
 
 #[test]
@@ -39,6 +42,10 @@ fn parses_full_config() {
             architecture_rules: Vec::new(),
             vulnerabilities: VulnerabilityConfig::default(),
             sql: SqlConfig::default(),
+            unused: UnusedConfig {
+                entries: vec!["src/cli.ts".to_string()],
+                include_tests: true,
+            },
             index: None,
         }
     );

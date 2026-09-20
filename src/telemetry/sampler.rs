@@ -61,10 +61,6 @@ impl Histogram {
         self.sum += value;
     }
 
-    fn samples(&self) -> u64 {
-        self.count
-    }
-
     fn is_empty(&self) -> bool {
         self.count == 0
     }
@@ -77,6 +73,7 @@ pub struct ProcessCost {
     pub cpu_seconds: f64,
     /// Peak resident set size in bytes, when the platform reports it.
     pub peak_rss_bytes: Option<u64>,
+    ticks: u64,
     cpu_ratio: Histogram,
     rss_bytes: Histogram,
 }
@@ -84,7 +81,7 @@ pub struct ProcessCost {
 impl ProcessCost {
     /// Number of counter samples taken during the invocation.
     pub fn sampled_ticks(&self) -> u64 {
-        self.cpu_ratio.samples()
+        self.ticks
     }
 
     pub(crate) fn cpu_ratio(&self) -> &Histogram {
@@ -113,6 +110,9 @@ struct Inner {
 
 #[derive(Default)]
 struct Aggregate {
+    /// Counter reads taken during the invocation, including the first one
+    /// that only establishes a baseline for the utilization ratio.
+    ticks: u64,
     cpu_ratio: Histogram,
     rss_bytes: Histogram,
     live_cpu_millicores: Option<u64>,
@@ -122,6 +122,7 @@ struct Aggregate {
 impl Aggregate {
     fn new() -> Self {
         Self {
+            ticks: 0,
             cpu_ratio: Histogram::for_bounds(RATIO_BUCKETS),
             rss_bytes: Histogram::for_bounds(super::RSS_BUCKETS),
             live_cpu_millicores: None,
@@ -203,6 +204,7 @@ impl Sampler {
         ProcessCost {
             cpu_seconds,
             peak_rss_bytes: end.and_then(|sample| sample.peak_rss_bytes),
+            ticks: aggregate.ticks,
             cpu_ratio: aggregate.cpu_ratio,
             rss_bytes: aggregate.rss_bytes,
         }
@@ -228,6 +230,7 @@ fn sample_loop(surface: &str, operation: &str, stop: &Arc<(Mutex<bool>, Condvar)
         let Some(sample) = counters::read() else {
             continue;
         };
+        aggregate.ticks = aggregate.ticks.saturating_add(1);
         if let Some((previous_at, previous_sample)) = previous {
             let wall = now.duration_since(previous_at).as_secs_f64();
             if wall > 0.0 {
