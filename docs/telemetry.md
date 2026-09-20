@@ -50,11 +50,12 @@ labels above.
 ## CPU and memory
 
 One sampler thread, started only when telemetry is enabled, reads the process
-counters every 100 ms and keeps a 600-sample window (60 seconds of ticks).
-Each tick computes `Δcpu / Δwall` (utilization in cores) and the current
-resident bytes, and appends both to in-memory histograms; the
-`leadline_live_*` gauges are written at most once per second. At the end of
-the invocation the thread stops and its aggregates merge into the store.
+counters every 100 ms until the invocation ends. Each tick computes
+`Δcpu / Δwall` (utilization in cores) and the current resident bytes, and
+appends both to fixed-size histograms, so the memory it holds does not grow
+with run length; the `leadline_live_*` gauges are written at most once per
+second. At the end of the invocation the thread stops and its aggregates
+merge into the store.
 Short commands record their single end-of-run reading, so `cpu_seconds` and
 `max_rss_bytes` are always present, and the utilization and resident-size
 histograms carry that one observation instead of nothing.

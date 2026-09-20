@@ -182,7 +182,7 @@ pub fn record_mcp_payload(method: &str, notification: bool, request: u64, respon
 }
 
 /// Maps one JSON-RPC method onto the closed `method` label set.
-pub fn method_label(method: &str, notification: bool) -> &'static str {
+pub(crate) fn method_label(method: &str, notification: bool) -> &'static str {
     if notification {
         return "notification";
     }

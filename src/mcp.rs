@@ -776,24 +776,10 @@ pub fn handle_request(raw: &str) -> Option<String> {
         }
     };
     if let serde_json::Value::Array(batch) = value {
-        // An empty batch is an invalid request, not a notification.
-        if batch.is_empty() {
-            crate::telemetry::record_mcp_error(transport(), "invalid_request");
-            return Some(
-                error_response(serde_json::Value::Null, -32600, "Invalid Request").to_string(),
-            );
-        }
-        // An oversized batch is rejected, but a batch of notifications must
-        // still never draw a response.
-        if batch.len() > MAX_BATCH_REQUESTS {
-            crate::telemetry::record_mcp_error(transport(), "batch_too_large");
-            let expects_response = batch.iter().any(|item| item.get("id").is_some());
-            return expects_response.then(|| batch_error_response(-32600, "Invalid Request"));
-        }
-        // Serialize as we go so one batch cannot retain an unbounded number
-        // of complete responses before the limit is known.
+        // A batch head that is not an object carries no method of its own.
         let (first_method, first_notification) = batch
             .first()
+            .filter(|item| item.is_object())
             .map(|item| {
                 (
                     item.get("method")
@@ -804,6 +790,36 @@ pub fn handle_request(raw: &str) -> Option<String> {
                 )
             })
             .unwrap_or_default();
+        // An empty batch is an invalid request, not a notification.
+        if batch.is_empty() {
+            crate::telemetry::record_mcp_error(transport(), "invalid_request");
+            let response =
+                error_response(serde_json::Value::Null, -32600, "Invalid Request").to_string();
+            crate::telemetry::record_mcp_payload(
+                &first_method,
+                first_notification,
+                raw.len() as u64,
+                response.len() as u64,
+            );
+            return Some(response);
+        }
+        // An oversized batch is rejected, but a batch of notifications must
+        // still never draw a response.
+        if batch.len() > MAX_BATCH_REQUESTS {
+            crate::telemetry::record_mcp_error(transport(), "batch_too_large");
+            let expects_response = batch.iter().any(|item| item.get("id").is_some());
+            let response =
+                expects_response.then(|| batch_error_response(-32600, "Invalid Request"));
+            crate::telemetry::record_mcp_payload(
+                &first_method,
+                first_notification,
+                raw.len() as u64,
+                response.as_ref().map_or(0, String::len) as u64,
+            );
+            return response;
+        }
+        // Serialize as we go so one batch cannot retain an unbounded number
+        // of complete responses before the limit is known.
         let mut parts: Vec<String> = Vec::new();
         let mut total = 0usize;
         for item in &batch {
@@ -812,15 +828,28 @@ pub fn handle_request(raw: &str) -> Option<String> {
                 total += text.len();
                 if total > MAX_RESPONSE_BYTES {
                     crate::telemetry::record_mcp_error(transport(), "response_too_large");
-                    return Some(batch_error_response(
-                        -32603,
-                        "batch response exceeds the size limit",
-                    ));
+                    let response =
+                        batch_error_response(-32603, "batch response exceeds the size limit");
+                    crate::telemetry::record_mcp_payload(
+                        &first_method,
+                        first_notification,
+                        raw.len() as u64,
+                        response.len() as u64,
+                    );
+                    return Some(response);
                 }
                 parts.push(text);
             }
         }
         if parts.is_empty() {
+            // A notification-only batch draws no response but still carries
+            // its request bytes.
+            crate::telemetry::record_mcp_payload(
+                &first_method,
+                first_notification,
+                raw.len() as u64,
+                0,
+            );
             return None;
         }
         // The incremental check omits separators; enforce the exact rendered
@@ -828,10 +857,14 @@ pub fn handle_request(raw: &str) -> Option<String> {
         let rendered = format!("[{}]", parts.join(","));
         if rendered.len() > MAX_RESPONSE_BYTES {
             crate::telemetry::record_mcp_error(transport(), "response_too_large");
-            return Some(batch_error_response(
-                -32603,
-                "batch response exceeds the size limit",
-            ));
+            let response = batch_error_response(-32603, "batch response exceeds the size limit");
+            crate::telemetry::record_mcp_payload(
+                &first_method,
+                first_notification,
+                raw.len() as u64,
+                response.len() as u64,
+            );
+            return Some(response);
         }
         crate::telemetry::record_mcp_payload(
             &first_method,
