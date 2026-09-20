@@ -102,13 +102,23 @@ pub struct Sampler {
 }
 
 struct Inner {
-    stop: Arc<(Mutex<bool>, Condvar)>,
+    stop: Arc<(Mutex<LoopState>, Condvar)>,
     handle: Option<std::thread::JoinHandle<Aggregate>>,
     /// When sampling began, for a run shorter than one tick.
     started: Instant,
     /// Process CPU at sampling start, so the reported cost is a delta: the
     /// whole command for the CLI, one tool call for MCP.
     cpu_at_start: Option<f64>,
+}
+
+/// State the caller and the sampling thread share: the caller sets `stop` to
+/// end sampling, and reads `ticks` to wait for real progress instead of
+/// guessing how long the thread needs.
+#[derive(Default)]
+struct LoopState {
+    stop: bool,
+    /// CPU-ratio observations recorded so far.
+    ticks: u64,
 }
 
 #[derive(Default)]
@@ -144,7 +154,7 @@ impl Sampler {
     pub(crate) fn spawn(surface: &str, operation: &str) -> Sampler {
         let started = Instant::now();
         let cpu_at_start = counters::read().map(|sample| sample.cpu_seconds);
-        let stop = Arc::new((Mutex::new(false), Condvar::new()));
+        let stop = Arc::new((Mutex::new(LoopState::default()), Condvar::new()));
         let thread_stop = Arc::clone(&stop);
         let surface = surface.to_owned();
         let operation = operation.to_owned();
@@ -175,8 +185,8 @@ impl Sampler {
         };
         {
             let (lock, cvar) = &*inner.stop;
-            let mut stopped = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            *stopped = true;
+            let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.stop = true;
             cvar.notify_all();
         }
         let mut aggregate = inner
@@ -209,18 +219,22 @@ impl Sampler {
     }
 }
 
-fn sample_loop(surface: &str, operation: &str, stop: &Arc<(Mutex<bool>, Condvar)>) -> Aggregate {
+fn sample_loop(
+    surface: &str,
+    operation: &str,
+    stop: &Arc<(Mutex<LoopState>, Condvar)>,
+) -> Aggregate {
     let mut aggregate = Aggregate::new();
     let mut previous: Option<(Instant, ProcessSample)> = None;
     let mut last_flush = Instant::now();
     loop {
         {
             let (lock, cvar) = &**stop;
-            let stopped = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let (stopped, _) = cvar
-                .wait_timeout(stopped, SAMPLE_INTERVAL)
+            let state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let (state, _) = cvar
+                .wait_timeout(state, SAMPLE_INTERVAL)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if *stopped {
+            if state.stop {
                 break;
             }
         }
@@ -234,6 +248,9 @@ fn sample_loop(surface: &str, operation: &str, stop: &Arc<(Mutex<bool>, Condvar)
                 let ratio = ((sample.cpu_seconds - previous_sample.cpu_seconds) / wall).max(0.0);
                 aggregate.cpu_ratio.observe(ratio);
                 aggregate.live_cpu_millicores = Some((ratio * 1000.0).round() as u64);
+                let (lock, _) = &**stop;
+                let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.ticks += 1;
             }
         }
         if let Some(rss) = sample.rss_bytes {
@@ -277,10 +294,33 @@ mod tests {
         assert_eq!(cost.peak_rss_bytes, None);
     }
 
+    /// Waits until the sampling thread has recorded `want` CPU-ratio
+    /// observations. A loaded runner can delay the thread start and each
+    /// 100 ms wait far past any fixed sleep, so the test waits on the progress
+    /// the sampler publishes instead of on the clock.
+    fn wait_for_ticks(sampler: &Sampler, want: u64) {
+        let inner = sampler.inner.as_ref().expect("spawned sampler is live");
+        let (lock, _) = &*inner.stop;
+        let recorded = || {
+            lock.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .ticks
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while recorded() < want {
+            assert!(
+                Instant::now() < deadline,
+                "sampler recorded {} of {want} ticks",
+                recorded()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     #[test]
     fn a_live_sampler_records_samples() {
         let sampler = Sampler::spawn("cli", "test-sampler");
-        std::thread::sleep(Duration::from_millis(320));
+        wait_for_ticks(&sampler, 2);
         let cost = sampler.finish();
         assert!(cost.sampled_ticks() >= 2, "{cost:?}");
         assert!(cost.peak_rss_bytes.unwrap_or(0) > 0, "{cost:?}");
