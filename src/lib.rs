@@ -23,6 +23,7 @@ pub mod parser;
 pub mod pg_plan;
 pub mod policy;
 pub mod project;
+pub mod render;
 pub mod report;
 pub mod risk;
 pub mod sarif;
@@ -33,6 +34,7 @@ pub mod sql;
 pub mod telemetry;
 pub mod test_relationships;
 pub mod test_targets;
+pub mod unused;
 pub mod update;
 pub mod vulnerabilities;
 

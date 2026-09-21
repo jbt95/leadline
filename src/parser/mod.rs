@@ -35,9 +35,44 @@ pub(crate) struct RawDependency {
     pub(crate) line: u32,
 }
 
+/// One name a file exports to its consumers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ExportedSymbol {
+    /// Exported name. A star re-export exports no name of its own, so it
+    /// carries the module specifier instead.
+    pub(crate) name: String,
+    pub(crate) line: u32,
+    pub(crate) kind: ExportKind,
+}
+
+/// How an exported name reaches consumers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExportKind {
+    Named,
+    Default,
+    /// `export * from "..."`: every name of the target module is re-exported.
+    Star,
+}
+
+/// One name a file imports or re-exports.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ImportedSymbol {
+    /// Name as the source module declares it: `import { a as b }` records
+    /// `a`, so matching it against exports needs no alias table. A star form
+    /// (`import * as ns`, `export * from "..."`) reads no single name and
+    /// records none.
+    pub(crate) name: String,
+    pub(crate) line: u32,
+    /// True for a namespace import or a star re-export: the names it reads
+    /// are not statically known.
+    pub(crate) star: bool,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ParsedDependencies {
     pub(crate) references: Vec<RawDependency>,
+    pub(crate) exports: Vec<ExportedSymbol>,
+    pub(crate) imports: Vec<ImportedSymbol>,
     pub(crate) java_package: Option<String>,
     pub(crate) java_top_level_types: Vec<String>,
 }
@@ -1443,6 +1478,66 @@ func outer(db *sql.DB) {
                 (RawDependencyKind::GoImport, "fmt", 4),
                 (RawDependencyKind::GoImport, "github.com/example/mod/pkg", 5,),
                 (RawDependencyKind::GoImport, "database/sql", 6),
+            ]
+        );
+    }
+
+    #[test]
+    fn javascript_symbols_cover_every_import_and_export_form() {
+        // Every form the extractor recognizes, one per line. Line 7 exports a
+        // destructuring pattern, which introduces no single name.
+        let source = br#"import defaultExport from "./a";
+import * as namespace from "./b";
+import { named, aliased as local } from "./c";
+import "./side-effect";
+export function declared() {}
+export class Klass {}
+export const [first, second] = pair;
+export let counter = 0;
+export var legacy = 1;
+export { named, local as exposed };
+export { named as reexported } from "./c";
+export default function () {}
+export * from "./d";
+export * as grouped from "./e";
+const internal = 1;
+"#;
+        let parsed = extract_dependencies("src/forms.ts", source).unwrap();
+        let exports: Vec<(&str, u32, ExportKind)> = parsed
+            .exports
+            .iter()
+            .map(|export| (export.name.as_str(), export.line, export.kind))
+            .collect();
+        assert_eq!(
+            exports,
+            vec![
+                ("declared", 5, ExportKind::Named),
+                ("Klass", 6, ExportKind::Named),
+                ("counter", 8, ExportKind::Named),
+                ("legacy", 9, ExportKind::Named),
+                ("named", 10, ExportKind::Named),
+                ("exposed", 10, ExportKind::Named),
+                ("reexported", 11, ExportKind::Named),
+                ("default", 12, ExportKind::Default),
+                ("./d", 13, ExportKind::Star),
+                ("./e", 14, ExportKind::Star),
+            ]
+        );
+        let imports: Vec<(&str, u32, bool)> = parsed
+            .imports
+            .iter()
+            .map(|import| (import.name.as_str(), import.line, import.star))
+            .collect();
+        assert_eq!(
+            imports,
+            vec![
+                ("default", 1, false),
+                ("", 2, true),
+                ("named", 3, false),
+                ("aliased", 3, false),
+                ("named", 11, false),
+                ("", 13, true),
+                ("", 14, true),
             ]
         );
     }

@@ -1,10 +1,13 @@
 use super::{
-    ParsedDependencies, RawDependency, RawDependencyKind, node_text, push_children_reversed,
+    ExportKind, ExportedSymbol, ImportedSymbol, ParsedDependencies, RawDependency,
+    RawDependencyKind, node_text, push_children_reversed,
 };
 use tree_sitter::Node;
 
 pub(super) fn extract_javascript_dependencies(root: Node<'_>, source: &[u8]) -> ParsedDependencies {
     let mut references = Vec::new();
+    let mut exports = Vec::new();
+    let mut imports = Vec::new();
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         let found = match node.kind() {
@@ -36,12 +39,196 @@ pub(super) fn extract_javascript_dependencies(root: Node<'_>, source: &[u8]) -> 
                 }),
             }
         }
+        match node.kind() {
+            "export_statement" => {
+                collect_exported_symbols(node, source, &mut exports, &mut imports);
+            }
+            "import_statement" => collect_imported_symbols(node, source, &mut imports),
+            _ => {}
+        }
         push_children_reversed(node, &mut stack);
     }
     ParsedDependencies {
         references,
+        exports,
+        imports,
         ..ParsedDependencies::default()
     }
+}
+
+/// Exported names of one `export_statement`, plus the names it re-exports
+/// when it names another module.
+///
+/// A star re-export (`export * from "./x"`, `export * as ns from "./x"`)
+/// exports no single name; its entry carries the module specifier so callers
+/// can find the file whose exports it re-exports wholesale.
+fn collect_exported_symbols(
+    node: Node<'_>,
+    source: &[u8],
+    exports: &mut Vec<ExportedSymbol>,
+    imports: &mut Vec<ImportedSymbol>,
+) {
+    let line = node.start_position().row as u32 + 1;
+    if node.child_by_field_name("value").is_some() || child_of_kind(node, "default").is_some() {
+        exports.push(ExportedSymbol {
+            name: "default".to_owned(),
+            line,
+            kind: ExportKind::Default,
+        });
+        return;
+    }
+    if let Some(clause) = child_of_kind(node, "export_clause") {
+        let from = node.child_by_field_name("source").is_some();
+        let mut cursor = clause.walk();
+        for specifier in clause.named_children(&mut cursor) {
+            if specifier.kind() != "export_specifier" {
+                continue;
+            }
+            let exported = specifier
+                .child_by_field_name("alias")
+                .or_else(|| specifier.child_by_field_name("name"));
+            if let Some(exported) = exported {
+                exports.push(ExportedSymbol {
+                    name: name_text(exported, source),
+                    line,
+                    kind: ExportKind::Named,
+                });
+            }
+            let Some(imported) = specifier.child_by_field_name("name") else {
+                continue;
+            };
+            if from {
+                imports.push(ImportedSymbol {
+                    name: name_text(imported, source),
+                    line,
+                    star: false,
+                });
+            }
+        }
+        return;
+    }
+    if let Some(literal) = node.child_by_field_name("source") {
+        exports.push(ExportedSymbol {
+            name: specifier_text(literal, source),
+            line,
+            kind: ExportKind::Star,
+        });
+        imports.push(ImportedSymbol {
+            name: String::new(),
+            line,
+            star: true,
+        });
+        return;
+    }
+    let Some(declaration) = node.child_by_field_name("declaration") else {
+        return;
+    };
+    for name in declaration_names(declaration, source) {
+        exports.push(ExportedSymbol {
+            name,
+            line,
+            kind: ExportKind::Named,
+        });
+    }
+}
+
+/// Names an exported declaration introduces. Destructuring patterns, and
+/// declarations outside `function`/`class`/`var` bindings, introduce no
+/// single name and yield none.
+fn declaration_names(declaration: Node<'_>, source: &[u8]) -> Vec<String> {
+    match declaration.kind() {
+        "function_declaration"
+        | "generator_function_declaration"
+        | "class_declaration"
+        | "abstract_class_declaration" => declaration
+            .child_by_field_name("name")
+            .map(|name| vec![name_text(name, source)])
+            .unwrap_or_default(),
+        "lexical_declaration" | "variable_declaration" => {
+            let mut names = Vec::new();
+            let mut cursor = declaration.walk();
+            for declarator in declaration.named_children(&mut cursor) {
+                if declarator.kind() != "variable_declarator" {
+                    continue;
+                }
+                let Some(name) = declarator.child_by_field_name("name") else {
+                    continue;
+                };
+                if name.kind() == "identifier" {
+                    names.push(name_text(name, source));
+                }
+            }
+            names
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Names one `import_statement` reads from its module.
+fn collect_imported_symbols(node: Node<'_>, source: &[u8], imports: &mut Vec<ImportedSymbol>) {
+    let line = node.start_position().row as u32 + 1;
+    let Some(clause) = child_of_kind(node, "import_clause") else {
+        // `import "./side-effect"` binds nothing.
+        return;
+    };
+    let mut cursor = clause.walk();
+    for child in clause.children(&mut cursor) {
+        match child.kind() {
+            // The default binding reads the module's `default` export; the
+            // local alias it is bound to proves nothing about the module.
+            "identifier" => imports.push(ImportedSymbol {
+                name: "default".to_owned(),
+                line,
+                star: false,
+            }),
+            // A namespace binds the whole module, so no single name is read.
+            "namespace_import" => imports.push(ImportedSymbol {
+                name: String::new(),
+                line,
+                star: true,
+            }),
+            "named_imports" => {
+                let mut specs = child.walk();
+                for specifier in child.named_children(&mut specs) {
+                    if specifier.kind() != "import_specifier" {
+                        continue;
+                    }
+                    let Some(name) = specifier.child_by_field_name("name") else {
+                        continue;
+                    };
+                    imports.push(ImportedSymbol {
+                        name: name_text(name, source),
+                        line,
+                        star: false,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// First direct child of `node` with `kind`, anonymous children included.
+fn child_of_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .find(|child| child.kind() == kind)
+}
+
+/// Text of a symbol node: a string form (`export { a as "b" }`) loses its
+/// quotes so it matches the name it declares.
+fn name_text(node: Node<'_>, source: &[u8]) -> String {
+    if node.kind() == "string" {
+        raw_string_inner_text(node, source)
+    } else {
+        node_text(node, source).to_owned()
+    }
+}
+
+/// Module specifier of a `from` clause, decoded when the literal allows it.
+fn specifier_text(literal: Node<'_>, source: &[u8]) -> String {
+    decode_javascript_string(literal, source)
+        .unwrap_or_else(|| raw_string_inner_text(literal, source))
 }
 
 fn is_dependency_call(node: Node<'_>, source: &[u8]) -> bool {

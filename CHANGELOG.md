@@ -4,6 +4,12 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Added
+
+- `unused` reports files no entry point reaches, `dependencies` entries no source file of their manifest imports, and JS/TS exports no import or re-export covers. Entry points come from `--entry`, `[unused] entries`, every discovered `package.json`, and the `index.*`/`main.*` and `*.config.*` conventions. Test files are excluded unless `--include-tests`. Informational only, and it says when unresolved references make reachability incomplete.
+- `--format codeclimate` (alias `gitlab-codequality`), `github-annotations`, `github-summary`, `markdown`, `badge` and `compact` render findings for CI platforms on `check`, `security`, `vulnerabilities`, `sql` and `sql-plan`.
+- `report --from FILE --format NAME` re-renders a saved `check --json` document through any of those formats without re-analyzing, byte-identical to a live run with the same thresholds.
+
 ## 0.15.1 - 2026-09-20
 
 ### Fixed

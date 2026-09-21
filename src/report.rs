@@ -186,6 +186,84 @@ pub fn terminal_dependencies(report: &DependencyReport) -> String {
     output
 }
 
+/// Terminal summary of unused files, dependencies, and exports.
+pub fn terminal_unused(report: &crate::unused::UnusedReport) -> String {
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "Unused code ({} files analyzed, {} entry points, {} unused files, {} unused dependencies, {} unused exports)\n",
+        report.files_analyzed,
+        report.entry_points.len(),
+        report.unused_files.len(),
+        report.unused_dependencies.len(),
+        report.unused_exports.len()
+    );
+    let _ = writeln!(output, "Entry points ({})", report.entry_points.len());
+    for entry in &report.entry_points {
+        let _ = writeln!(output, "  {} ({})", entry.path, entry.source);
+    }
+    output.push('\n');
+    if report.unused_files.is_empty() {
+        output.push_str("No unused files.\n");
+    } else {
+        let _ = writeln!(output, "Unused files ({})", report.unused_files.len());
+        for file in &report.unused_files {
+            let _ = writeln!(output, "  {}", file.path);
+        }
+    }
+    output.push('\n');
+    if report.unused_dependencies.is_empty() {
+        output.push_str("No unused dependencies.\n");
+    } else {
+        let _ = writeln!(
+            output,
+            "Unused dependencies ({})",
+            report.unused_dependencies.len()
+        );
+        for dependency in &report.unused_dependencies {
+            let _ = writeln!(output, "  {}: {}", dependency.manifest, dependency.package);
+        }
+    }
+    output.push('\n');
+    if report.unused_exports.is_empty() {
+        output.push_str("No unused exports.\n");
+    } else {
+        let _ = writeln!(output, "Unused exports ({})", report.unused_exports.len());
+        for export in &report.unused_exports {
+            let _ = writeln!(
+                output,
+                "  {}:{} {} ({})",
+                export.path, export.line, export.name, export.kind
+            );
+        }
+    }
+    if report.excluded_test_files > 0 {
+        let _ = writeln!(
+            output,
+            "\nSkipped {} test files; pass --include-tests to include them.",
+            report.excluded_test_files
+        );
+    }
+    if report.unresolved > 0 {
+        let _ = writeln!(
+            output,
+            "\n{} references could not be resolved, so reachability is incomplete; treat these rows as candidates, not proof.",
+            report.unresolved
+        );
+    }
+    if !report.export_star_files.is_empty() {
+        let _ = writeln!(
+            output,
+            "\n{} files re-export with `export *`, so their exports are never reported unused.",
+            report.export_star_files.len()
+        );
+    }
+    output.push_str(
+        "\nDynamic access (computed property names, string-built requires, framework conventions) can hide a use; verify before deleting.\n",
+    );
+    output
+}
+
 pub fn terminal_impact(report: &ImpactReport) -> String {
     let mut output = String::new();
     let _ = writeln!(output, "Impact (target: {})\n", report.target);
