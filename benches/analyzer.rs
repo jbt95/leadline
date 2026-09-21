@@ -17,6 +17,14 @@ fn typescript_fixture(lines: usize) -> Vec<u8> {
 fn language_fixture(language: &str, functions: usize) -> (&'static str, Vec<u8>) {
     let mut source = String::with_capacity(functions * 80);
     match language {
+        "c" => {
+            for index in 0..functions {
+                source.push_str(&format!(
+                    "int f{index}(int x) {{ if (x > 1) return x + 1; return x; }}\n"
+                ));
+            }
+            ("fixture.c", source.into_bytes())
+        }
         "java" => {
             source.push_str("class Fixture {\n");
             for index in 0..functions {
@@ -93,7 +101,7 @@ fn source_scaling(c: &mut Criterion) {
 fn language_coverage(c: &mut Criterion) {
     let mut group = c.benchmark_group("language_analysis");
     group.sample_size(10);
-    for language in ["java", "javascript", "rust", "typescript", "tsx"] {
+    for language in ["c", "java", "javascript", "rust", "typescript", "tsx"] {
         let (path, source) = language_fixture(language, 2_000);
         assert_valid_fixture(path, &source, 2_000);
         group.throughput(Throughput::Bytes(source.len() as u64));

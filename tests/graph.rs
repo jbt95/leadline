@@ -112,6 +112,32 @@ fn go_imports_are_ignored_in_the_graph() {
 }
 
 #[test]
+fn c_local_includes_resolve_relative_paths_and_report_only_missing_quotes() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "src/main.c",
+        "#include \"detail/value.c\"\n#include \"missing.c\"\n#include <stdio.h>\n#include HEADER\nint main(void) { return value(); }\n",
+    );
+    write(
+        &root,
+        "src/detail/value.c",
+        "int value(void) { return 1; }\n",
+    );
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+
+    assert_eq!(edge_pairs(&report), [("src/main.c", "src/detail/value.c")]);
+    assert_eq!(report.unresolved.len(), 1);
+    assert_eq!(report.unresolved[0].source, "src/main.c");
+    assert_eq!(report.unresolved[0].specifier, "missing.c");
+    assert_eq!(report.unresolved[0].line, 2);
+    assert_eq!(report.unresolved[0].reason, "not_found");
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn rust_modules_resolve_to_files() {
     let root = temporary_directory();
     write(

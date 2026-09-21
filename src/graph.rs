@@ -302,6 +302,9 @@ fn resolve(
         // `github.com/org/repo/pkg`), never file-relative, so without
         // module-graph resolution there is nothing sound to resolve.
         RawDependencyKind::GoImport => Resolution::Ignored,
+        RawDependencyKind::LocalInclude => {
+            resolve_local_include(&reference.specifier, source, paths)
+        }
         // Rust modules are files: `mod foo;` names `foo.rs` or `foo/mod.rs`
         // beside the declaring file. `use` paths are module-qualified and
         // never reach this resolver.
@@ -382,6 +385,14 @@ fn resolve_javascript(specifier: &str, source: &str, paths: &BTreeSet<String>) -
         }
     }
     Resolution::Unresolved("not_found")
+}
+
+fn resolve_local_include(specifier: &str, source: &str, paths: &BTreeSet<String>) -> Resolution {
+    let Some(target) = relative_target(source, specifier) else {
+        return Resolution::Unresolved("not_found");
+    };
+    candidate_resolution(candidates(paths, [target].into_iter()))
+        .unwrap_or(Resolution::Unresolved("not_found"))
 }
 
 /// Resolves one Rust `mod foo;` declaration to `foo.rs` or `foo/mod.rs` inside

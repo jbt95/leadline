@@ -23,10 +23,10 @@ interface FunctionInput {
   name?: string;
 }
 
-// Leadline analyzes Java/JS/TS/TSX/Rust only. The hook skips the analyzer when
+// Leadline analyzes C/Java/JS/TS/TSX/Rust only. The hook skips the analyzer when
 // the edited file definitely falls outside that scope; unknown input shapes
 // fall through to analysis (fail-open, never a missed regression).
-const LEADLINE_EXTENSIONS = [".java", ".js", ".jsx", ".ts", ".tsx", ".rs"] as const;
+const LEADLINE_EXTENSIONS = [".c", ".java", ".js", ".jsx", ".ts", ".tsx", ".rs"] as const;
 
 function editedPath(input: unknown): string | undefined {
   if (typeof input !== "object" || input === null) {
@@ -72,7 +72,7 @@ export default Plugin.define({
     await ctx.tool.transform((editor) => {
       editor.add({
         name: "leadline_changed",
-        description: "Call after editing Java/JS/TS/TSX/Rust, fixing bugs, refactoring, or before committing to spot complexity regressions vs a git base.",
+        description: "Call after editing C/Java/JS/TS/TSX/Rust, fixing bugs, refactoring, or before committing to spot complexity regressions vs a git base.",
         input: {
           type: "object",
           properties: {
