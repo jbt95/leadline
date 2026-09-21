@@ -3316,6 +3316,11 @@ fn doctor_command(args: &[String]) -> Result<ExitCode, CliError> {
             "function check(x) { if (x) { return 1; } return 0; }",
         ),
         (
+            "python",
+            "doctor.py",
+            "def check(value):\n    if value:\n        return 1\n    return 0\n",
+        ),
+        (
             "typescript",
             "doctor.ts",
             "function check(x: boolean): number { if (x) { return 1; } return 0; }",

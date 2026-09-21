@@ -84,6 +84,10 @@ const SOURCE_SEEDS: &[(&str, &str)] = &[
         "seed.cpp",
         "#include <vector>\n\nint sum(const std::vector<int>& values) {\n    int total = 0;\n    for (int value : values) {\n        total += value;\n    }\n    return total;\n}\n",
     ),
+    (
+        "seed.py",
+        "class Counter:\n    def __init__(self, start):\n        self.value = start\n\n    def bump(self, by):\n        try:\n            if by > 0:\n                self.value += by\n            return [item for item in range(by) if item]\n        except ValueError:\n            raise RuntimeError(f\"bad step {by}\")\n        else:\n            return self.value\n        finally:\n            pass\n\ndef script(limit):\n    if __name__ == \"__main__\":\n        pass\n    match limit:\n        case 0:\n            return lambda value: value\n        case _:\n            return limit and limit or 1\n",
+    ),
 ];
 
 const LCOV_SEED: &str = "TN:\nSF:seed.ts\nDA:1,1\nDA:2,1\nDA:3,0\nDA:5,2\nend_of_record\nSF:Seed.java\nDA:2,3\nDA:5,0\nend_of_record\n";

@@ -118,6 +118,24 @@ fn tiny_fixtures_define_default_v1() {
     assert_complexity("cpp/header.h", "header_value", 1, 0, 0, 1);
     assert_complexity("cpp/parameters.cpp", "no_args", 1, 0, 0, 0);
     assert_complexity("cpp/parameters.cpp", "optional", 1, 0, 0, 1);
+
+    assert_complexity("py/empty.py", "empty", 1, 0, 0, 0);
+    assert_complexity("py/decisions.py", "choose", 4, 5, 2, 1);
+    assert_complexity("py/logic.py", "logic", 3, 2, 0, 3);
+    assert_complexity("py/loops.py", "loops", 3, 3, 2, 1);
+    assert_complexity("py/loops.py", "for_else", 3, 4, 2, 1);
+    assert_complexity("py/recursion.py", "factorial", 2, 2, 1, 1);
+    assert_complexity("py/ternary.py", "ternary", 2, 1, 1, 1);
+    assert_complexity("py/try_except.py", "parse", 4, 3, 1, 1);
+    assert_complexity("py/match_case.py", "route", 4, 1, 1, 1);
+    assert_complexity("py/comprehension.py", "comprehension", 3, 2, 1, 1);
+    assert_complexity("py/lambda.py", "double", 1, 0, 0, 1);
+    assert_complexity("py/method.py", "__init__", 1, 0, 0, 2);
+    assert_complexity("py/method.py", "bump", 2, 1, 1, 2);
+    assert_complexity("py/method.py", "repeat", 2, 2, 1, 2);
+    assert_complexity("py/parameters.py", "parameters", 1, 0, 0, 4);
+    assert_complexity("py/parameters.py", "keyword_only", 1, 0, 0, 3);
+    assert_complexity("py/parameters.py", "positional_only", 1, 0, 0, 2);
 }
 
 #[test]
@@ -226,6 +244,72 @@ fn cpp_kinds_and_parity() {
     assert_eq!(cpp_choose.cyclomatic, js_choose.cyclomatic);
     assert_eq!(cpp_choose.cognitive, js_choose.cognitive);
     assert_eq!(cpp_choose.max_nesting, js_choose.max_nesting);
+}
+
+#[test]
+fn python_kinds_and_javascript_parity() {
+    let method = fixture("py/method.py");
+    assert_eq!(function(&method, "bump").kind, FunctionKind::Method);
+    let lambda = fixture("py/lambda.py");
+    assert_eq!(function(&lambda, "double").kind, FunctionKind::Lambda);
+
+    // `if/elif/else` is the same shape as JavaScript's `if/else if/else`, so
+    // the parity test asserts cyclomatic, cognitive, and nesting together.
+    let python_file = fixture("py/decisions.py");
+    let javascript_file = fixture("javascript/decisions.js");
+    let python_choose = &function(&python_file, "choose").metrics;
+    let javascript_choose = &function(&javascript_file, "choose").metrics;
+    assert_eq!(python_choose.cyclomatic, javascript_choose.cyclomatic);
+    assert_eq!(python_choose.cognitive, javascript_choose.cognitive);
+    assert_eq!(python_choose.max_nesting, javascript_choose.max_nesting);
+
+    // `a and b or c` is the same logical sequence as `a && b || c`.
+    let python_logic_file = fixture("py/logic.py");
+    let javascript_logic_file = fixture("javascript/logic.js");
+    let python_logic = &function(&python_logic_file, "logic").metrics;
+    let javascript_logic = &function(&javascript_logic_file, "logic").metrics;
+    assert_eq!(python_logic.cyclomatic, javascript_logic.cyclomatic);
+    assert_eq!(python_logic.cognitive, javascript_logic.cognitive);
+}
+
+#[test]
+fn python_elif_chain_is_a_chain_not_an_else() {
+    let file = leadline::analyze_source(
+        "chain.py",
+        b"def chain(x):\n    if x == 1:\n        return 1\n    elif x == 2:\n        return 2\n    elif x == 3:\n        return 3\n    else:\n        return 0\n",
+    )
+    .unwrap();
+    let metrics = &function(&file, "chain").metrics;
+    // Three conditionals and one else, each worth one point, and no branch
+    // raises the enclosing depth: the chain is flat.
+    assert_eq!(
+        (metrics.cyclomatic, metrics.cognitive, metrics.max_nesting),
+        (4, 4, 1)
+    );
+}
+
+#[test]
+fn python_literals_and_keywords_are_halstead_leaves() {
+    let number = leadline::analyze_source("probe.py", b"def probe():\n    return 42\n").unwrap();
+    assert_eq!(function(&number, "probe").metrics.halstead_n2, 2);
+
+    let text = leadline::analyze_source("probe.py", b"def probe():\n    return \"x\"\n").unwrap();
+    assert_eq!(function(&text, "probe").metrics.halstead_n2, 2);
+
+    let nothing = leadline::analyze_source("probe.py", b"def probe():\n    return None\n").unwrap();
+    assert_eq!(function(&nothing, "probe").metrics.halstead_n2, 2);
+
+    // `def`, `global`, `del`, and `lambda` are operator keywords the shared
+    // punctuation table cannot name. The enclosing function sees `def`,
+    // `global`, `del` and its own `:`, `=`; the bound lambda sees its own `:`
+    // and `lambda`.
+    let keywords = leadline::analyze_source(
+        "probe.py",
+        b"def probe():\n    global g\n    f = lambda v: v\n    del f\n",
+    )
+    .unwrap();
+    assert_eq!(function(&keywords, "probe").metrics.halstead_n1, 5);
+    assert_eq!(function(&keywords, "f").metrics.halstead_n1, 2);
 }
 
 #[test]

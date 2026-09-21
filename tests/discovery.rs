@@ -76,6 +76,18 @@ fn discovery_finds_cpp_sources() {
 }
 
 #[test]
+fn discovery_finds_python_sources_and_skips_stubs() {
+    let root = temporary_directory();
+    std::fs::create_dir_all(root.join("pkg")).unwrap();
+    std::fs::write(root.join("pkg/service.py"), "def run():\n    return 1\n").unwrap();
+    std::fs::write(root.join("pkg/service.pyi"), "def run() -> int: ...\n").unwrap();
+    std::fs::write(root.join("notes.txt"), "not source\n").unwrap();
+    let discovered = leadline::discovery::discover(&root).unwrap();
+    assert_eq!(discovered, vec![root.join("pkg/service.py")]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn explicit_ignored_file_is_analyzable() {
     let root = temporary_directory();
     std::fs::write(root.join(".gitignore"), "ignored.ts\n").unwrap();

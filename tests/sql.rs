@@ -631,6 +631,64 @@ fn host_sql_matrix_across_languages() {
 }
 
 #[test]
+fn host_sql_python_dynamic_arguments_and_loops() {
+    use leadline::sql::analyze_host_sql;
+    // Python builds query text four ways, none of which the shared probes see:
+    // an f-string, `%` formatting, `.format(...)`, and `+` concatenation.
+    for source in [
+        "def load(cursor, name):\n    cursor.execute(f\"SELECT * FROM users WHERE name = {name}\")\n",
+        "def load(cursor, name):\n    cursor.execute(\"SELECT * FROM users WHERE name = %s\" % name)\n",
+        "def load(cursor, name):\n    cursor.execute(\"SELECT * FROM users WHERE name = {}\".format(name))\n",
+        "def load(cursor, name):\n    cursor.execute(\"SELECT * FROM users WHERE name = \" + name)\n",
+    ] {
+        let functions = host_functions("src/db.py", source.as_bytes());
+        let findings = analyze_host_sql("src/db.py", source.as_bytes(), &functions).unwrap();
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule_id == "sql/dynamic-concatenation"),
+            "{source:?}"
+        );
+        assert!(
+            findings.iter().all(|finding| finding.function_id.is_some()),
+            "{source:?}: sites attribute to a function"
+        );
+        assert!(
+            !serde_json::to_string(&findings).unwrap().contains("SELECT"),
+            "{source:?}: no SQL text leaks"
+        );
+    }
+
+    // A parameterized call stays quiet; the literal `%s` is not formatting.
+    let parameterized = "def get(cursor, user_id):\n    return cursor.execute(\"SELECT * FROM users WHERE id = %s\", (user_id,))\n";
+    let functions = host_functions("src/db.py", parameterized.as_bytes());
+    let findings = analyze_host_sql("src/db.py", parameterized.as_bytes(), &functions).unwrap();
+    assert!(findings.is_empty(), "{findings:?}");
+
+    // A loop around a dynamic call emits both rules.
+    let dynamic_loop = "def sync(cursor, ids):\n    for user_id in ids:\n        cursor.execute(\"SELECT * FROM users WHERE id = %s\" % user_id)\n";
+    let functions = host_functions("src/db.py", dynamic_loop.as_bytes());
+    let findings = analyze_host_sql("src/db.py", dynamic_loop.as_bytes(), &functions).unwrap();
+    let rules: Vec<&str> = findings
+        .iter()
+        .map(|finding| finding.rule_id.as_str())
+        .collect();
+    assert!(rules.contains(&"sql/query-in-loop"), "{rules:?}");
+    assert!(rules.contains(&"sql/dynamic-concatenation"), "{rules:?}");
+
+    // `executemany` is a terminal call name like `execute`: a loop around a
+    // parameterized batch insert is still a query in a loop.
+    let bulk = "def bulk(cursor, rows):\n    for row in rows:\n        cursor.executemany(\"INSERT INTO t VALUES (%s)\", row)\n";
+    let functions = host_functions("src/db.py", bulk.as_bytes());
+    let findings = analyze_host_sql("src/db.py", bulk.as_bytes(), &functions).unwrap();
+    let rules: Vec<&str> = findings
+        .iter()
+        .map(|finding| finding.rule_id.as_str())
+        .collect();
+    assert_eq!(rules, ["sql/query-in-loop"]);
+}
+
+#[test]
 fn host_sql_parameterized_calls_are_quiet() {
     use leadline::sql::analyze_host_sql;
     let source = "export async function get(pool: any, id: number) {\n  return pool.query('SELECT * FROM users WHERE id = $1', [id]);\n}\n";

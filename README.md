@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/MSRV-1.90-orange" alt="MSRV 1.90" />
 </p>
 
-Deterministic function-level complexity analysis for Go, Java, JavaScript, C, C++, TypeScript, TSX, and Rust — a fast feedback loop for humans, CI, and AI coding agents.
+Deterministic function-level complexity analysis for Go, Java, JavaScript, C, C++, TypeScript, TSX, Rust, and Python — a fast feedback loop for humans, CI, and AI coding agents.
 
 `leadline` reports physical and logical LOC, parameters, nesting, cyclomatic and cognitive complexity, Halstead metrics, maintainability, coverage, and CRAP. It parses code with Tree-sitter and never executes it: no build runtime, no network, no project scripts.
 
@@ -38,7 +38,7 @@ Operating: [troubleshooting](docs/troubleshooting.md), [smoke tests](docs/smoke.
 
 ```mermaid
 flowchart LR
-    Sources["Source files: Go, Java, JavaScript, C, C++, TypeScript, TSX, Rust"] --> Discovery["Discovery: gitignore-aware, skips generated and vendor dirs"]
+    Sources["Source files: Go, Java, JavaScript, C, C++, TypeScript, TSX, Rust, Python"] --> Discovery["Discovery: gitignore-aware, skips generated and vendor dirs"]
     Discovery --> Workers["Rayon workers: one file per worker"]
     Workers --> Parser["Tree-sitter parsing: ParserBackend::analyze"]
     Parser --> Engine["Metric engine: cyclomatic, cognitive, Halstead, maintainability"]
@@ -280,11 +280,11 @@ leadline impact src/payment/PaymentService.ts --format agent-json
 lists the transitive dependents of one file with distances, direct-dependent
 counts, and blast radius. Resolution is deliberately conservative: only
 relative JS/TS imports, exact Java type imports, file-relative Rust `mod`
-declarations, and quoted C/C++ includes produce edges. Bare package imports,
-Go module-qualified imports, Java wildcards, Rust `use` paths, and
-angle-bracket C/C++ includes produce none. The graph is therefore static
-evidence to inspect, not proof of runtime behavior; see
-[dependencies](docs/dependencies.md).
+declarations, quoted C/C++ includes, and Python relative imports produce edges.
+Bare package imports, Go module-qualified imports, Java wildcards, Rust `use`
+paths, angle-bracket C/C++ includes, and Python absolute dotted imports produce
+none. The graph is therefore static evidence to inspect, not proof of runtime
+behavior; see [dependencies](docs/dependencies.md).
 
 Rank change risk before editing:
 

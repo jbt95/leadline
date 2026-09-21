@@ -136,6 +136,52 @@ Decisions and loops inside them are therefore not scored, so macro-heavy
 files under-report control flow. Their token text contributes to Halstead
 only when the grammar exposes a recognized leaf.
 
+### Python counting policy
+
+Python discovers `function_definition` (`def`, including `async def`) and
+`lambda` nodes; a `def` inside a class body is a method, and `.pyi` stubs
+are not analyzed at all, because they declare signatures with no bodies.
+
+The shared tables apply with these Python-specific rules:
+
+- `elif_clause` is not an `if_statement`, so it is scored as an else-if:
+  each branch of an `if`/`elif` chain adds 1 cyclomatic and 1 cognitive point
+  and never raises nesting. The trailing `else_clause` adds 1 cognitive
+  point. A chain therefore reads exactly like JavaScript's `if`/`else if`/
+  `else`.
+- Comprehension clauses score like the explicit loop they replace: each
+  `for_in_clause` is a Loop and each `if_clause` is a conditional.
+- `except_clause` is a Catch and adds 1 cyclomatic point; Python is not
+  Java. `finally_clause` is not a decision. The `else` on `for`, `while`,
+  and `try` adds 1 cognitive point, because it is another path a reader must
+  follow. This is the one difference from the `for`/`while` rows of the
+  other languages, which have no `else` clause to score: no decision tool
+  run for this batch reported a usable signal for it, so it was decided
+  here. The second such decision is that `assert` scores nothing, matching
+  the Rust `panic!` row, because the optimizer strips it.
+- `raise_statement` follows JavaScript's `throw`: 1 cyclomatic point and no
+  cognitive point.
+- `match_statement` is a Switch and each `case_clause` is a Case.
+- `with_statement`, `not_operator`, and `global`/`nonlocal`/`pass`/`del`
+  statements are not decisions. `and` and `or` are logical operators, scored
+  like `&&` and `||`; a logical line is any effect statement, including
+  `with`, `raise`, `assert`, `match`/`case`, `del`, `pass`, and the two
+  comprehension clauses.
+- `self` is an ordinary explicit parameter and is counted. Parameter count
+  counts the six carrier node kinds (`identifier`, `typed_parameter`,
+  `default_parameter`, `typed_default_parameter`, `list_splat_pattern`,
+  `dictionary_splat_pattern`), so `*`/`/` separators do not count and
+  `*args` counts once.
+- A `lambda` bound by an assignment takes the assignment target as its name.
+  A call is recursive when its callee is the bare name or a `self.<name>`
+  attribute; an absolute-import-style call such as `os.path.join` is not.
+- Operator keywords (`and`, `or`, `not`, `is`, `lambda`, `with`, `as`,
+  `assert`, `raise`, `try`, `except`, `finally`, `elif`, `def`, `import`,
+  `from`, `del`, `pass`, `global`, `nonlocal`, `async`) count as Halstead
+  operators. `match` is already an operator in the shared table. An
+  `integer`, `float`, or `none` literal and the `string_content` leaf of a
+  string literal count as operands.
+
 ## Cognitive complexity
 
 Add `1 + current nesting` for `if`, loops, `catch`, `switch`, and ternary expressions. An `else if` adds 1 and continues the original chain. A final `else` adds 1. A labeled `break` or `continue` adds 1. Structural constructs increase nesting for structural descendants.
