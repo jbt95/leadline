@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.16.2 - 2026-09-21
+
 ### Changed
 
 - Only a process that serves an entry point records: a CLI command or an MCP transport arms recording, and an in-process library call never does. A test binary or embedder that calls the analyzer or the MCP handler directly leaves the configured store untouched, whatever `LEADLINE_METRICS_DIR` says.
