@@ -1,7 +1,8 @@
+mod common;
+
 use leadline::graph::{DependencyCycle, DependencyEdge, DependencyFile, DependencyReport};
 use leadline::impact::{analyze_impact, impact_counts};
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn temporary_directory() -> PathBuf {
@@ -279,7 +280,7 @@ fn impact_report_serialization_is_byte_stable() {
 #[test]
 fn cli_impact_terminal_reports_target_and_dependents() {
     let root = cli_chain_fixture();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["impact", "src/b.ts"])
         .output()
@@ -309,7 +310,7 @@ fn cli_impact_terminal_reports_target_and_dependents() {
 #[test]
 fn cli_impact_json_reports_dependents_in_order() {
     let root = cli_chain_fixture();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["impact", "src/b.ts", "--json"])
         .output()
@@ -344,7 +345,7 @@ fn cli_impact_json_reports_dependents_in_order() {
 #[test]
 fn cli_impact_agent_json_is_compact() {
     let root = cli_chain_fixture();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["impact", "src/b.ts", "--format", "agent-json"])
         .output()
@@ -370,12 +371,12 @@ fn cli_impact_agent_json_is_compact() {
 fn cli_impact_json_is_deterministic() {
     let root = cli_chain_fixture();
     let args = ["impact", "src/b.ts", "--json"];
-    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let first = common::leadline()
         .current_dir(&root)
         .args(args)
         .output()
         .unwrap();
-    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let second = common::leadline()
         .current_dir(&root)
         .args(args)
         .output()
@@ -389,7 +390,7 @@ fn cli_impact_json_is_deterministic() {
 #[test]
 fn cli_impact_top_truncates_dependents_but_keeps_blast_radius() {
     let root = cli_chain_fixture();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["impact", "src/b.ts", "--top", "1", "--json"])
         .output()
@@ -410,7 +411,7 @@ fn cli_impact_top_truncates_dependents_but_keeps_blast_radius() {
 #[test]
 fn cli_impact_requires_an_existing_target() {
     let root = cli_chain_fixture();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["impact", "src/missing.ts"])
         .output()
@@ -424,7 +425,7 @@ fn cli_impact_requires_an_existing_target() {
 fn cli_impact_rejects_targets_outside_the_scope() {
     let root = cli_chain_fixture();
     write_file(&root, "outside.ts", "export const outside = 1;\n");
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["impact", "../outside.ts", "--path", "src"])
         .output()
@@ -437,7 +438,7 @@ fn cli_impact_rejects_targets_outside_the_scope() {
 #[test]
 fn cli_impact_rejects_unknown_format() {
     let root = cli_chain_fixture();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["impact", "src/b.ts", "--format", "xml"])
         .output()
@@ -451,7 +452,7 @@ fn cli_impact_rejects_unknown_format() {
 fn cli_impact_missing_graph_target_is_usage_error() {
     let root = cli_chain_fixture();
     write_file(&root, "src/notes.txt", "plain text, not in the graph\n");
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["impact", "src/notes.txt"])
         .output()
@@ -463,7 +464,7 @@ fn cli_impact_missing_graph_target_is_usage_error() {
 
 #[test]
 fn cli_impact_help_lists_the_command() {
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args(["impact", "--help"])
         .output()
         .unwrap();

@@ -1,3 +1,5 @@
+mod common;
+
 use leadline::config::Severity;
 use leadline::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
@@ -626,7 +628,7 @@ fn cli_risk_expected_score(components: &serde_json::Value) -> f64 {
 #[test]
 fn cli_risk_terminal_ranks_riskiest_first() {
     let root = risk_fixture(); // risky.ts committed 5x with a cognitive-30 function; calm.ts once
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["risk"])
         .output()
@@ -643,7 +645,7 @@ fn cli_risk_terminal_ranks_riskiest_first() {
 #[test]
 fn cli_risk_json_shape_and_score_identity() {
     let root = risk_fixture();
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["risk", "--json"])
         .output()
@@ -683,7 +685,7 @@ fn cli_risk_json_shape_and_score_identity() {
 #[test]
 fn cli_risk_agent_json_is_compact() {
     let root = risk_fixture();
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["risk", "--format", "agent-json"])
         .output()
@@ -711,7 +713,7 @@ fn cli_risk_agent_json_is_compact() {
 #[test]
 fn cli_risk_since_window_accepted() {
     let root = risk_fixture();
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["risk", "--since", "30d", "--json"])
         .output()
@@ -729,7 +731,7 @@ fn cli_risk_since_window_accepted() {
 #[test]
 fn cli_risk_rejects_unknown_window() {
     let root = risk_fixture();
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["risk", "--since", "9d"])
         .output()
@@ -742,7 +744,7 @@ fn cli_risk_rejects_unknown_window() {
 #[test]
 fn cli_risk_json_and_agent_json_are_exclusive() {
     let root = risk_fixture();
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["risk", "--json", "--format", "agent-json"])
         .output()
@@ -755,12 +757,12 @@ fn cli_risk_json_and_agent_json_are_exclusive() {
 fn cli_risk_json_is_deterministic() {
     let root = risk_fixture();
     let args = ["risk", "--json"];
-    let first = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let first = common::leadline()
         .current_dir(&root)
         .args(args)
         .output()
         .unwrap();
-    let second = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let second = common::leadline()
         .current_dir(&root)
         .args(args)
         .output()
@@ -778,7 +780,7 @@ fn cli_risk_without_git_still_ranks_with_null_churn() {
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(src.join("risky.ts"), cli_risk_risky_source()).unwrap();
     std::fs::write(src.join("calm.ts"), CLI_RISK_CALM_SOURCE).unwrap();
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["risk", "--json"])
         .output()
@@ -802,7 +804,7 @@ fn cli_risk_without_git_still_ranks_with_null_churn() {
 #[test]
 fn cli_risk_empty_directory_is_incomplete() {
     let root = cli_risk_temp_dir("leadline-risk-empty");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["risk"])
         .output()
@@ -815,7 +817,7 @@ fn cli_risk_empty_directory_is_incomplete() {
 fn cli_risk_limit_caps_presentation_not_json() {
     let root = risk_fixture();
     // --json is always the full ranking.
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["risk", "--limit", "1", "--json"])
         .output()
@@ -830,7 +832,7 @@ fn cli_risk_limit_caps_presentation_not_json() {
     assert_eq!(value["risks"].as_array().unwrap().len(), 2);
     assert_eq!(value["risks"][0]["path"], "src/risky.ts");
     // Terminal and agent-json cap rows at --limit instead.
-    let terminal = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let terminal = common::leadline()
         .current_dir(&root)
         .args(["risk", "--limit", "1"])
         .output()
@@ -838,7 +840,7 @@ fn cli_risk_limit_caps_presentation_not_json() {
     assert!(terminal.status.success());
     let stdout = String::from_utf8(terminal.stdout).unwrap();
     assert!(stdout.contains("raise --limit"));
-    let agent = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let agent = common::leadline()
         .current_dir(&root)
         .args(["risk", "--limit", "1", "--format", "agent-json"])
         .output()
@@ -852,7 +854,7 @@ fn cli_risk_limit_caps_presentation_not_json() {
 #[test]
 fn cli_risk_rejects_unknown_flags() {
     let root = risk_fixture();
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["risk", "--bogus"])
         .output()

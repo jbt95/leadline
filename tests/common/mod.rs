@@ -12,11 +12,23 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Fresh empty directory under the system temp dir.
+#[allow(dead_code)]
 pub fn temporary_directory() -> PathBuf {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("leadline-test-{}-{id}", std::process::id()));
     std::fs::create_dir_all(&path).unwrap();
     path
+}
+
+/// Command for the built binary with the ambient local-metrics store switched
+/// off: a test run must never write into the developer's
+/// `LEADLINE_METRICS_DIR`. Tests that assert recording set the variable
+/// themselves.
+#[allow(dead_code)]
+pub fn leadline() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_leadline"));
+    command.env_remove("LEADLINE_METRICS_DIR");
+    command
 }
 
 /// True when `program` resolves to a runnable executable.

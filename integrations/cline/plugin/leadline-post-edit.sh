@@ -24,7 +24,13 @@ if ! command -v leadline >/dev/null 2>&1; then
   exit 0
 fi
 
-leadline changed --base "$BASE" || true
+# The base must resolve here: outside a repository, or before the base
+# commit exists, the analyzer can only fail. Report the skip and continue.
+if git rev-parse --verify --quiet "$BASE" >/dev/null 2>&1; then
+  leadline changed --base "$BASE" || true
+else
+  echo "leadline: base '$BASE' is not available here; skipping changed analysis."
+fi
 
 if [ -n "${LEADLINE_CHECK_ARGS:-}" ]; then
   # shellcheck disable=SC2086

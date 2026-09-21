@@ -44,10 +44,7 @@ fn check_treats_parse_errors_as_findings() {
 
 #[test]
 fn check_requires_a_threshold() {
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .args(["check", "."])
-        .output()
-        .unwrap();
+    let output = common::leadline().args(["check", "."]).output().unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("requires at least one"));
 }
@@ -68,7 +65,7 @@ fn check_reads_thresholds_from_project_config() {
 
     // No flags: the project config alone must satisfy the threshold check and
     // gate the violating function.
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["check", ".", "--json"])
         .output()
@@ -86,17 +83,14 @@ fn check_reads_thresholds_from_project_config() {
 
 #[test]
 fn version_and_subcommand_help_are_available() {
-    let version = Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .arg("--version")
-        .output()
-        .unwrap();
+    let version = common::leadline().arg("--version").output().unwrap();
     assert!(version.status.success());
     assert_eq!(
         String::from_utf8(version.stdout).unwrap().trim(),
         concat!("leadline ", env!("CARGO_PKG_VERSION"))
     );
 
-    let help = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let help = common::leadline()
         .args(["analyze", "--help"])
         .output()
         .unwrap();
@@ -112,10 +106,7 @@ fn skill_prints_canonical_skill_text() {
     )
     .unwrap();
     for args in [&["skill"][..], &["--skill"][..]] {
-        let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
-            .args(args)
-            .output()
-            .unwrap();
+        let output = common::leadline().args(args).output().unwrap();
         assert!(output.status.success());
         assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
     }
@@ -140,10 +131,7 @@ fn embedded_skill_matches_security_contract() {
         skill.contains("never include") || skill.contains("omitted"),
         "skill must state that scanner messages/source are omitted"
     );
-    let help = Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .arg("--help")
-        .output()
-        .unwrap();
+    let help = common::leadline().arg("--help").output().unwrap();
     let help = String::from_utf8_lossy(&help.stdout);
     for term in ["security", "--baseline-sarif", "--new-only"] {
         assert!(help.contains(term), "help is missing {term}");
@@ -154,7 +142,7 @@ fn embedded_skill_matches_security_contract() {
 fn mcp_serves_tool_list_over_stdio() {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let mut child = common::leadline()
         .arg("mcp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -196,7 +184,7 @@ fn mcp_responds_while_stdin_stays_open() {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let mut child = common::leadline()
         .arg("mcp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -234,7 +222,7 @@ fn mcp_responds_while_stdin_stays_open() {
 }
 
 fn check(file: &Path, options: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_leadline"))
+    common::leadline()
         .arg("check")
         .arg(file)
         .args(options)
@@ -244,10 +232,7 @@ fn check(file: &Path, options: &[&str]) -> std::process::Output {
 
 #[test]
 fn version_subcommand_matches_version_flag() {
-    let subcommand = Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .arg("version")
-        .output()
-        .unwrap();
+    let subcommand = common::leadline().arg("version").output().unwrap();
     assert!(subcommand.status.success());
     assert_eq!(
         String::from_utf8(subcommand.stdout).unwrap().trim(),
@@ -257,10 +242,7 @@ fn version_subcommand_matches_version_flag() {
 
 #[test]
 fn unknown_command_is_usage_error_with_clean_stdout() {
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .args(["frobnicate"])
-        .output()
-        .unwrap();
+    let output = common::leadline().args(["frobnicate"]).output().unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).starts_with("leadline: unknown command"));
@@ -271,7 +253,7 @@ fn json_and_agent_json_together_is_usage_error() {
     let root = temporary_directory();
     let file = root.join("tiny.ts");
     std::fs::write(&file, "function tiny() { return 1; }\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .arg("analyze")
         .arg(&file)
         .args(["--json", "--format", "agent-json"])
@@ -287,7 +269,7 @@ fn missing_function_is_usage_error() {
     let root = temporary_directory();
     let file = root.join("tiny.ts");
     std::fs::write(&file, "function tiny() { return 1; }\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .arg("function")
         .arg(&file)
         .arg("absent")
@@ -299,14 +281,14 @@ fn missing_function_is_usage_error() {
 
 #[test]
 fn analyze_without_files_is_incomplete() {
-    let missing = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let missing = common::leadline()
         .args(["analyze", "does-not-exist-xyz"])
         .output()
         .unwrap();
     assert_eq!(missing.status.code(), Some(3));
 
     let root = temporary_directory();
-    let empty = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let empty = common::leadline()
         .arg("analyze")
         .arg(&root)
         .output()
@@ -322,7 +304,7 @@ fn bad_coverage_input_is_coverage_error() {
     std::fs::write(&file, "function tiny() { return 1; }\n").unwrap();
     let missing = root.join("missing.info");
 
-    let unreadable = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let unreadable = common::leadline()
         .arg("analyze")
         .arg(&file)
         .arg("--lcov")
@@ -331,7 +313,7 @@ fn bad_coverage_input_is_coverage_error() {
         .unwrap();
     assert_eq!(unreadable.status.code(), Some(4));
 
-    let unknown_format = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let unknown_format = common::leadline()
         .arg("analyze")
         .arg(&file)
         .args(["--coverage", "data.bin"])
@@ -346,7 +328,7 @@ fn bad_coverage_input_is_coverage_error() {
          <line nr=\"nope\" ci=\"1\"/></sourcefile></package></report>",
     )
     .unwrap();
-    let malformed = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let malformed = common::leadline()
         .arg("analyze")
         .arg(&file)
         .arg("--jacoco")
@@ -357,7 +339,7 @@ fn bad_coverage_input_is_coverage_error() {
 
     let lcov = root.join("cov.info");
     std::fs::write(&lcov, "TN:\nSF:tiny.ts\nDA:1,1\nend_of_record\n").unwrap();
-    let detected = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let detected = common::leadline()
         .arg("analyze")
         .arg(&file)
         .arg("--coverage")
@@ -374,7 +356,7 @@ fn bad_coverage_input_is_coverage_error() {
 #[test]
 fn doctor_reports_sections_successfully() {
     let root = temporary_directory();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .arg("doctor")
         .arg(&root)
         .output()
@@ -401,7 +383,7 @@ fn doctor_reports_sections_successfully() {
 fn doctor_rejects_invalid_config() {
     let root = temporary_directory();
     std::fs::write(root.join("leadline.toml"), "[bogus]\nkey = 1\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .arg("doctor")
         .arg(&root)
         .output()
@@ -415,7 +397,7 @@ fn doctor_rejects_invalid_config() {
 fn agent_json_shape_on_analyze() {
     let root = temporary_directory();
     std::fs::write(root.join("sample.ts"), "function alpha() { return 1; }\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .arg("analyze")
         .arg(&root)
         .args(["--format", "agent-json"])
@@ -448,7 +430,7 @@ fn agent_json_shape_on_changed() {
         "function calc(x: boolean) { if (x) { return true; } return false; }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["changed", "--base", "HEAD", "--format", "agent-json"])
         .output()
@@ -458,7 +440,7 @@ fn agent_json_shape_on_changed() {
     assert_eq!(value["summary"]["changed_functions"], 1);
     assert!(value["regressions"][0].get("causes").is_none());
 
-    let explained = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let explained = common::leadline()
         .current_dir(&root)
         .args([
             "changed",
@@ -495,7 +477,7 @@ fn check_base_gates_only_changed_violations() {
         "function calc(x: number) { if (x > 2) { if (x > 5) { if (x > 9) { return 3; } return 2; } return 1; } return 0; }\n",
     )
     .unwrap();
-    let failing = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let failing = common::leadline()
         .current_dir(&root)
         .args(["check", "--base", "HEAD", "--cognitive", "0"])
         .output()
@@ -511,7 +493,7 @@ fn check_base_gates_only_changed_violations() {
         "function calc(x: boolean) { return x; }\n",
     )
     .unwrap();
-    let passing = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let passing = common::leadline()
         .current_dir(&root)
         .args(["check", "--base", "HEAD", "--cognitive", "0"])
         .output()
@@ -529,7 +511,7 @@ fn function_explain_reports_contributions() {
         "function pick(x: boolean) { if (x) { return 1; } return 0; }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .arg("function")
         .arg(&file)
         .arg("pick")
@@ -546,7 +528,7 @@ fn function_explain_reports_contributions() {
         stdout.contains("if line 1"),
         "missing contribution line in:\n{stdout}"
     );
-    let budgeted = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let budgeted = common::leadline()
         .arg("function")
         .arg(&file)
         .arg("pick")
@@ -556,7 +538,7 @@ fn function_explain_reports_contributions() {
     assert!(budgeted.status.success());
     let value: serde_json::Value = serde_json::from_slice(&budgeted.stdout).unwrap();
     assert!(value["files"][0]["functions"][0]["contributions"].is_array());
-    let plain = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let plain = common::leadline()
         .arg("function")
         .arg(&file)
         .arg("pick")
@@ -577,7 +559,7 @@ fn function_explain_reports_contributions() {
 fn sarif_output_has_version_runs_results() {
     let root = temporary_directory();
     std::fs::write(root.join("sample.ts"), "function alpha() { return 1; }\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .arg("analyze")
         .arg(&root)
         .args(["--format", "sarif"])
@@ -588,7 +570,7 @@ fn sarif_output_has_version_runs_results() {
     assert_eq!(value["version"], "2.1.0");
     assert!(value["runs"].is_array());
     assert!(value["runs"][0]["results"].is_array());
-    let conflict = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let conflict = common::leadline()
         .arg("analyze")
         .arg(&root)
         .args(["--json", "--format", "sarif"])
@@ -606,7 +588,7 @@ fn agent_json_top_marks_truncated() {
         "function alpha() { return 1; }\nfunction beta() { return 2; }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .arg("analyze")
         .arg(&root)
         .args(["--format", "agent-json", "--top", "1"])
@@ -625,7 +607,7 @@ fn analyze_index_output_is_identical_to_a_cold_run() {
     std::fs::write(root.join("sample.ts"), "function alpha() { return 1; }\n").unwrap();
     let index = root.join("index");
     let run = |index: Option<&Path>| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_leadline"));
+        let mut command = common::leadline();
         command.arg("analyze").arg(&root).arg("--json");
         if let Some(index) = index {
             command.arg("--index").arg(index);
@@ -657,7 +639,7 @@ fn analyze_index_output_is_identical_to_a_cold_run() {
 fn analyze_file_reuses_repository_index_without_clobbering_it() {
     let root = index_fixture();
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_leadline"))
+        common::leadline()
             .arg("index")
             .arg(&root)
             .status()
@@ -666,7 +648,7 @@ fn analyze_file_reuses_repository_index_without_clobbering_it() {
     );
     let index_file = root.join(".leadline").join("index.json");
     let file = root.join("alpha.ts");
-    let cold = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let cold = common::leadline()
         .arg("analyze")
         .arg(&file)
         .arg("--json")
@@ -674,7 +656,7 @@ fn analyze_file_reuses_repository_index_without_clobbering_it() {
         .unwrap();
     assert!(cold.status.success());
 
-    let warm = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let warm = common::leadline()
         .arg("analyze")
         .arg(&file)
         .arg("--index")
@@ -706,7 +688,7 @@ fn analyze_file_reuses_repository_index_without_clobbering_it() {
 
 #[test]
 fn cache_dir_is_no_longer_accepted() {
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args(["analyze", ".", "--cache-dir", ".leadline"])
         .output()
         .unwrap();
@@ -724,7 +706,7 @@ fn config_exclude_filters_directory_but_not_explicit_file() {
         "[analysis]\nexclude = [\"skip.ts\"]\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .arg("analyze")
         .arg(&root)
         .arg("--json")
@@ -740,7 +722,7 @@ fn config_exclude_filters_directory_but_not_explicit_file() {
         .collect();
     assert_eq!(paths, vec!["keep.ts"]);
 
-    let explicit = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let explicit = common::leadline()
         .arg("analyze")
         .arg(root.join("skip.ts"))
         .arg("--json")
@@ -756,7 +738,7 @@ fn config_exclude_filters_directory_but_not_explicit_file() {
 fn changed_staged_and_target_are_mutually_exclusive() {
     let root = temporary_directory();
     git(&root, &["init"]);
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["changed", "--staged", "--target", "HEAD"])
         .output()
@@ -790,7 +772,7 @@ fn changed_staged_flag_excludes_unstaged_edits() {
         "function calc(x: number) { if (x > 0) { if (x > 1) return 2; return x; } return 0; }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["changed", "--base", "HEAD", "--staged", "--json"])
         .output()
@@ -826,7 +808,7 @@ fn changed_target_flag_compares_two_revisions() {
         "function calc(x: number) { return 1; }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["changed", "--base", "HEAD~1", "--target", "HEAD", "--json"])
         .output()
@@ -856,7 +838,7 @@ fn changed_renames_flag_pairs_renamed_file_function() {
         "function keep(): number {\n  return 1;\n}\n\nfunction calc(x: number) {\n  if (x > 0) return x;\n  return 0;\n}\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["changed", "--base", "HEAD", "--renames", "--json"])
         .output()
@@ -872,10 +854,7 @@ fn changed_renames_flag_pairs_renamed_file_function() {
 
 #[test]
 fn changed_help_documents_target_selectors() {
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .args(["--help"])
-        .output()
-        .unwrap();
+    let output = common::leadline().args(["--help"]).output().unwrap();
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("--staged"), "missing --staged in:\n{text}");
     assert!(
@@ -903,7 +882,7 @@ fn check_regressions_allows_regression_only_mode() {
         "function calc(x: number) { if (x > 0) return x; return 0; }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["check", ".", "--base", "HEAD", "--regressions", "--json"])
         .output()
@@ -952,7 +931,7 @@ fn check_regressions_reports_delta_only_findings_in_sarif() {
         "function calc(x: number) { if (x > 0) return x; return 0; }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args([
             "check",
@@ -992,7 +971,7 @@ fn check_sarif_projects_scanner_gate_violations_only() {
     std::fs::write(root.join("risky.sql"), "UPDATE users SET active = false;\n").unwrap();
     // SQL findings are informational without a gate, so SARIF stays empty
     // even though the report has findings.
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "check",
             root.to_str().unwrap(),
@@ -1011,7 +990,7 @@ fn check_sarif_projects_scanner_gate_violations_only() {
         "{sarif}"
     );
     // With the gate on, only the failing family reaches SARIF.
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "check",
             root.to_str().unwrap(),
@@ -1061,7 +1040,7 @@ fn check_regressions_applies_coverage_for_crap_delta() {
         "TN:\nSF:calc.ts\nDA:1,1\nend_of_record\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args([
             "check",
@@ -1102,7 +1081,7 @@ fn check_regressions_uses_configured_allowed_delta() {
         "function calc(x: number) { if (x > 0) return x; return 0; }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["check", ".", "--base", "HEAD", "--regressions", "--json"])
         .output()
@@ -1133,7 +1112,7 @@ fn check_regressions_combines_absolute_and_delta_gates() {
         "function calc(x: number) { if (x > 0) return x; return 0; }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args([
             "check",
@@ -1162,7 +1141,7 @@ fn test_targets_requires_coverage() {
         "function branch(x: boolean) { if (x) return 1; return 0; }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .arg("test-targets")
         .arg(&file)
         .output()
@@ -1195,7 +1174,7 @@ fn test_targets_lists_uncovered_and_caps_output() {
         "TN:\nSF:a.ts\nDA:1,0\nend_of_record\nTN:\nSF:b.ts\nDA:1,0\nend_of_record\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .arg("test-targets")
         .arg(&root)
         .arg("--coverage")
@@ -1228,7 +1207,7 @@ fn git(dir: &Path, args: &[&str]) {
 #[test]
 fn baseline_requires_an_output_file() {
     let root = temporary_directory();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .arg("baseline")
         .arg(&root)
         .output()
@@ -1245,7 +1224,7 @@ fn baseline_write_and_check_regression_gate() {
     std::fs::write(&file, "function calc(x: boolean) { return 1; }\n").unwrap();
     let snapshot = root.join("baseline.json");
 
-    let written = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let written = common::leadline()
         .arg("baseline")
         .arg(&root)
         .arg("--output")
@@ -1268,7 +1247,7 @@ fn baseline_write_and_check_regression_gate() {
         "function calc(x: boolean) { if (x) { if (!x) { return 2; } return 1; } return 0; }\n",
     )
     .unwrap();
-    let failed = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let failed = common::leadline()
         .arg("check")
         .arg(&root)
         .arg("--baseline")
@@ -1285,7 +1264,7 @@ fn baseline_write_and_check_regression_gate() {
         "[regressions]\ncognitive = 100\ncyclomatic = 100\nmax_nesting = 100\ncrap = 100.0\n",
     )
     .unwrap();
-    let passed = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let passed = common::leadline()
         .arg("check")
         .arg(&root)
         .arg("--baseline")
@@ -1300,7 +1279,7 @@ fn baseline_write_and_check_regression_gate() {
     );
 
     let index = root.join("index");
-    let warm = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let warm = common::leadline()
         .arg("check")
         .arg(&root)
         .arg("--baseline")
@@ -1326,7 +1305,7 @@ fn baseline_new_function_fails_only_on_absolute_thresholds() {
     let file = root.join("calc.ts");
     std::fs::write(&file, "function calc(x: boolean) { return 1; }\n").unwrap();
     let snapshot = root.join("baseline.json");
-    let written = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let written = common::leadline()
         .arg("baseline")
         .arg(&root)
         .arg("--output")
@@ -1344,7 +1323,7 @@ fn baseline_new_function_fails_only_on_absolute_thresholds() {
         "function calc(x: boolean) { return 1; }\nfunction fresh() { return 2; }\n",
     )
     .unwrap();
-    let passed = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let passed = common::leadline()
         .arg("check")
         .arg(&root)
         .arg("--baseline")
@@ -1358,7 +1337,7 @@ fn baseline_new_function_fails_only_on_absolute_thresholds() {
         String::from_utf8_lossy(&passed.stderr)
     );
 
-    let failed = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let failed = common::leadline()
         .arg("check")
         .arg(&root)
         .arg("--baseline")
@@ -1373,7 +1352,7 @@ fn baseline_new_function_fails_only_on_absolute_thresholds() {
 #[test]
 fn check_rejects_base_and_baseline_together() {
     let root = temporary_directory();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .arg("check")
         .arg(&root)
         .args([
@@ -1392,10 +1371,7 @@ fn check_rejects_base_and_baseline_together() {
 
 #[test]
 fn help_lists_new_workflows() {
-    let help = Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .arg("--help")
-        .output()
-        .unwrap();
+    let help = common::leadline().arg("--help").output().unwrap();
     assert!(help.status.success());
     let text = String::from_utf8_lossy(&help.stdout);
     for expected in [
@@ -1435,7 +1411,7 @@ fn sql_plan_dirs(cost_current: f64, cost_baseline: f64) -> (PathBuf, PathBuf, Pa
 #[test]
 fn sql_plan_cost_gate_retains_json() {
     let (root, current, baseline) = sql_plan_dirs(150.0, 100.0);
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "sql-plan",
             "--current",
@@ -1456,7 +1432,7 @@ fn sql_plan_cost_gate_retains_json() {
 
 #[test]
 fn sql_plan_requires_directories_and_finite_limits() {
-    let missing = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let missing = common::leadline()
         .args(["sql-plan", "--json"])
         .output()
         .unwrap();
@@ -1468,7 +1444,7 @@ fn sql_plan_requires_directories_and_finite_limits() {
         "--max-estimate-error-ratio",
     ] {
         for bad in ["-1", "nan", "inf"] {
-            let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+            let output = common::leadline()
                 .args([
                     "sql-plan",
                     "--current",
@@ -1483,7 +1459,7 @@ fn sql_plan_requires_directories_and_finite_limits() {
             assert_eq!(output.status.code(), Some(2), "{flag} {bad}");
         }
     }
-    let unknown = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let unknown = common::leadline()
         .args([
             "sql-plan",
             "--current",
@@ -1501,7 +1477,7 @@ fn sql_plan_requires_directories_and_finite_limits() {
 #[test]
 fn sql_plan_agent_json_sarif_and_determinism() {
     let (root, current, baseline) = sql_plan_dirs(150.0, 100.0);
-    let agent = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let agent = common::leadline()
         .args([
             "sql-plan",
             "--current",
@@ -1521,7 +1497,7 @@ fn sql_plan_agent_json_sarif_and_determinism() {
     let body: serde_json::Value = serde_json::from_slice(&agent.stdout).unwrap();
     assert!(body.get("truncated").is_some());
     assert!(body.get("violations").is_some());
-    let sarif = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let sarif = common::leadline()
         .args([
             "sql-plan",
             "--current",
@@ -1545,7 +1521,7 @@ fn sql_plan_agent_json_sarif_and_determinism() {
             .unwrap()
             .starts_with("postgresql-plan/")
     );
-    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let first = common::leadline()
         .args([
             "sql-plan",
             "--current",
@@ -1556,7 +1532,7 @@ fn sql_plan_agent_json_sarif_and_determinism() {
         ])
         .output()
         .unwrap();
-    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let second = common::leadline()
         .args([
             "sql-plan",
             "--current",
@@ -1589,7 +1565,7 @@ fn sql_plan_malformed_input_is_input_error() {
         "[{\"Plan\": {\"Node Type\": \"Seq Scan\"}}]",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "sql-plan",
             "--current",
@@ -1625,7 +1601,7 @@ fn security_repo() -> (PathBuf, PathBuf, PathBuf) {
 #[test]
 fn security_json_enriches_and_gates_new_high_findings() {
     let (root, current, baseline) = security_repo();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "security",
             root.to_str().unwrap(),
@@ -1650,13 +1626,10 @@ fn security_json_enriches_and_gates_new_high_findings() {
 
 #[test]
 fn security_requires_sarif_and_parses_severity() {
-    let missing = Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .args(["security", "."])
-        .output()
-        .unwrap();
+    let missing = common::leadline().args(["security", "."]).output().unwrap();
     assert_eq!(missing.status.code(), Some(2));
     let (root, current, _) = security_repo();
-    let bad_level = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let bad_level = common::leadline()
         .args([
             "security",
             root.to_str().unwrap(),
@@ -1668,7 +1641,7 @@ fn security_requires_sarif_and_parses_severity() {
         .output()
         .unwrap();
     assert_eq!(bad_level.status.code(), Some(2));
-    let unknown = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let unknown = common::leadline()
         .args([
             "security",
             root.to_str().unwrap(),
@@ -1682,7 +1655,7 @@ fn security_requires_sarif_and_parses_severity() {
     // A missing analysis path is incomplete analysis (exit 3), not a report
     // input error: the CLI keeps its documented exit codes even though the
     // library assembly path is shared with `check` and the MCP tool.
-    let missing_path = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let missing_path = common::leadline()
         .args([
             "security",
             root.join("does-not-exist").to_str().unwrap(),
@@ -1710,10 +1683,7 @@ fn security_rejects_exclusive_comparison_flags() {
             current.to_str().unwrap(),
         ];
         args.extend(extra.iter().copied());
-        let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
-            .args(&args)
-            .output()
-            .unwrap();
+        let output = common::leadline().args(&args).output().unwrap();
         assert_eq!(output.status.code(), Some(2), "{extra:?}");
     }
     std::fs::remove_dir_all(root).unwrap();
@@ -1724,7 +1694,7 @@ fn security_changed_only_requires_a_comparison() {
     let (root, current, baseline) = security_repo();
     // Without a comparison every finding stays `changed: null` and the gate
     // would silently pass: that is a usage error, never a silent pass.
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "security",
             root.to_str().unwrap(),
@@ -1774,10 +1744,7 @@ fn security_changed_only_narrows_gate_not_report() {
         "--staged",
         "--json",
     ];
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .args(args)
-        .output()
-        .unwrap();
+    let output = common::leadline().args(args).output().unwrap();
     assert_eq!(output.status.code(), Some(0));
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(!report["findings"].as_array().unwrap().is_empty());
@@ -1789,15 +1756,12 @@ fn security_changed_only_narrows_gate_not_report() {
     )
     .unwrap();
     git(&root, &["add", "src/auth.ts"]);
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .args(args)
-        .output()
-        .unwrap();
+    let output = common::leadline().args(args).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["findings"][0]["changed"], true);
     // Below-threshold gates pass while retaining the report.
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "security",
             root.to_str().unwrap(),
@@ -1834,7 +1798,7 @@ fn security_subdirectory_scope_matches_analysis_relative_artifact_paths() {
         r#"{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "semgrep"}}, "results": [{"ruleId": "sql-injection", "level": "error", "locations": [{"physicalLocation": {"artifactLocation": {"uri": "auth.ts"}, "region": {"startLine": 2}}}]}]}]}"#,
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "security",
             root.join("src").to_str().unwrap(),
@@ -1864,7 +1828,7 @@ fn security_merges_repeated_files_and_renders_all_modes() {
     let (root, current, _) = security_repo();
     let second = root.join("second.sarif");
     std::fs::copy(&current, &second).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "security",
             root.to_str().unwrap(),
@@ -1886,7 +1850,7 @@ fn security_merges_repeated_files_and_renders_all_modes() {
             .len(),
         2
     );
-    let agent = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let agent = common::leadline()
         .args([
             "security",
             root.to_str().unwrap(),
@@ -1901,7 +1865,7 @@ fn security_merges_repeated_files_and_renders_all_modes() {
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&agent.stdout).unwrap();
     assert!(body.get("truncated").is_some());
-    let sarif = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let sarif = common::leadline()
         .args([
             "security",
             root.to_str().unwrap(),
@@ -1916,7 +1880,7 @@ fn security_merges_repeated_files_and_renders_all_modes() {
     let results = document["runs"][0]["results"].as_array().unwrap();
     assert!(!results.is_empty());
     assert_eq!(results[0]["ruleId"], "semgrep/sql-injection");
-    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let first = common::leadline()
         .args([
             "security",
             root.to_str().unwrap(),
@@ -1926,7 +1890,7 @@ fn security_merges_repeated_files_and_renders_all_modes() {
         ])
         .output()
         .unwrap();
-    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let second = common::leadline()
         .args([
             "security",
             root.to_str().unwrap(),
@@ -1945,7 +1909,7 @@ fn security_malformed_sarif_is_input_error() {
     let root = temporary_directory();
     let bad = root.join("bad.sarif");
     std::fs::write(&bad, b"not json").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "security",
             root.to_str().unwrap(),
@@ -1973,7 +1937,7 @@ fn check_combines_complexity_and_security_violations() {
         r#"{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "semgrep"}}, "results": [{"ruleId": "sql-injection", "level": "error", "message": {"text": "BAD"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/complex.ts"}, "region": {"startLine": 2}}}]}]}]}"#,
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "check",
             root.to_str().unwrap(),
@@ -1992,7 +1956,7 @@ fn check_combines_complexity_and_security_violations() {
     assert!(!report["files"].as_array().unwrap().is_empty());
     assert!(!report["security_violations"].as_array().unwrap().is_empty());
     // Security-only checks work without metric thresholds and stay silent on stdout gates.
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "check",
             root.to_str().unwrap(),
@@ -2040,7 +2004,7 @@ fn vulnerabilities_json_prioritizes_changed_imports() {
     std::fs::write(root.join("src/app.ts"), "import _ from 'lodash';\n").unwrap();
     let osv = root.join("current.json");
     std::fs::copy("tests/fixtures/vulnerabilities/osv.json", &osv).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "vulnerabilities",
             root.to_str().unwrap(),
@@ -2063,7 +2027,7 @@ fn vulnerabilities_json_prioritizes_changed_imports() {
 
 #[test]
 fn vulnerabilities_requires_input_and_parses_limits() {
-    let missing = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let missing = common::leadline()
         .args(["vulnerabilities", "."])
         .output()
         .unwrap();
@@ -2080,13 +2044,10 @@ fn vulnerabilities_requires_input_and_parses_limits() {
             osv.to_str().unwrap(),
         ];
         args.extend(extra.iter().copied());
-        let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
-            .args(&args)
-            .output()
-            .unwrap();
+        let output = common::leadline().args(&args).output().unwrap();
         assert_eq!(output.status.code(), Some(2), "{extra:?}");
     }
-    let bad_level = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let bad_level = common::leadline()
         .args([
             "vulnerabilities",
             root.to_str().unwrap(),
@@ -2100,7 +2061,7 @@ fn vulnerabilities_requires_input_and_parses_limits() {
     assert_eq!(bad_level.status.code(), Some(2));
     let malformed = root.join("bad.json");
     std::fs::write(&malformed, b"not json").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "vulnerabilities",
             root.to_str().unwrap(),
@@ -2122,7 +2083,7 @@ fn vulnerabilities_config_threshold_and_output_modes() {
     )
     .unwrap();
     // Config floor without a CLI flag: high finding stays informational.
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "vulnerabilities",
             root.to_str().unwrap(),
@@ -2134,7 +2095,7 @@ fn vulnerabilities_config_threshold_and_output_modes() {
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
     // CLI flag overrides config for one invocation.
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "vulnerabilities",
             root.to_str().unwrap(),
@@ -2147,7 +2108,7 @@ fn vulnerabilities_config_threshold_and_output_modes() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
-    let agent = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let agent = common::leadline()
         .args([
             "vulnerabilities",
             root.to_str().unwrap(),
@@ -2162,7 +2123,7 @@ fn vulnerabilities_config_threshold_and_output_modes() {
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&agent.stdout).unwrap();
     assert!(body.get("truncated").is_some());
-    let sarif = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let sarif = common::leadline()
         .args([
             "vulnerabilities",
             root.to_str().unwrap(),
@@ -2179,7 +2140,7 @@ fn vulnerabilities_config_threshold_and_output_modes() {
         results[0]["ruleId"],
         "vulnerability/npm/GHSA-xxxx-yyyy-zzzz"
     );
-    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let first = common::leadline()
         .args([
             "vulnerabilities",
             root.to_str().unwrap(),
@@ -2189,7 +2150,7 @@ fn vulnerabilities_config_threshold_and_output_modes() {
         ])
         .output()
         .unwrap();
-    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let second = common::leadline()
         .args([
             "vulnerabilities",
             root.to_str().unwrap(),
@@ -2220,7 +2181,7 @@ fn check_vulnerabilities_combines_both_families() {
     .unwrap();
     let osv = root.join("current.json");
     std::fs::copy("tests/fixtures/vulnerabilities/osv.json", &osv).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "check",
             root.to_str().unwrap(),
@@ -2251,7 +2212,7 @@ fn check_vulnerabilities_combines_both_families() {
 
 #[test]
 fn sql_risk_json_gates_high_findings() {
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "sql",
             "tests/fixtures/sql-risk",
@@ -2274,12 +2235,12 @@ fn sql_risk_json_gates_high_findings() {
 fn sql_risk_requires_no_input_and_parses_flags() {
     // No input flags needed: the analysis path may simply contain no SQL.
     let empty = temporary_directory();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args(["sql", empty.to_str().unwrap()])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
-    let bad_level = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let bad_level = common::leadline()
         .args([
             "sql",
             "tests/fixtures/sql-risk",
@@ -2289,7 +2250,7 @@ fn sql_risk_requires_no_input_and_parses_flags() {
         .output()
         .unwrap();
     assert_eq!(bad_level.status.code(), Some(2));
-    let unknown = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let unknown = common::leadline()
         .args(["sql", "tests/fixtures/sql-risk", "--bogus"])
         .output()
         .unwrap();
@@ -2307,13 +2268,13 @@ fn sql_risk_config_threshold_modes_and_determinism() {
     .unwrap();
     std::fs::write(root.join("leadline.toml"), "[sql]\nlarge_offset = 500\n").unwrap();
     // Config floor without a flag stays informational.
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args(["sql", root.to_str().unwrap(), "--json"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
     // The configured threshold fires under a gate.
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "sql",
             root.to_str().unwrap(),
@@ -2333,7 +2294,7 @@ fn sql_risk_config_threshold_modes_and_determinism() {
             .any(|finding| finding["rule_id"] == "sql/large-offset")
     );
     // Default threshold would pass the same file: CLI flag wins over config.
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "sql",
             root.to_str().unwrap(),
@@ -2346,7 +2307,7 @@ fn sql_risk_config_threshold_modes_and_determinism() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
-    let agent = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let agent = common::leadline()
         .args([
             "sql",
             root.to_str().unwrap(),
@@ -2359,7 +2320,7 @@ fn sql_risk_config_threshold_modes_and_determinism() {
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&agent.stdout).unwrap();
     assert!(body.get("truncated").is_some());
-    let sarif = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let sarif = common::leadline()
         .args(["sql", root.to_str().unwrap(), "--format", "sarif"])
         .output()
         .unwrap();
@@ -2367,11 +2328,11 @@ fn sql_risk_config_threshold_modes_and_determinism() {
     let results = document["runs"][0]["results"].as_array().unwrap();
     assert!(!results.is_empty());
     assert_eq!(results[0]["ruleId"], "sql/large-offset");
-    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let first = common::leadline()
         .args(["sql", root.to_str().unwrap(), "--json"])
         .output()
         .unwrap();
-    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let second = common::leadline()
         .args(["sql", root.to_str().unwrap(), "--json"])
         .output()
         .unwrap();
@@ -2383,7 +2344,7 @@ fn sql_risk_config_threshold_modes_and_determinism() {
 fn sql_risk_malformed_sql_is_input_error() {
     let root = temporary_directory();
     std::fs::write(root.join("bad.sql"), b"SELECT 'oops;").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args(["sql", root.to_str().unwrap()])
         .output()
         .unwrap();
@@ -2401,7 +2362,7 @@ fn check_sql_combines_both_families() {
     )
     .unwrap();
     std::fs::write(root.join("risky.sql"), "UPDATE users SET active = false;\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "check",
             root.to_str().unwrap(),
@@ -2419,7 +2380,7 @@ fn check_sql_combines_both_families() {
     assert!(!report["files"].as_array().unwrap().is_empty());
     assert!(!report["sql_violations"].as_array().unwrap().is_empty());
     // Without the gate flag, SQL findings stay informational.
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args([
             "check",
             root.to_str().unwrap(),
@@ -2453,7 +2414,7 @@ fn index_fixture() -> PathBuf {
 fn index_builds_and_reuses_unchanged_files() {
     let root = index_fixture();
     let run = |extra: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_leadline"))
+        common::leadline()
             .arg("index")
             .arg(&root)
             .args(extra)
@@ -2481,7 +2442,7 @@ fn index_builds_and_reuses_unchanged_files() {
 fn index_verify_detects_a_tampered_index() {
     let root = index_fixture();
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_leadline"))
+        common::leadline()
             .arg("index")
             .arg(&root)
             .status()
@@ -2502,7 +2463,7 @@ fn index_verify_detects_a_tampered_index() {
     json["files"][&first_key]["key"] = serde_json::json!("tampered");
     std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
 
-    let verified = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let verified = common::leadline()
         .arg("index")
         .arg(&root)
         .arg("--verify")
@@ -2518,7 +2479,7 @@ fn index_verify_detects_a_tampered_index() {
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(still_tampered["files"][&first_key]["key"], "tampered");
 
-    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let second = common::leadline()
         .arg("index")
         .arg(&root)
         .arg("--verify")
@@ -2536,7 +2497,7 @@ fn index_verify_detects_a_tampered_index() {
 fn index_verify_reports_true_for_an_untampered_index() {
     let root = index_fixture();
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_leadline"))
+        common::leadline()
             .arg("index")
             .arg(&root)
             .status()
@@ -2544,7 +2505,7 @@ fn index_verify_reports_true_for_an_untampered_index() {
             .success()
     );
 
-    let verified = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let verified = common::leadline()
         .arg("index")
         .arg(&root)
         .arg("--verify")
@@ -2560,9 +2521,6 @@ fn index_verify_reports_true_for_an_untampered_index() {
 
 #[test]
 fn help_lists_the_index_command() {
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .arg("--help")
-        .output()
-        .unwrap();
+    let output = common::leadline().arg("--help").output().unwrap();
     assert!(String::from_utf8_lossy(&output.stdout).contains("index [PATH]"));
 }

@@ -4,7 +4,10 @@
 # ponytail: python3 used for JSON check when present, string fallback otherwise.
 set -u
 if ! command -v leadline >/dev/null 2>&1; then exit 0; fi
-out=$(leadline changed --format agent-json 2>/dev/null) || exit 0
+# Nothing to compare outside a repository or before a second commit; skip
+# without spawning the analyzer.
+git rev-parse --verify --quiet HEAD~1 >/dev/null 2>&1 || exit 0
+out=$(leadline changed --base HEAD~1 --format agent-json 2>/dev/null) || exit 0
 [ -n "$out" ] || exit 0
 if command -v python3 >/dev/null 2>&1; then
   printf '%s' "$out" | python3 -c 'import json,sys

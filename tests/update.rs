@@ -85,8 +85,16 @@ fn spawn_output(command: &mut Command) -> std::process::Output {
     }
 }
 
-fn run_update(binary: &Path, release: &Path) -> std::process::Output {
+/// Command for a copied binary with the ambient local-metrics store removed:
+/// `cargo test` must never write into the developer's store.
+fn binary_command(binary: &Path) -> Command {
     let mut command = Command::new(binary);
+    command.env_remove("LEADLINE_METRICS_DIR");
+    command
+}
+
+fn run_update(binary: &Path, release: &Path) -> std::process::Output {
+    let mut command = binary_command(binary);
     command
         .arg("update")
         .env("LEADLINE_BASE_URL", format!("file://{}", release.display()));
@@ -126,7 +134,7 @@ fn recorded_calls(path: &Path) -> Vec<String> {
 }
 
 fn run_binary(binary: &Path, args: &[&str], envs: &[(&str, &str)]) -> std::process::Output {
-    let mut command = Command::new(binary);
+    let mut command = binary_command(binary);
     command.args(args);
     for (key, value) in envs {
         command.env(key, value);
@@ -222,7 +230,7 @@ fn update_replaces_the_binary_with_the_latest_release() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("99.0.0"), "stdout: {stdout}");
 
-    let version = spawn_output(Command::new(&binary).arg("--version"));
+    let version = spawn_output(binary_command(&binary).arg("--version"));
     assert_eq!(
         String::from_utf8_lossy(&version.stdout).trim(),
         "leadline 99.0.0"
@@ -683,7 +691,7 @@ fn spawn_retries_while_the_binary_is_busy() {
         std::thread::sleep(std::time::Duration::from_millis(50));
         drop(handle);
     });
-    let output = spawn_output(Command::new(&binary).arg("--version"));
+    let output = spawn_output(binary_command(&binary).arg("--version"));
     closer.join().unwrap();
     assert!(output.status.success());
     assert!(

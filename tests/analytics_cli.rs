@@ -1,3 +1,5 @@
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -63,7 +65,7 @@ fn fixture() -> PathBuf {
 }
 
 fn leadline(root: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_leadline"))
+    common::leadline()
         .current_dir(root)
         .args(args)
         .output()
@@ -259,10 +261,7 @@ fn mutation_json_scores_and_rejects_bad_schemas() {
 
 #[test]
 fn help_lists_the_new_commands() {
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .args(["--help"])
-        .output()
-        .unwrap();
+    let output = common::leadline().args(["--help"]).output().unwrap();
     assert!(output.status.success());
     let help = String::from_utf8_lossy(&output.stdout);
     for line in [

@@ -1,3 +1,5 @@
+mod common;
+
 use leadline::mcp::handle_request;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -2142,11 +2144,52 @@ fn http_bind_falls_back_to_free_port_when_taken() {
     assert_ne!(actual, taken);
 }
 
-fn spawn_http_server() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    std::thread::spawn(move || leadline::mcp::serve_listener(listener));
-    port
+/// A spawned HTTP server process, killed when the guard drops.
+///
+/// The server runs as its own process with the ambient local-metrics store
+/// removed, so a test run cannot write into the developer's store.
+struct HttpServer {
+    child: std::process::Child,
+    port: u16,
+}
+
+impl HttpServer {
+    fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+impl Drop for HttpServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Starts the real server on an OS-assigned port and reads its banner.
+fn spawn_http_server() -> HttpServer {
+    use std::io::BufRead as _;
+    let mut child = common::leadline()
+        .args(["mcp", "--port", "0"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = std::io::BufReader::new(child.stderr.take().unwrap());
+    let mut banner = String::new();
+    reader.read_line(&mut banner).unwrap();
+    let port = banner
+        .rsplit(':')
+        .next()
+        .and_then(|tail| tail.split('/').next())
+        .and_then(|value| value.trim().parse::<u16>().ok())
+        .unwrap_or_else(|| panic!("no listening port in {banner:?}"));
+    // Keep draining stderr so a chatty server never blocks on a full pipe.
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut reader, &mut std::io::sink());
+    });
+    HttpServer { child, port }
 }
 
 fn http_exchange(port: u16, head: &str, body: &str) -> String {
@@ -2165,7 +2208,8 @@ fn http_exchange(port: u16, head: &str, body: &str) -> String {
 
 #[test]
 fn http_post_serves_tools_list() {
-    let port = spawn_http_server();
+    let server = spawn_http_server();
+    let port = server.port();
     let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
         .to_string();
     let response = http_exchange(port, "POST /mcp HTTP/1.1\r\nHost: localhost", &body);
@@ -2175,7 +2219,8 @@ fn http_post_serves_tools_list() {
 
 #[test]
 fn http_health_reports_status() {
-    let port = spawn_http_server();
+    let server = spawn_http_server();
+    let port = server.port();
     let response = http_exchange(port, "GET /health HTTP/1.1\r\nHost: localhost", "");
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
     assert!(response.contains("\"status\":\"ok\""));
@@ -2183,7 +2228,8 @@ fn http_health_reports_status() {
 
 #[test]
 fn http_rejects_wrong_method_and_path() {
-    let port = spawn_http_server();
+    let server = spawn_http_server();
+    let port = server.port();
     let response = http_exchange(port, "GET /mcp HTTP/1.1\r\nHost: localhost", "");
     assert!(response.starts_with("HTTP/1.1 405"), "{response}");
     let response = http_exchange(port, "GET /nope HTTP/1.1\r\nHost: localhost", "");
@@ -2192,7 +2238,8 @@ fn http_rejects_wrong_method_and_path() {
 
 #[test]
 fn http_validates_origin_for_browser_requests() {
-    let port = spawn_http_server();
+    let server = spawn_http_server();
+    let port = server.port();
     let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
         .to_string();
     // Non-loopback, scheme-less, and non-http(s) origins are rejected
@@ -2221,7 +2268,8 @@ fn http_validates_origin_for_browser_requests() {
 
 #[test]
 fn http_rejects_oversized_header_lines() {
-    let port = spawn_http_server();
+    let server = spawn_http_server();
+    let port = server.port();
     let long = "x".repeat(9000);
     // Send the whole request, oversized line included, then wait before
     // reading: the early rejection must survive a close with request bytes
@@ -2253,7 +2301,8 @@ fn http_raw(port: u16, request: &str) -> String {
 
 #[test]
 fn http_requires_exactly_one_valid_host_and_content_length() {
-    let port = spawn_http_server();
+    let server = spawn_http_server();
+    let port = server.port();
     let body =
         serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}).to_string();
     let request = |head: &str| {
@@ -2309,7 +2358,8 @@ fn http_requires_exactly_one_valid_host_and_content_length() {
 
 #[test]
 fn http_rejects_malformed_framing_and_empty_bodies() {
-    let port = spawn_http_server();
+    let server = spawn_http_server();
+    let port = server.port();
     let body =
         serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}).to_string();
     // Only HTTP/1.1 is spoken.
@@ -2688,11 +2738,7 @@ fn analyze_tool_reuses_an_index_without_writing_one() {
     let dir = fixture_dir("function alpha(a: number) { return a + 1; }\n");
     let path = dir.to_str().unwrap();
     // Build the index outside MCP so this test only exercises reads.
-    let built = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .arg("index")
-        .arg(&dir)
-        .output()
-        .unwrap();
+    let built = common::leadline().arg("index").arg(&dir).output().unwrap();
     assert!(built.status.success());
 
     let index_file = dir.join(".leadline").join("index.json");
@@ -2719,11 +2765,7 @@ fn analyze_tool_reuses_a_repository_index_for_a_file_target() {
     let index = dir.join(".leadline");
     // Documented workflow: build the repository index once with
     // `leadline index`, then reuse it for a single-file analysis.
-    let built = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
-        .arg("index")
-        .arg(&dir)
-        .output()
-        .unwrap();
+    let built = common::leadline().arg("index").arg(&dir).output().unwrap();
     assert!(built.status.success());
 
     let response = call_tool(
@@ -2836,7 +2878,7 @@ fn mcp_records_sessions_methods_and_payloads() {
     let port = listener.local_addr().expect("addr").port();
     drop(listener);
 
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let mut child = common::leadline()
         .args(["mcp", "--port", &port.to_string()])
         .env("LEADLINE_METRICS_DIR", &metrics)
         .stdout(std::process::Stdio::null())

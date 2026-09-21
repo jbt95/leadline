@@ -11,7 +11,13 @@ if ! command -v leadline >/dev/null 2>&1; then
   printf '{"decision":"continue"}\n'
   exit 0
 fi
-out=$(leadline changed --format agent-json 2>/dev/null) || out=""
+# Nothing to compare outside a repository or before a second commit; answer
+# without spawning the analyzer.
+if ! git rev-parse --verify --quiet HEAD~1 >/dev/null 2>&1; then
+  printf '{"decision":"continue"}\n'
+  exit 0
+fi
+out=$(leadline changed --base HEAD~1 --format agent-json 2>/dev/null) || out=""
 if [ -z "$out" ]; then
   printf '{"decision":"continue"}\n'
   exit 0

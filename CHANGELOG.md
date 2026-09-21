@@ -4,6 +4,15 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Changed
+
+- Only a process that serves an entry point records: a CLI command or an MCP transport arms recording, and an in-process library call never does. A test binary or embedder that calls the analyzer or the MCP handler directly leaves the configured store untouched, whatever `LEADLINE_METRICS_DIR` says.
+- The test suite never writes into `LEADLINE_METRICS_DIR`: every test that runs the binary removes the variable from the child environment, and the MCP HTTP tests run against a real server process instead of an in-process listener. A `cargo test` run leaves the developer's local metrics store untouched, so the store holds real usage only.
+
+### Fixed
+
+- The `changed` hooks for Claude Code, Gemini CLI, and Cline resolve the base revision before they spawn the analyzer. Outside a repository, or before a second commit exists, the hook answers immediately instead of running `leadline changed`, which could only fail there; the Cline hook reports the skip instead of staying silent.
+
 ## 0.16.1 - 2026-09-21
 
 ### Changed

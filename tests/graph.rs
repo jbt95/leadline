@@ -1,6 +1,7 @@
+mod common;
+
 use leadline::graph::{DEPENDENCY_SCHEMA_VERSION, DependencyReport, analyze_dependencies};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn temporary_directory() -> PathBuf {
@@ -431,7 +432,7 @@ fn cli_fixture() -> PathBuf {
 #[test]
 fn cli_dependencies_terminal_reports_counts_and_cycles() {
     let root = cli_fixture();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["dependencies"])
         .output()
@@ -480,7 +481,7 @@ fn cli_dependencies_terminal_reports_counts_and_cycles() {
 #[test]
 fn cli_dependencies_json_reports_canonical_counts() {
     let root = cli_fixture();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["dependencies", "--json"])
         .output()
@@ -505,7 +506,7 @@ fn cli_dependencies_json_reports_canonical_counts() {
 #[test]
 fn cli_dependencies_agent_json_is_compact() {
     let root = cli_fixture();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["dependencies", "--format", "agent-json"])
         .output()
@@ -537,12 +538,12 @@ fn cli_dependencies_agent_json_is_compact() {
 fn cli_dependencies_json_is_deterministic() {
     let root = cli_fixture();
     let args = ["dependencies", "--json"];
-    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let first = common::leadline()
         .current_dir(&root)
         .args(args)
         .output()
         .unwrap();
-    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let second = common::leadline()
         .current_dir(&root)
         .args(args)
         .output()
@@ -556,7 +557,7 @@ fn cli_dependencies_json_is_deterministic() {
 #[test]
 fn cli_dependencies_rejects_unknown_format() {
     let root = cli_fixture();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["dependencies", "--format", "xml"])
         .output()
@@ -577,7 +578,7 @@ fn cli_dependencies_honors_config_excludes() {
         "[analysis]\nexclude = [\"src/skip.ts\"]\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["dependencies", "--json"])
         .output()
@@ -605,7 +606,7 @@ fn cli_dependencies_honors_config_excludes() {
 
 #[test]
 fn cli_dependencies_help_lists_the_command() {
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args(["dependencies", "--help"])
         .output()
         .unwrap();
@@ -616,7 +617,7 @@ fn cli_dependencies_help_lists_the_command() {
 #[test]
 fn cli_dependencies_empty_scope_is_incomplete() {
     let root = temporary_directory();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["dependencies", "--json"])
         .output()
@@ -639,7 +640,7 @@ fn cli_dependencies_agent_json_reports_unresolved() {
         "import './present';\nimport './missing';\n",
     );
     write(&root, "src/present.ts", "export const present = 1;\n");
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["dependencies", "--format", "agent-json"])
         .output()

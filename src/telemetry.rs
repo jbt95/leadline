@@ -1,12 +1,17 @@
 //! Opt-in local metrics for measuring leadline's own usage and outcomes.
 //!
-//! Disabled unless `LEADLINE_METRICS_DIR` points at a directory. When enabled,
-//! every CLI invocation and MCP tool call updates a bounded, schema-versioned
-//! store (`state.json` plus a lock file) and renders a Prometheus text file
-//! (`leadline.prom`) for Grafana Alloy's textfile collector or any other
-//! text-format scraper. Nothing is ever sent over the network, and nothing in
-//! the store identifies a repository, path, argument, function, finding, or
-//! person: only fixed label sets, counts, and durations.
+//! Disabled unless `LEADLINE_METRICS_DIR` points at a directory and the
+//! process serves an entry point: a CLI command or an MCP transport. An
+//! in-process library call never records, so a test binary that calls
+//! [`mcp::handle_request`](crate::mcp::handle_request) directly leaves the
+//! configured store untouched.
+//!
+//! When enabled, every CLI invocation and MCP tool call updates a bounded,
+//! schema-versioned store (`state.json` plus a lock file) and renders a
+//! Prometheus text file (`leadline.prom`) for Grafana Alloy's textfile
+//! collector or any other text-format scraper. Nothing is ever sent over the
+//! network, and nothing in the store identifies a repository, path, argument,
+//! function, finding, or person: only fixed label sets, counts, and durations.
 //!
 //! Recording is best-effort. Any I/O, lock, or serialization failure is
 //! ignored, so metrics can never change command output, exit codes, or MCP
@@ -20,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// Environment variable naming the metrics directory; unset or empty disables
@@ -51,10 +57,31 @@ pub fn sampler_for_measurement(surface: &str, operation: &str) -> Sampler {
     Sampler::spawn(surface, operation)
 }
 
-/// True when telemetry is configured; the sampler checks this before it
-/// spawns anything.
+/// Set once by a process that runs an entry point: a CLI command or an MCP
+/// transport. A library caller — a test that calls [`crate::mcp::handle_request`]
+/// in process, a benchmark, or an embedder — never arms it, so such a call
+/// cannot write into the developer's store.
+static ARMED: AtomicBool = AtomicBool::new(false);
+
+/// Arms recording for the rest of this process. Every entry point calls this
+/// before it records anything; see [`enabled`].
+pub fn arm() {
+    ARMED.store(true, Ordering::Relaxed);
+}
+
+/// True when telemetry is configured and this process serves an entry point;
+/// the sampler checks this before it spawns anything.
 fn enabled() -> bool {
-    metrics_directory().is_some()
+    recording_directory().is_some()
+}
+
+/// The store directory when this process records, or `None`. Recording needs
+/// both an armed entry point and a configured directory.
+fn recording_directory() -> Option<PathBuf> {
+    ARMED
+        .load(Ordering::Relaxed)
+        .then(metrics_directory)
+        .flatten()
 }
 
 /// Writes the live gauges of one running invocation.
@@ -788,7 +815,7 @@ pub fn record_debt(surface: &str, summary: &crate::debt::DebtSummary) {
 
 /// Applies one update under the store lock when metrics are enabled.
 fn mutate(update: impl FnOnce(&mut MetricState)) {
-    let Some(directory) = metrics_directory() else {
+    let Some(directory) = recording_directory() else {
         return;
     };
     let _ = update_store(&directory, update);

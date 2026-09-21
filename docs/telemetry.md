@@ -15,6 +15,11 @@ With the variable set (and non-empty), every CLI invocation and every MCP
 tool call records one event. Unset it to disable recording; nothing else
 changes, no file is created, and no measurable work is performed.
 
+A process records only when it serves an entry point — a CLI command or an MCP
+transport. A library caller that runs the analyzer in process, such as a test
+binary that calls the MCP handler directly, never records, whatever the
+variable says.
+
 ## What is recorded
 
 | Metric | Type | Labels | Meaning |
@@ -225,9 +230,12 @@ metrics are the one exception.
 
 ## Limitations
 
-- Anything that inherits the variable records, including `cargo test` runs
-  and scripts. Unset it for measurement runs you want kept clean, or point it
-  at a separate directory.
+- Anything that inherits the variable records, including scripts and tools
+  that inherit your shell. Two things never record: the repository's own test
+  suite, which removes `LEADLINE_METRICS_DIR` from every child it spawns, and
+  any process that only calls the library in process. Unset the variable for
+  other measurement runs you want kept clean, or point it at a separate
+  directory.
 - `leadline mcp` records stdio server sessions
   (`leadline_mcp_sessions_total`, `leadline_mcp_session_seconds`) alongside
   its tool calls; an HTTP server killed by its host records no session row,

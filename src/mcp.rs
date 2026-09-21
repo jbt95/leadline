@@ -71,6 +71,7 @@ const TOOL_NAMES: [&str; 20] = [
 /// until EOF would deadlock them into a request timeout. Lines past
 /// [`MAX_STDIO_LINE`] fail instead of growing a buffer without bound.
 pub fn serve() -> crate::Result<()> {
+    crate::telemetry::arm();
     let _ = TRANSPORT.set("stdio");
     let started = std::time::Instant::now();
     let outcome = serve_stdio();
@@ -252,6 +253,7 @@ pub fn serve_http(host: &str, port: u16) -> crate::Result<()> {
 /// Accept loop for an already-bound listener: one worker per connection up
 /// to a fixed ceiling, then fail fast with 503 instead of growing threads.
 pub fn serve_listener(listener: std::net::TcpListener) {
+    crate::telemetry::arm();
     let _ = TRANSPORT.set("http");
     let limiter = std::sync::Arc::new(ConnectionLimiter::default());
     for stream in listener.incoming() {

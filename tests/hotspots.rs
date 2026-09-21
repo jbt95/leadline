@@ -1,5 +1,7 @@
 //! Hotspot analysis tests: source metrics x Git history join.
 
+mod common;
+
 use leadline::core::{
     AnalysisReport, FileAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION,
 };
@@ -258,7 +260,7 @@ fn git_repo_with_source(prefix: &str) -> PathBuf {
 #[test]
 fn cli_hotspots_json_reports_ranked_dimensions() {
     let root = git_repo_with_source("leadline-hotspots");
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["hotspots", "--json"])
         .output()
@@ -283,7 +285,7 @@ fn cli_hotspots_json_reports_ranked_dimensions() {
 fn cli_hotspots_without_git_still_answers() {
     let root = temporary_directory("leadline-hotspots-nogit");
     std::fs::write(root.join("a.ts"), HIGH).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["hotspots", "--json"])
         .output()
@@ -299,7 +301,7 @@ fn cli_hotspots_without_git_still_answers() {
 #[test]
 fn cli_hotspots_rejects_unknown_windows() {
     let root = git_repo_with_source("leadline-hotspots-window");
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["hotspots", "--since", "7d"])
         .output()
@@ -312,7 +314,7 @@ fn cli_hotspots_rejects_unknown_windows() {
 #[test]
 fn cli_hotspots_agent_json_is_compact() {
     let root = git_repo_with_source("leadline-hotspots-agent");
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["hotspots", "--format", "agent-json", "--limit", "1"])
         .output()
@@ -332,7 +334,7 @@ fn cli_hotspots_agent_json_is_compact() {
 #[test]
 fn cli_hotspots_single_file_invocation() {
     let root = git_repo_with_source("leadline-hotspots-file");
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["hotspots", "a.ts", "--json"])
         .output()
@@ -352,7 +354,7 @@ fn cli_hotspots_merges_coverage() {
         "TN:\nSF:a.ts\nDA:1,1\nend_of_record\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["hotspots", "a.ts", "--lcov", "coverage.info", "--json"])
         .output()
@@ -368,7 +370,7 @@ fn cli_hotspots_merges_coverage() {
 #[test]
 fn cli_hotspots_terminal_lists_dimensions() {
     let root = git_repo_with_source("leadline-hotspots-terminal");
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["hotspots", "--limit", "1"])
         .output()
@@ -386,12 +388,12 @@ fn cli_hotspots_terminal_lists_dimensions() {
 fn cli_hotspots_json_is_deterministic() {
     let root = git_repo_with_source("leadline-hotspots-determinism");
     let args = ["hotspots", "--json"];
-    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let first = common::leadline()
         .current_dir(&root)
         .args(args)
         .output()
         .unwrap();
-    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let second = common::leadline()
         .current_dir(&root)
         .args(args)
         .output()

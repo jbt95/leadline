@@ -3,6 +3,8 @@
 //! Each test builds a synthetic Git repository with deterministic commits and
 //! asserts co-change counts, directional coupling, and Jaccard similarity.
 
+mod common;
+
 use leadline::coupling::{
     COUPLING_SCHEMA_VERSION, CouplingOptions, MAX_COMMIT_FILES, analyze_coupling,
 };
@@ -245,7 +247,7 @@ fn git_repo() -> PathBuf {
 #[test]
 fn cli_coupling_json_exposes_all_three_measures() {
     let root = git_repo();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["coupling", "src/a.ts", "--json"])
         .output()
@@ -265,7 +267,7 @@ fn cli_coupling_json_exposes_all_three_measures() {
 #[test]
 fn cli_coupling_terminal_lists_related_files() {
     let root = git_repo();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["coupling", "src/a.ts"])
         .output()
@@ -281,7 +283,7 @@ fn cli_coupling_terminal_lists_related_files() {
 #[test]
 fn cli_coupling_requires_an_existing_target() {
     let root = git_repo();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["coupling", "src/missing.ts"])
         .output()
@@ -295,7 +297,7 @@ fn cli_coupling_requires_an_existing_target() {
 fn cli_coupling_rejects_targets_outside_the_scope() {
     let root = git_repo();
     std::fs::write(root.join("outside.ts"), "export const outside = 1;\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["coupling", "../outside.ts", "--path", "src"])
         .output()
@@ -307,7 +309,7 @@ fn cli_coupling_rejects_targets_outside_the_scope() {
 
 #[test]
 fn cli_coupling_help_lists_the_command() {
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .args(["coupling", "--help"])
         .output()
         .unwrap();
@@ -318,7 +320,7 @@ fn cli_coupling_help_lists_the_command() {
 #[test]
 fn cli_coupling_agent_json_is_compact() {
     let root = git_repo();
-    let output = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let output = common::leadline()
         .current_dir(&root)
         .args(["coupling", "src/a.ts", "--format", "agent-json"])
         .output()
@@ -336,12 +338,12 @@ fn cli_coupling_agent_json_is_compact() {
 fn cli_coupling_json_is_deterministic() {
     let root = git_repo();
     let args = ["coupling", "src/a.ts", "--json"];
-    let first = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let first = common::leadline()
         .current_dir(&root)
         .args(args)
         .output()
         .unwrap();
-    let second = Command::new(env!("CARGO_BIN_EXE_leadline"))
+    let second = common::leadline()
         .current_dir(&root)
         .args(args)
         .output()

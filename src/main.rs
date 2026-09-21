@@ -97,6 +97,7 @@ fn main() -> ExitCode {
 /// are recorded individually. CPU time and resident memory are sampled for the
 /// duration of the command when metrics are enabled.
 fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
+    leadline::telemetry::arm();
     let operation = args
         .first()
         .map_or("none", |raw| cli_operation(raw))
