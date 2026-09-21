@@ -1,0 +1,50 @@
+name: Auto release
+
+# Cuts a release from the conventional commits merged into main: `feat` is
+# minor, `fix`/`perf`/`revert` patch, `!` or `BREAKING CHANGE` major, and
+# anything else releases nothing. The release commit and tag are pushed with
+# GITHUB_TOKEN, which does not start other workflows, so this job dispatches
+# release.yml explicitly — workflow_dispatch is exempt from that rule.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Tag the release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Install Rust
+        run: rustup update stable --no-self-update
+      - name: Install lint tools
+        run: rustup component add clippy rustfmt
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Cut the release
+        run: bash scripts/release.sh
+      - name: Dispatch the release workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(git tag --points-at HEAD --list 'v[0-9]*' | head -n 1)"
+          if [ -z "$tag" ]; then
+            echo "no release tag on HEAD"
+            exit 0
+          fi
+          gh workflow run release.yml --ref main -f tag="$tag"
+          echo "dispatched release.yml for $tag"

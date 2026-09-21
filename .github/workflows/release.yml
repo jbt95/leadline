@@ -4,9 +4,25 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to release, e.g. v0.16.0
+        required: true
+        type: string
 
 permissions:
   contents: read
+
+env:
+  # The tag this run releases: the dispatch input, or the pushed tag. Using
+  # github.event.inputs (not inputs) keeps the expression null-safe when the
+  # workflow is triggered by a push.
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+concurrency:
+  group: release-${{ env.RELEASE_TAG }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -33,6 +49,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
       - name: Build
@@ -58,6 +76,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           path: dist
@@ -70,8 +90,17 @@ jobs:
           syft-version: v1.51.1
           output-file: dist/leadline.cyclonedx.json
           upload-artifact: false
+      - name: Check the tag shape
+        run: |
+          case "$RELEASE_TAG" in
+            v[0-9]*) ;;
+            *)
+              echo "release tag must look like vX.Y.Z, got: $RELEASE_TAG" >&2
+              exit 1
+              ;;
+          esac
       - name: Write VERSION
-        run: echo "$GITHUB_REF_NAME" > dist/VERSION
+        run: echo "$RELEASE_TAG" > dist/VERSION
       - name: Create checksums
         run: cd dist && sha256sum * > SHA256SUMS
       - name: Publish release
@@ -79,12 +108,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="$GITHUB_REF_NAME"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes --title "$RELEASE_TAG"
           fi
           for i in 1 2 3 4 5; do
-            if gh release upload "$TAG" dist/* --clobber; then
+            if gh release upload "$RELEASE_TAG" dist/* --clobber; then
               break
             fi
             echo "upload attempt $i failed, retrying..."
