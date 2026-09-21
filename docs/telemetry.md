@@ -34,14 +34,14 @@ variable says.
 | `leadline_live_rss_bytes` | gauge | `surface`, `operation` | Latest sampled resident bytes; written at most once per second. |
 | `leadline_mcp_sessions_total` | counter | `transport`, `outcome` | One per MCP server session that ends, `outcome` `clean` or `error`; today only `transport="stdio"` emits it, because an HTTP server runs until the process is killed. |
 | `leadline_mcp_session_seconds` | histogram | `transport` | MCP session lifetime, bounds `0.1`–`14400` seconds; stdio sessions only. |
-| `leadline_mcp_errors_total` | counter | `transport`, `reason` | Protocol and transport failures by `reason`: `parse_error`, `invalid_request`, `method_not_found`, `tool_error`, `batch_too_large`, `response_too_large`, `http_bad_request`, `http_busy`, `origin_rejected`, or `body_budget_exhausted`. |
+| `leadline_mcp_errors_total` | counter | `transport` (`http`/`stdio`), `reason` | Protocol and transport failures by `reason`: `parse_error`, `invalid_request`, `method_not_found`, `tool_error`, `batch_too_large`, `response_too_large`, `http_bad_request`, `http_busy`, `origin_rejected`, or `body_budget_exhausted`. |
 | `leadline_mcp_requests_total` | counter | `method` | One per JSON-RPC request (a batch counts per request). `method` is `initialize`, `tools_list`, `tools_call`, `ping`, `notification`, or `unknown`. |
 | `leadline_mcp_inflight_calls` | gauge | `transport` | Tool calls currently executing. |
 | `leadline_mcp_request_bytes` | histogram | `method` | Request line/body bytes, bounds `256` bytes–`32` MiB. |
 | `leadline_mcp_response_bytes` | histogram | `method` | Response bytes, same bounds as requests. |
 | `leadline_findings_total` | counter | `surface`, `operation`, `kind`, `state` | What the gates report. `check`: one `kind` per family (`function`, `parse_error`, `security`, `vulnerability`, `sql`) with `state="violation"` (zero counts never create a row). `debt`: `kind="function"` with `state="new"`/`"resolved"`, and `kind="risk"` with `state="increased"`/`"added"`. Recorded on both surfaces. |
 | `leadline_security_findings_total` | counter | `surface`, `operation`, `kind` (`security`/`vulnerability`/`sql`), `severity` (`unknown`/`low`/`medium`/`high`/`critical`) | Scanner violations by family and severity, from `check` on either surface. |
-| `leadline_parse_errors_total` | counter | `surface`, `operation`, `language` (`java`/`javascript`/`typescript`/`tsx`/`rust`) | Parse errors by language, from `check` on either surface. |
+| `leadline_parse_errors_total` | counter | `surface`, `operation`, `language` (`c`/`cpp`/`go`/`java`/`javascript`/`python`/`rust`/`typescript`/`tsx`) | Parse errors by language, from `check` on either surface. |
 | `leadline_debt_functions` | gauge | `surface`, `state` | Standing function debt (`state="existing"`) from the most recent `debt` run. |
 | `leadline_build_info` | gauge | `version`, `metrics_schema` | Constant `1`; identifies the analyzer version that rendered the file. |
 

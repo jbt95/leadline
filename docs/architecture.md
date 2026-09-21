@@ -3,7 +3,7 @@
 `leadline` is one Rust package with small internal modules. A multi-crate workspace would add release and dependency work without improving the initial interface.
 
 ```text
-paths -> discovery -> source bytes -> TreeSitterAdapter -> metric events
+paths -> discovery -> source bytes -> TreeSitterBackend -> metric events
       -> core metric engine -> function results -> coverage/report/diff
 
 git repository -> history walk -> commit stream (resolved paths, deltas)
@@ -57,7 +57,7 @@ Direct dependency licenses were checked from Cargo metadata:
 
 | Dependency | License |
 | --- | --- |
-| Tree-sitter and all nine grammar packages | MIT |
+| Tree-sitter and all eight grammar packages | MIT |
 | `ignore` | Unlicense OR MIT |
 | `quick-xml` | MIT |
 | `rayon`, `serde`, `serde_json`, `criterion` | MIT OR Apache-2.0 |

@@ -12,7 +12,7 @@
 | Codex | Yes | Yes | AGENTS / skills | Harness-dependent | Evolving | manual tool (shared runner and pre-commit hook work wherever git does) | MCP + skill / instructions | Not yet validated live |
 | Gemini CLI | Yes | Yes | Yes | Yes | Extension | block on findings (AfterAgent exit 2); unavailable scanner warns non-blocking | Gemini extension | Not yet validated live |
 | Cursor | Yes | Yes | Rules / AGENTS | Limited, native evolution | — | manual tool (shared runner and pre-commit hook work wherever git does) | MCP + rule | Not yet validated live |
-| Cline | Yes | Yes | Instructions | Yes | Yes | shared gate wrapper (exit `2` on findings or an unavailable scanner); blocking behavior unverified | MCP + optional plugin | Not yet validated live |
+| Cline | Yes | Yes | Instructions | Yes | Yes | shared gate wrapper (exit `2` on findings; an unavailable scanner exits `1`); blocking behavior unverified | MCP + optional plugin | Not yet validated live |
 | Windsurf | Yes | Yes | Rules / instructions | Harness-dependent | — | manual tool (shared runner and pre-commit hook work wherever git does) | MCP | Not yet validated live |
 | GitHub Copilot | Surface-dependent | Yes | Yes | Surface-dependent | Custom agents | manual tool (shared runner and pre-commit hook work wherever git does) | MCP + instructions / custom agent | Not yet validated live |
 

@@ -14,7 +14,7 @@ OSV-Scanner files keep package name/version/ecosystem, vulnerability ID,
 files keep `Target`, `Type` (lowercased as the ecosystem), `VulnerabilityID`,
 `PkgName`, `InstalledVersion`, `FixedVersion`, and `Severity`. Descriptions,
 titles, URLs, CVSS objects, and package-manager output are dropped on read and
-never serialize; scanner versions are producer metadata only.
+never serialize.
 
 Inputs are bounded: 64 MiB per file, 256 MiB aggregate, JSON depth 128, one
 million normalized rows, and at most 32 paths per input kind. Manifest paths

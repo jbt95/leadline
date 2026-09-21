@@ -76,10 +76,14 @@ of one file so an agent can gauge blast radius before editing:
 `blast_radius_percent` is on a 0-100 scale. `dependents` are sorted by
 `(distance, path)`; `truncated` means `--top` hid rows while `blast_radius`
 still counts every dependent. Resolved imports are static evidence:
-relative JS/TS imports and exact Java type imports only, with no aliases,
-package graph, reflection, or runtime-built specifiers — inspect the listed
-dependents, but do not treat an empty list as proof that nothing else loads
-the file.
+relative JS/TS imports, exact Java type imports, Rust `mod` declarations
+resolved against the declaring module's directory, quoted C/C++ `#include`
+lines resolved relative to the including file (angle includes are ignored),
+and Python relative imports (absolute dotted imports are recorded
+`unresolved` with reason `unsupported`); Go imports produce no edge. No
+aliases, package graph, reflection, or runtime-built specifiers — inspect the
+listed dependents, but do not treat an empty list as proof that nothing else
+loads the file.
 
 `leadline risk --format agent-json` returns the ranked change-risk list so
 an agent can pick the riskiest files to inspect before editing:
@@ -185,7 +189,10 @@ network-free. See `integrations/typesafe-triage/README.md`.
 
 ## Hooks
 
-CI / pre-commit hooks default to warn-not-gate: they post violations as warnings and exit `0`. Switch to gating by passing explicit thresholds with a fail-on-violation flag in your pipeline, not by default.
+The agent lifecycle hooks that report complexity default to warn-not-gate:
+they post findings as warnings and always exit `0`; the secret gates are the
+exception (see below). Enable quality gating by passing explicit thresholds to
+`leadline check` in your pipeline (violations exit `1`), not by default.
 
 ## Secret gating pre-commit hook
 

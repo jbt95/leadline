@@ -83,6 +83,13 @@ Allowed positive deltas for `check --base REV --regressions` and `check --baseli
 
 Defaults match SonarQube's non-Java clone gate (100 tokens, 10 lines); lower them to catch smaller clones. Java keeps token-based detection (Sonar Java counts 10 statements instead — a different unit, intentionally not matched).
 
+## `[unused]`
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `entries` | list of glob strings | empty | Entry-point patterns for `unused`, gitignore-style and analysis-root-relative. `--entry` adds patterns for one invocation. |
+| `include_tests` | bool | `false` | Analyze test files as ordinary candidates. Without it, `*.test.*`, `*.spec.*`, and files under `test`/`tests`/`__tests__` stay out of both unused lists and are counted in `excluded_test_files`. `--include-tests` overrides it for one invocation. |
+
 ## `[[architecture.rules]]`
 
 Ordered deny rules over resolved dependency edges. Each rule needs `name` (unique), `source` (one glob), `deny` (at least one glob), and `severity` (`info`, `warning`, or `error`). Globs are analysis-root-relative gitignore-style patterns; negation, absolute/drive paths, trailing `/`, and escaping `..` are rejected. Violations classify `new`, `existing`, or `resolved` against `--base`.

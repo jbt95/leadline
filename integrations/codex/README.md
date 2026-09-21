@@ -1,7 +1,7 @@
 # leadline for Codex
 
 MCP server plus skill and project instructions. No metrics are
-reimplemented; the server shells out to the `leadline` binary.
+reimplemented; the MCP server is the `leadline` binary itself.
 
 ## Requires
 

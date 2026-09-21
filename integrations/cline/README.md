@@ -1,7 +1,7 @@
 # Cline integration
 
 MCP as the portable baseline, plus an optional lifecycle hook for post-edit
-feedback. The hook and the MCP server both shell out to the same `leadline`
+feedback. The hook and the MCP server are both backed by the same `leadline`
 binary; no analysis logic is duplicated.
 
 Requires a leadline build that provides the `mcp` subcommand.

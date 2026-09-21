@@ -9,7 +9,7 @@ cargo bench --bench analyzer
 The suite measures four distinct costs:
 
 - TypeScript source scaling at 10K, 100K, and 1M physical lines.
-- Equivalent Java, JavaScript, Rust, TypeScript, and TSX workloads to catch grammar-specific regressions.
+- Equivalent C, C++, Java, JavaScript, Python, Rust, TypeScript, and TSX workloads to catch grammar-specific regressions (Go is not in this group).
 - Recovery from a deterministic malformed TypeScript corpus.
 - Repository discovery and analysis at a fixed 10K total lines split across 1, 100, and 1,000 files, plus JSON serialization.
 
@@ -102,8 +102,8 @@ cargo bench --bench analyzer -- --warm-up-time 0.1 --measurement-time 0.2 --samp
 
 The 2026-09-13 real-world baseline used leadline 0.3.2, Criterion 0.8.2,
 and Rust 1.90.0 on the same Apple M2 Pro machine as the source baseline
-above. Fixtures are floating-main shallow clones fetched with
-`scripts/realworld.sh`; SHAs at measurement time: TanStack Query
+above. Fixtures are shallow clones of the floating upstream branches,
+fetched with `scripts/realworld.sh`; SHAs at measurement time: TanStack Query
 `b8fdc28`, Nest `a3a31b9`, React `ccea5fd`, Spring Boot `58b8ce6c`.
 Criterion defaults (not the 10-sample synthetic config); times are group
 means for `analyze_path` over the fixture subpath.
@@ -122,14 +122,14 @@ cargo bench --bench realworld
 
 The enforced floors in `benches/realworld.toml` sit ~50% below these
 (2,400 / 5,400 / 1,900 / 4,600 files/s) so they catch real regressions,
-not noise or upstream growth. Floating `main` means later runs measure
-different code: compare same-machine before/after, re-baseline the
+not noise or upstream growth. Floating upstream branches mean later runs
+measure different code: compare same-machine before/after, re-baseline the
 manifest when upstream moves (per `docs/realworld-benchmarks.md`), and
 never treat these absolutes as portable.
 
 ## Git history baseline
 
-The 2026-09-13 history baseline used leadline 0.2.0 with the same machine, toolchain, and Criterion version as the source baseline above. Each repository was staged before the timed loop; the raw `git log` case runs the exact production flags so that `raw_git_log` and `history_analysis` bound parsing overhead from both sides.
+The 2026-09-13 history baseline used leadline 0.2.0 with the same machine, toolchain, and Criterion version as the source baseline above. Each repository was staged before the timed loop; the raw `git log` case runs the production walk flags so that `raw_git_log` and `history_analysis` bound parsing overhead from both sides.
 
 ```console
 cargo bench --bench history -- --warm-up-time 0.1 --measurement-time 0.2 --sample-size 10

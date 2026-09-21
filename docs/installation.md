@@ -1,6 +1,6 @@
 # Installation
 
-One static binary, no runtime. Pick one block, then verify.
+One binary, no runtime. Pick one block, then verify.
 
 ## macOS / Linux (install script)
 

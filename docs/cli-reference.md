@@ -63,19 +63,20 @@ leadline skill
 - `test-targets`: rank functions holding decision lines with known zero line-coverage hits, sorted by CRAP descending, then path/function/line. Coverage is required (exit `2` without it). Rows carry `uncovered` (known-zero-hit) and `unknown` (absent from the coverage record) contribution lines; unknown is never called uncovered. Output is capped at `--top N` (default 200). Test-targets ranks line-coverage gaps only; branch data feeds function coverage/CRAP (see README Coverage limits).
 - `baseline`: snapshot current function metrics to `FILE` (writes atomically via a sibling temp file, then rename). Review the file, commit it, and gate later edits with `check --baseline FILE --regressions`. Snapshot rows pair with current functions by path and name in same-name source order; parsing rejects unknown schemas, unknown metric profiles, and duplicate identities (exit `3`).
 - `--version` / `-V` / `version`: print `leadline <version>`.
+- `--help` / `-h` / `help`: print the usage text. `--help` is also accepted after any command.
 - `doctor`: self-check parsers, coverage readers, `git`, and `leadline.toml`.
 - `update`: replace the running binary with the latest GitHub release. Reads the release `VERSION`, downloads the platform archive, verifies it against the release `SHA256SUMS`, and replaces the running executable (atomic rename on Unix, rename-swap on Windows). `LEADLINE_BASE_URL` points at a mirror. Never automatic, no `--json`/`--format`, never exposed over MCP; download, verification, or extraction failure exits `3` and leaves the installed binary untouched. With `--integrations`, it then refreshes detected Pi, OMP, and Claude Code integrations through each harness's own CLI (`pi update git:github.com/jbt95/leadline`, `omp plugin install git:github.com/jbt95/leadline --force`, `claude plugin update leadline@leadline`); OpenCode local plugin paths are reported with `opencode2 service restart` guidance and never modified. Integration failures do not stop later updates and exit `3`.
 - `mcp`: serve the read-only MCP tool API over stdio (default; request lines are bounded at 32 MiB); the only writes are the opt-in local metrics store, confined to `LEADLINE_METRICS_DIR` ([telemetry.md](telemetry.md)). `--port [N]` serves the same tools over HTTP instead (`POST /mcp`, plus `GET /health` for status): a bare `--port` means 3000, `0` asks the OS for a free port, and a taken port falls back to a free one with the actual address printed to stderr. `--host ADDR` sets the bind address (default `127.0.0.1`) and requires `--port`, because it configures only the HTTP transport. HTTP mode bounds every request (bounded header lines, whole-request read and write deadlines, a 64 MiB in-flight body budget, a fixed worker ceiling that answers 503 when saturated) and rejects non-loopback browser `Origin` headers with 403 per the MCP Streamable HTTP spec; clients that send no `Origin` are unaffected. MCP tools read `leadline.toml` from the analysis root, so `[analysis].exclude`, `[sql]`, and `[vulnerabilities]` behave exactly as they do on the CLI.
-- `skill`: print the canonical agent skill (`integrations/common/leadline-skill/SKILL.md`, baked into the binary).
+- `skill` / `--skill`: print the canonical agent skill (`integrations/common/leadline-skill/SKILL.md`, baked into the binary).
 
 ## Flags
 
 | Flag | Commands | Meaning |
 | --- | --- | --- |
-| `--json` | all analysis | Emit JSON report instead of terminal text. Exclusive with any `--format`. |
-| `--format agent-json` | analyze, function, check, changed, diff, hotspots, risk, coupling, dependencies, impact, test-targets, project, debt, sql-plan, security, vulnerabilities, sql | Emit the compact agent-oriented JSON shape. Function-shaped views (`analyze`, `function`, `check`) carry per-file `parse_errors`, and `changed`/`diff` carry per-file before/after `parse_errors`, so consumers can tell an unparsed file from a clean empty result. Carries a `truncated` bool when budget flags drop entries — except `risk`, whose agent JSON has no `truncated` field (`--limit` caps its rows silently). |
+| `--json` | all analysis | Emit JSON report instead of terminal text. Exclusive with `--format agent-json` and `--format sarif`; a CI format renders instead of JSON. |
+| `--format agent-json` | analyze, function, check, changed, diff, hotspots, risk, coupling, dependencies, unused, impact, test-targets, project, debt, sql-plan, security, vulnerabilities, sql | Emit the compact agent-oriented JSON shape. Function-shaped views (`analyze`, `function`, `check`) carry per-file `parse_errors`, and `changed`/`diff` carry per-file before/after `parse_errors`, so consumers can tell an unparsed file from a clean empty result. Carries a `truncated` bool when budget flags drop entries — except `risk`, whose agent JSON has no `truncated` field (`--limit` caps its rows silently). |
 | `--format sarif` | analyze, check, security, vulnerabilities, sql, sql-plan | Emit SARIF 2.1.0 (`version` / `runs` / `results`). `check` emits its gate violations only, so results match its exit code; the scanner commands emit their full report. Exclusive with `--json`. |
-| `--format <ci-format>` | check, security, vulnerabilities, sql, sql-plan | Render findings for CI platforms: `codeclimate` (alias `gitlab-codequality`) for GitLab Code Quality, `github-annotations` for workflow-command annotations, `github-summary` and `markdown` for job summaries and pull-request bodies, `badge` for a shields.io-compatible SVG showing the gate verdict and the violation count, and `compact` for one grep-friendly line per finding. Exclusive with `--json`; `check` renders its gate violations, the scanner commands their full report. `badge` carries no composite score: a single number invites refactoring to move it. |
+| `--format <ci-format>` | check, security, vulnerabilities, sql, sql-plan | Render findings for CI platforms: `codeclimate` (alias `gitlab-codequality`) for GitLab Code Quality, `github-annotations` for workflow-command annotations, `github-summary` and `markdown` for job summaries and pull-request bodies, `badge` for a shields.io-compatible SVG showing the gate verdict and the violation count, and `compact` for one grep-friendly line per finding. Takes precedence over `--json` and `--format agent-json|sarif`; `check` renders its gate violations, the scanner commands their full report. `badge` carries no composite score: a single number invites refactoring to move it. |
 | `--top N` | analyze, function, check, changed, diff, coupling, impact, test-targets, security, vulnerabilities, sql, sql-plan | Keep at most `N` entries per list (`coupling` and `impact` default 20, `test-targets` defaults 200, `sql-plan` defaults 50). Only with `--format agent-json` (`N >= 1`), except `coupling`, `impact`, and `test-targets` where it also caps terminal/JSON output. |
 | `--sort-by KEY` | analyze, function, check, changed, diff | Sort budget entries by `crap`, `cognitive`, or `cyclomatic`. Only with `--format agent-json`. |
 | `--min-crap X` | analyze, function, check, changed, diff | Drop entries below CRAP `X`. Only with `--format agent-json`. |
@@ -88,18 +89,18 @@ leadline skill
 | `--jacoco FILE` | analyze, function, check, hotspots, risk, project, test-targets, baseline | Merge JaCoCo XML line coverage. Repeatable. Required on `test-targets` (one coverage flag at minimum). |
 | `--coverage FILE` | analyze, function, check, hotspots, risk, project, test-targets, baseline | Merge coverage with format detected from the extension (`.info` LCOV, `.xml` JaCoCo). Repeatable. Required on `test-targets` (one coverage flag at minimum). |
 | `--regressions` | check | Enable regression-only gates. Limits come from `[regressions]` and default to zero. It removes the absolute-threshold requirement; combine with `--base REV` or `--baseline FILE` to compare changed functions. |
-| `--base REV` | check, changed, security, vulnerabilities | Base revision (`changed` default `HEAD~1`). Exclusive with `--baseline` on `check`. |
+| `--base REV` | check, changed, debt, security, vulnerabilities | Base revision (`changed` default `HEAD~1`). Exclusive with `--baseline` on `check`. |
 | `--baseline FILE` | check | Saved snapshot for regression gates without Git. Exclusive with `--base`. |
-| `--output FILE` | baseline, snapshot | Snapshot destination (required). |
-| `--staged` | changed, diff, security, vulnerabilities | Compare `--base`/`REV` against the index (staged blobs) instead of the working tree. Exclusive with `--target`. |
-| `--target REV` | changed, diff, security, vulnerabilities | Compare `--base`/`REV` against another revision instead of the working tree. Exclusive with `--staged`. |
-| `--renames` | changed, diff | Detect Git file renames (`-M`) and pair a renamed file's old content with its new content under the new path. |
+| `--output FILE` | baseline, snapshot, index | Destination (required): the snapshot file on `baseline`/`snapshot`, the index directory on `index` (default the configured `[index].path`, else `.leadline`). |
+| `--staged` | changed, diff, debt, security, vulnerabilities | Compare `--base`/`REV` against the index (staged blobs) instead of the working tree. Exclusive with `--target`. |
+| `--target REV` | changed, diff, debt, security, vulnerabilities | Compare `--base`/`REV` against another revision instead of the working tree. Exclusive with `--staged`. |
+| `--renames` | changed, diff, debt | Detect Git file renames (`-M`) and pair a renamed file's old content with its new content under the new path. |
 | `--path PATH` | changed, diff, debt, coupling, impact | Scope changed analysis to a file or directory; on `coupling` and `impact` it sets the history/graph scope (default `.`). |
 | `--min-cochanges N` | coupling | Drop related files with fewer than `N` shared commits (default 2, minimum 1). |
-| `--cognitive N` | check | Fail functions whose cognitive complexity exceeds `N`. |
-| `--cyclomatic N` | check | Fail functions whose cyclomatic complexity exceeds `N`. |
-| `--crap N` | check | Fail functions whose CRAP score exceeds `N`; functions without coverage also fail. |
-| `--max-nesting N` | check | Fail functions nested deeper than `N`. |
+| `--cognitive N` | check, report | Fail functions whose cognitive complexity exceeds `N`; on `report` it re-applies the gate limit to a saved document. |
+| `--cyclomatic N` | check, report | Fail functions whose cyclomatic complexity exceeds `N`; on `report` it re-applies the gate limit to a saved document. |
+| `--crap N` | check, report | Fail functions whose CRAP score exceeds `N`; functions without coverage also fail. On `report` it re-applies the gate limit to a saved document. |
+| `--max-nesting N` | check, report | Fail functions nested deeper than `N`; on `report` it re-applies the gate limit to a saved document. |
 | `--sarif FILE` | security, check | Scanner findings input (at least one required on `security`). Repeatable. |
 | `--baseline-sarif FILE` | security, check | Previous findings for new/existing state with `--new-only`. |
 | `--fail-on-severity LEVEL` | security, vulnerabilities, sql, check | Gate floor: `low`, `medium`, `high`, or `critical`. |
@@ -126,6 +127,10 @@ leadline skill
 | `--fail-on-violation` | policy | Exit `1` when error-severity violations exist. |
 | `--fail-on-regression` | debt | Exit `1` on new debt or increased risk. |
 | `--replace` | snapshot | Overwrite the trend point when inputs changed for an existing key. |
+| `--entry PATTERN` | unused | Entry-point pattern, gitignore-style and analysis-root-relative. Repeatable; adds to `[unused] entries`. |
+| `--include-tests` | unused | Analyze test files as ordinary candidates instead of leaving them out. |
+| `--verify` | index | Re-derive every file instead of reusing stored analysis, and report whether the stored index was reproduced exactly. |
+| `--integrations` | update | After replacing the binary, refresh detected Pi, OMP, and Claude Code integrations through each harness's own CLI. |
 | `--port [N]` | mcp | Serve HTTP instead of stdio; bare means 3000, `0` asks the OS, taken ports fall back free. |
 | `--host ADDR` | mcp | Bind address for HTTP mode (default `127.0.0.1`); requires `--port`. |
 

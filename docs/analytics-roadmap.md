@@ -65,17 +65,17 @@ Current modules:
 | Module | Role | Status |
 | --- | --- | --- |
 | `core`, `parser`, `discovery`, `coverage`, `diff`, `report`, `sarif` | existing source-metric engine and changed-code analysis | released |
-| `git`, `source_snapshot` | no-fetch Git access and worktree/index/revision snapshots | branch |
+| `git`, `source_snapshot` | no-fetch Git access and worktree/index/revision snapshots | released |
 | `history` | Git history, identity touches, whole-project coupling from one walk | Milestone A |
 | `hotspots` | source metrics x Git facts, ranked with exposed dimensions | Milestone A |
 | `coupling` | temporal co-change indexing and related-file queries | Milestone B |
 | `graph`, `impact` | static dependencies, blast radius, cycles | Milestone C |
 | `risk` | explainable change-risk model (`change-risk`: ownership concentration, policy) | Milestone D |
-| `ownership` | anonymous concentration and optional author projection | branch |
-| `debt` | full-state threshold transitions and risk deltas | branch |
-| `mutation`, `test_relationships` | PIT/Stryker ingestion and explicit test maps | branch |
-| `duplication`, `policy` | token-clone detection and architecture rules | branch |
-| `project`, `snapshots`, `analytics` | canonical model, trend store, orchestration | branch |
+| `ownership` | anonymous concentration and optional author projection | released |
+| `debt` | full-state threshold transitions and risk deltas | released |
+| `mutation`, `test_relationships` | PIT/Stryker ingestion and explicit test maps | released |
+| `duplication`, `policy` | token-clone detection and architecture rules | released |
+| `project`, `snapshots`, `analytics` | canonical model, trend store, orchestration | released |
 | `report` (extended) | canonical report model plus static site generator (planned) | Milestone F |
 
 ## Normalized analytics schema

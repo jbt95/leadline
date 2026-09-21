@@ -33,7 +33,7 @@ JavaScript, TypeScript, and TSX).
 Nested functions are independent: a lambda or arrow body never adds to
 the enclosing function; it is scored as its own function. The only
 addition to the enclosing score is +1 per Java `->`
-(`src/parser.rs:537,603`, `src/core.rs:287-296`).
+(`src/parser/mod.rs:564,624`, `src/core.rs:356-392`).
 
 Only real operator tokens count: `&&`/`||` written inside string,
 template, or JSX text are text, not branches, and operators inside a
@@ -46,8 +46,9 @@ The table above matches SonarQube per-language keyword rules. The
 remaining deltas are bookkeeping, not scoring:
 
 - `default:` wording: Sonar documents Java as a `case`-only list and
-  JS/TS as a `case`-clause list; leadline scores `default:` +0 in every
-  language.
+  JS/TS as a `case`-clause list; leadline scores `default:` +0 in Java and
+  JS/TS only — Go, Rust, C, C++, and Python score a default arm +1 as an
+  ordinary case.
 - Function-header accounting: Sonar counts +1 per JS/TS function while
   Java methods start from the base; leadline's base 1 covers both, so
   scores agree.
@@ -61,7 +62,10 @@ remaining deltas are bookkeeping, not scoring:
 
 Go follows the same table with these adjustments: `default:` arms count
 as Case (+1 cyclomatic, +0 cognitive), unlike Java/JS/TS where `default:`
-scores +0. `go`/`defer` statements are not decisions (they count toward
+scores +0. `select` and type switches are Switch headers like the plain
+`switch` (+0 cyclomatic, +1 + nesting cognitive), and their
+`communication_case` and `type_case` arms are Cases (+1 cyclomatic, +0
+cognitive). `go`/`defer` statements are not decisions (they count toward
 logical LOC only). Method receivers are excluded from the parameter
 count. Go has no `?`-style error returns; explicit `if err != nil`
 checks count as ordinary `if` decisions.
@@ -90,14 +94,15 @@ recognized operator or operand. The legacy `try!(...)` macro is a parse
 error for this grammar (`try` is a reserved keyword), so those call sites
 are reported as parse errors and score nothing; the modern `?` operator
 scores as above. Rust files are therefore not score-comparable with
-Go/Java/JS/TS files.
+files of any other language: Go, Java, JS/TS, C, C++, and Python each
+carry their own policy above.
 
 ### C counting policy
 
-C follows the shared cyclomatic and cognitive rules for conditionals,
-loops, switches, ternaries, and `&&`/`||`. The C grammar emits both
-`case` and `default` as `case_statement`, so each arm adds 1 cyclomatic
-and 0 cognitive. C has no `catch` or `throw` constructs. A
+C files (`.c`) follow the shared cyclomatic and cognitive rules for
+conditionals, loops, switches, ternaries, and `&&`/`||`. The C grammar
+emits both `case` and `default` as `case_statement`, so each arm adds 1
+cyclomatic and 0 cognitive. C has no `catch` or `throw` constructs. A
 `goto_statement` and its `labeled_statement` each add 1 cognitive and 0
 cyclomatic. Direct self-recursion adds 1 cognitive.
 
@@ -108,9 +113,13 @@ bodies are raw `preproc_arg` text, not expressions, so decisions, loops,
 and switches inside them are not scored. Macro-heavy C files can
 therefore under-report complexity, like Rust files with control flow
 inside macro token trees.
+
 ### C++ counting policy
 
-C++ discovers only `function_definition` and `lambda_expression` nodes.
+C++ files (`.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`) discover
+only `function_definition` and `lambda_expression` nodes. Headers belong to
+C++ because the C++ grammar parses C headers while the C grammar fails on
+C++ headers, so a `.h` file is never analyzed under the C policy above.
 Declarations and prototypes without a body are not functions. Lambdas are
 scored independently and use an `auto` initializer or assignment target as
 their name when one exists. Inline class or struct definitions and qualified

@@ -30,5 +30,5 @@ own scripts from `integrations/typesafe-triage/`: `npm run check` (tsc plus
 the vendored Oxlint rules) and `npm test` (offline, no key needed).
 
 The upstream rule-test suites were not ported with this vendoring (see
-`../UPSTREAM.md`); there are no package-local RuleTester cases for this rule.
+`../../UPSTREAM.md`); there are no package-local RuleTester cases for this rule.
 Do not cite upstream `pnpm` scripts here: this package uses npm only.

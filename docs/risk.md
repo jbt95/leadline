@@ -79,7 +79,7 @@ is the file: error 100, warning 60, info 30. Violations with status
 `resolved` are ignored. With no architecture rules configured (or no rule
 firing), the component is `Some(0.0)`: the absence of violations is known,
 not unknown. The raw row also carries `policy_severity` (`"info"` /
-`"warning"` / `"error"`, absent when nothing fires).
+`"warning"` / `"error"`, `null` when nothing fires).
 
 ## Windows
 
@@ -95,8 +95,8 @@ churn/ownership and still ranks by the static dimensions.
 
 Rows sort by `score` descending, ties by `path` ascending. The report keeps
 the full ranking: `--json` always emits every file. `--limit N` (default
-10, `N >= 1`) caps rows only for the terminal report and agent JSON, which
-print a `raise --limit` hint when rows are hidden. `--json` and
+10, `N >= 1`) caps rows for the terminal report and agent JSON; the terminal
+report prints a `raise --limit` hint when rows are hidden. `--json` and
 `--format agent-json` are exclusive; `--format` accepts only `agent-json`.
 
 ## Exit status
@@ -120,8 +120,11 @@ an empty scope exits `3`, and unreadable coverage exits `4`.
   lookups hoisted); prefer a scoped path on very large repositories.
 - **No coupling input.** Co-change evidence (`coupling`) is not a component;
   inspect it separately before editing.
-- **Static graph limits apply.** Relative JS/TS imports and exact Java type
-  imports only; aliases, package graphs, reflection, and runtime-built
-  specifiers are invisible to `impact` (see `dependencies.md`).
+- **Static graph limits apply.** Edges come from relative JS/TS/TSX imports,
+  exact Java type imports, Rust `mod` declarations, quoted C/C++ `#include`
+  directives, and relative Python imports; Go imports, Rust `use` paths,
+  angle-bracket C/C++ includes, absolute or dotted Python imports, aliases,
+  package graphs, reflection, and runtime-built specifiers are invisible to
+  `impact` (see `dependencies.md`).
 - **Contributor identity is approximate.** Shared emails, bots, and mailmap
   drift distort `ownership`, as with `hotspots`.

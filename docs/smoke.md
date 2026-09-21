@@ -15,17 +15,18 @@ SMOKE_ONLY=sql bash scripts/smoke.sh    # one section (after fetching)
 
 `LEADLINE_SMOKE_DIR` overrides the fixture directory
 (default `<repo>/target/smoke/`), `LEADLINE_BIN` pins the binary
-(default: `cargo build --offline`). Full (not shallow) clones: the
-history surfaces degrade to `git_available: false` without git history.
+(default `target/debug/leadline`, built with `cargo build --offline`
+when missing). Full (not shallow) clones: the history surfaces degrade
+to `git_available: false` without git history.
 
 ## What runs per section
 
 | Section | Commands |
 | --- | --- |
-| `fetch` | clone or update the three full fixtures (network); every other section needs them |
+| `fetch` | clone or update the three full fixtures (network); every repo-backed section needs them (`plan`, `mcp`, and `self` do not) |
 | `scale` | `analyze` x2 with byte-identical determinism diff on babel + elasticsearch |
 | `gates` | `check` thresholds (exit 0 clean, 1 violations) |
-| `history` | `hotspots`, `coupling`, `impact` (first file with dependents), `debt`, `baseline` + `check --regressions`, `duplication` (exit 3 on ceiling is fine) |
+| `history` | `hotspots`, `coupling`, `impact` (first file with dependents), `debt`, `baseline` + `check --regressions`, `duplication` (exits 0/1/3; ceiling is 3) |
 | `joins` | `project`, `snapshot`, `policy` on one package |
 | `sql` | `sql` on timescaledb migrations with `--migration-root`; empty-dir `analyze` exits 3 |
 | `plan` | `sql-plan` violation (exit 1) and clean (exit 0) controls |

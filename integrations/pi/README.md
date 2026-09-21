@@ -57,7 +57,5 @@ formatted output instead of an empty function list.
 
 ## How to disable
 
-Unregister the extension, or set its post-edit mode off (`gate` and
-`advisory` modes produce no post-edit output; only `warn` emits
-feedback, and it never blocks). Removing the `leadline` binary also
+Unregister the extension. Removing the `leadline` binary also
 silently disables analysis.

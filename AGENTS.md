@@ -29,7 +29,7 @@ original names as history; do not rewrite them.
 - Rust toolchain 1.90:
   `export PATH="$HOME/.rustup/toolchains/1.90-aarch64-apple-darwin/bin:$PATH"`.
 - `cargo test` stays offline and network-free; network fixtures live
-  behind `scripts/realworld.sh` + `cargo bench --bench realworld` only.
+  behind `scripts/realworld.sh` and `scripts/smoke.sh` only.
 - Implementation plans in `docs/superpowers/plans/` execute
   subagent-driven: one fresh implementer per task, reviewed between
   tasks, never inline in the primary session.

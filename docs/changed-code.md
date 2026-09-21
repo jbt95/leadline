@@ -6,7 +6,7 @@
 
 1. Collect changed paths from `git diff [--cached] [-M|--no-renames] --name-status -z <base> [<target>] --`, plus untracked files from `git ls-files --others --exclude-standard -z` when the target is the working tree. Output is deterministic (sorted, NUL-delimited).
 2. Skip files with unsupported extensions.
-3. Parse the `before` bytes (`git show <base>:<path>`, or the pre-rename path when `--renames` paired a rename) and the `after` bytes independently: the working tree file for the default target, `git show :<path>` (staged blob) for `--staged`, or `git show <target>:<path>` for `--target REV`.
+3. Parse the `before` bytes (one `git ls-tree` plus one streamed `git cat-file --batch` read at `<base>:<path>`, or at the pre-rename path when `--renames` paired a rename) and the `after` bytes independently: the working tree file for the default target, `git show :<path>` (staged blob) for `--staged`, or the same batched read at `<target>:<path>` for `--target REV`.
 4. Group functions by name within each file, then pair by same-name source order: first `foo` before with first `foo` after, and so on.
 5. Compare a deterministic source fingerprint per function. Identical fingerprints are omitted; only added, removed, or edited pairs are reported.
 6. Sort output by path, then by the after (or before) start line.
@@ -17,7 +17,7 @@
 - `--staged` (index): compares `base` against the index only; unstaged working-tree edits are excluded.
 - `--target REV`: compares `base` against `REV` as two Git trees; the working tree and index are never read.
 
-`--base` and `--target` values are validated the same way: empty, option-like (leading `-`), or control-character revisions are rejected before any Git subprocess runs.
+`--base` and `--target` values are validated the same way: empty, option-like (leading `-`), colon-containing, or control-character revisions are rejected before any Git subprocess runs.
 
 ## Renames
 

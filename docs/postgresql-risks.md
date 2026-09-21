@@ -1,11 +1,11 @@
 # Static PostgreSQL risk analysis
 
 `leadline sql [PATH]` flags high-signal PostgreSQL query risks in `.sql`
-files and obvious query call sites in Go, Java, JavaScript, TypeScript, TSX, and Rust —
-without executing SQL, connecting to a database, or adding a parser
-dependency. Findings are review prompts, not proof of runtime behavior or
-index usage: estimates reflect the planner's view, and every rule is a
-syntactic heuristic with documented boundaries.
+files and obvious query call sites in Go, Java, JavaScript, TypeScript,
+TSX, Python, and Rust — without executing SQL, connecting to a database, or
+adding a parser dependency. Findings are review prompts, not proof of
+runtime behavior or index usage: estimates reflect the planner's view, and
+every rule is a syntactic heuristic with documented boundaries.
 
 C and C++ are analyzed for complexity and dependencies, but their query call
 sites are not recognized yet: libpq (`PQexec`) and SQLite (`sqlite3_exec`)
@@ -49,13 +49,19 @@ configurable via `[sql]` (`minimum_severity` gates, it never rescores).
   names keep their case. Without configured migration roots no unknown-table
   findings emit (`schema_evidence_available: false`).
 - Host calls match terminal `query`, `execute`, `executeQuery`,
-  `executeUpdate`, and `raw` names only — declarations and bare references
-  never match. Dynamic means a `+` concatenation or template substitution in
-  the first argument; parameterized literals stay quiet, and nested functions
-  are not entered, so a callback computing `a + b` is not the call's text.
-  Loop state stops at the nearest function boundary, so nested functions are
-  never blamed for an outer loop. Call receivers and argument text never
-  cross over.
+  `executeUpdate`, `executemany`, and `raw` names, plus Go's `Query`,
+  `QueryRow`, `QueryContext`, `QueryRowContext`, `Exec`, `ExecContext` and
+  Rust's `query_as`, `query_scalar` — declarations and bare references never
+  match. Dynamic means a `+` concatenation or template substitution in the
+  first argument, plus `fmt.Sprintf` in Go and an f-string, `%` formatting,
+  or `str.format(...)` in Python; parameterized literals stay quiet, and
+  nested functions are not entered, so a callback computing `a + b` is not
+  the call's text. Loop state stops at the nearest function boundary, so
+  nested functions are never blamed for an outer loop. Call receivers and
+  argument text never cross over.
+- Python call sites are recognized on bare and attribute calls whose terminal
+  name is in that set: `cursor.execute(...)`, `cursor.executemany(...)`, and
+  `conn.query(...)`.
 - Rust call sites are recognized on `sqlx::query(...)`, `sqlx::query_as(...)`,
   `sqlx::query_scalar(...)`, method calls such as `conn.execute(...)` or
   `client.query(...)`, and any call whose terminal name matches the

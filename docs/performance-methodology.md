@@ -16,7 +16,7 @@ Deterministic generated TypeScript inputs at three sizes isolate parsing, AST tr
 cargo bench --bench history
 ```
 
-- `raw_git_log`: the production `git log --relative --no-merges --numstat -z -M30%` walk alone, so parsing overhead is bounded by comparing it with `history_analysis`.
+- `raw_git_log`: the `git log --relative --no-merges --numstat -z -M30%` walk alone, so parsing overhead is bounded by comparing it with `history_analysis`.
 - `history_analysis`: end-to-end history ingestion at 20 and 200 commits (HEAD lookup, streaming parse, rename resolution, aggregation). Reported in commits/s.
 - `hotspot_scoring`: source x history join and ranking over 2,000 pre-analyzed files, no Git access. Reported in files/s.
 - `coupling_analysis`: co-change indexing for one target over the 200-commit repository. Reported in commits/s.
@@ -34,10 +34,9 @@ cargo bench --bench analyzer -- --warm-up-time 0.1 --measurement-time 0.2 --samp
 Criterion reports CPU/wall time only, never peak RSS. Every RSS claim
 must come from `/usr/bin/time -l` on a release binary on the same
 machine as its paired Criterion run. The existing Criterion CPU benches
-(`analyzer`, `duplication`, `source_snapshot`) stay unchanged: the
-current dependency result (~39 ms for 10,000 entries) is already below
-the stored 105 ms baseline, so no graph rewrite or benchmark-only
-abstraction is warranted.
+stay unchanged: the current dependency result (~39 ms for 10,000
+entries) is already below the stored 105 ms baseline, so no graph
+rewrite or benchmark-only abstraction is warranted.
 
 End-to-end time plus peak resident memory via platform tools:
 
@@ -52,14 +51,17 @@ On macOS, `time -l` reports elapsed time and maximum resident set size.
 
 Generate function-count fixtures with the same Python loop, substituting
 only the function count (10k/50k/100k/200k). Keep every generated
-fixture under `/private/var/folders/87/p63_20194376y08q0_vf16n80000gp/T/opencode/`; never commit a large
+fixture under `${TMPDIR:-/tmp}/leadline-perf-results`; never commit a large
 corpus:
 
 ```console
-/usr/bin/python3 - <<'PY'
+results="${TMPDIR:-/tmp}/leadline-perf-results"
+mkdir -p "$results"
+/usr/bin/python3 - "$results" <<'PY'
+import sys
 from pathlib import Path
 
-results = Path("/private/var/folders/87/p63_20194376y08q0_vf16n80000gp/T/opencode/leadline-perf-results")
+results = Path(sys.argv[1])
 results.mkdir(parents=True, exist_ok=True)
 for count in (10_000, 50_000, 100_000, 200_000):
     with (results / f"functions-{count}.ts").open("w") as output:
@@ -74,7 +76,8 @@ Source-byte control: a single 17.7 MB one-line TypeScript comment proves
 scaling is driven by function cardinality, not source bytes:
 
 ```console
-/usr/bin/python3 -c "from pathlib import Path; Path('/private/var/folders/87/p63_20194376y08q0_vf16n80000gp/T/opencode/leadline-perf-results/comment-17mb.ts').write_text('// ' + 'x' * (17_700_000 - 3) + '\n')"
+results="${TMPDIR:-/tmp}/leadline-perf-results"
+/usr/bin/python3 -c "from pathlib import Path; Path('$results/comment-17mb.ts').write_text('// ' + 'x' * (17_700_000 - 3) + '\n')"
 ```
 
 Measure each fixture with and without JSON serialization, recording wall
@@ -82,8 +85,9 @@ time, user time, peak RSS, and exit code:
 
 ```console
 cargo build --offline --release
-/usr/bin/time -l ./target/release/leadline analyze /private/var/folders/87/p63_20194376y08q0_vf16n80000gp/T/opencode/leadline-perf-results/functions-200000.ts > /dev/null
-/usr/bin/time -l ./target/release/leadline analyze /private/var/folders/87/p63_20194376y08q0_vf16n80000gp/T/opencode/leadline-perf-results/functions-200000.ts --json > /dev/null
+results="${TMPDIR:-/tmp}/leadline-perf-results"
+/usr/bin/time -l ./target/release/leadline analyze "$results/functions-200000.ts" > /dev/null
+/usr/bin/time -l ./target/release/leadline analyze "$results/functions-200000.ts" --json > /dev/null
 ```
 
 Reference shape (2026-09-18, Mac14,9/M2 Pro, same-session release
@@ -102,7 +106,7 @@ JSON output for the identity comparison below:
 
 ```console
 cargo build --offline --release
-results=/private/var/folders/87/p63_20194376y08q0_vf16n80000gp/T/opencode/leadline-perf-results
+results="${TMPDIR:-/tmp}/leadline-perf-results"
 mkdir -p "$results"
 /usr/bin/time -l ./target/release/leadline duplication CLONE_CORPUS --json > "$results/dup-clone.json"
 ```

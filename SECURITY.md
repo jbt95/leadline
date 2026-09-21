@@ -16,4 +16,4 @@ The maintainers will acknowledge a complete report within seven days. They will 
 
 `leadline` analyzes untrusted source and coverage files. Run it with the same file and process permissions as other build tools.
 
-The `changed` commands execute the installed `git` binary with fixed arguments. They do not execute repository hooks or source code.
+Commands that read Git history execute the installed `git` binary with fixed arguments. They do not execute repository hooks or source code.

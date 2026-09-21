@@ -62,7 +62,14 @@ Reports are UTF-8 JSON. Paths use `/` separators. Floats use stable decimal form
 - `analyzer_version`: the `leadline` crate version that produced the report.
 - `metric_profile`: always `default`; see `metrics.md` for rules.
 - `metric_specs`: per-family rule versions, each `default` in 1.0.
-- Function `id` is `<path>:<kind>:<start_byte>:<end_byte>`. `kind` is `function` (or `method` / `arrow` where the grammar distinguishes). Byte offsets are source bytes.
+- `language` is one of `c`, `cpp`, `go`, `java`, `javascript`, `python`,
+  `rust`, `typescript`, `tsx` — one value per supported grammar, not one per
+  extension: `.jsx`, `.mjs`, and `.cjs` report `javascript`, `.mts` and
+  `.cts` report `typescript`, and `.h`, `.cc`, `.cxx`, `.hpp`, `.hh`, and
+  `.hxx` report `cpp`.
+- Function `id` is `<path>:<kind>:<start_byte>:<end_byte>`. `kind` is one of
+  `function`, `method`, `constructor`, `lambda`, `arrow`, `anonymous`. Byte
+  offsets are source bytes.
 - `coverage` and `crap` are numbers or `null`. `null` means unknown (no overlapping coverage lines); it never means zero.
 - `parse_errors` entries carry `kind`, `start_line`, `start_column`, `end_line`, `end_column`. They are inline per file, never fatal by themselves.
 

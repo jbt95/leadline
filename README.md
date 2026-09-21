@@ -234,9 +234,10 @@ A directory outside a Git repository, a machine without `git`, or an unborn HEAD
 still ranks by complexity and reports `git_available: false` with `null` churn
 fields. Merge commits are excluded. See [hotspots](docs/hotspots.md) for formulas,
 limitations, and the ethical guardrail: commit and ownership signals must never rank
-developers. The [analytics roadmap](docs/analytics-roadmap.md) describes the ownership
-and static-report milestones still to build on this foundation
-(coupling, dependencies, impact, and risk are implemented; see above and below).
+developers. The [analytics roadmap](docs/analytics-roadmap.md) describes the
+static-report milestone still to build on this foundation
+(coupling, dependencies, impact, risk, and ownership are implemented; see above
+and below).
 
 Build the canonical project model and compare complete states before editing:
 
@@ -275,12 +276,13 @@ leadline impact src/payment/PaymentService.ts --format agent-json
 (direct importers), fan-out (resolved imports), and import cycles. `impact`
 lists the transitive dependents of one file with distances, direct-dependent
 counts, and blast radius. Resolution is deliberately conservative: only
-relative JS/TS imports, exact Java type imports, file-relative Rust `mod`
-declarations, quoted C/C++ includes, and Python relative imports produce edges.
-Bare package imports, Go module-qualified imports, Java wildcards, Rust `use`
-paths, angle-bracket C/C++ includes, and Python absolute dotted imports produce
-none. The graph is therefore static evidence to inspect, not proof of runtime
-behavior; see [dependencies](docs/dependencies.md).
+relative JS/TS imports, exact Java type imports, Rust `mod` declarations
+resolved against the declaring module's directory, quoted C/C++ includes, and
+Python relative imports produce edges. Bare package imports, Go module-qualified
+imports, Rust `use` paths, and angle-bracket C/C++ includes produce none; Java
+wildcards and Python absolute dotted imports are recorded as `unresolved` with
+reason `unsupported`. The graph is therefore static evidence to inspect, not
+proof of runtime behavior; see [dependencies](docs/dependencies.md).
 
 Rank change risk before editing:
 

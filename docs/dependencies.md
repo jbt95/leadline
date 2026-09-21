@@ -87,7 +87,7 @@ Java (`.java`):
 - Same-package uses without an import statement produce no edge. Only
   explicit imports are evidence.
 
-C (`.c`):
+C (`.c`; `.h` headers are C++, see below):
 
 - `#include "path/to/file.c"` resolves the exact path relative to the
   including file's directory → `kind: "import"`. Includes carry their own
@@ -117,6 +117,8 @@ Rust (`.rs`):
 
 C++ (`.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`):
 
+- Headers belong to C++ because the C++ grammar parses C headers while the
+  C grammar fails on C++ headers, so every `.h` file is analyzed here.
 - `#include "path/file.hpp"` resolves the exact path relative to the
   including file's directory and produces `kind: "import"`. Includes carry
   their own extension, so resolution does not probe other extensions or
@@ -146,9 +148,9 @@ Python (`.py`):
 - Absolute dotted imports — `import a.b`, `import a.b as c`,
   `from a.b import d` — name a module on `sys.path`, which a parser cannot
   see. They are recorded as `unresolved` with reason `unsupported` (one row
-  per module path named), never resolved and never an edge, so the report
-  stays honest: `complete` is `false` with
-  `reason: "unresolved_references"` whenever a file imports absolutely.
+  per module path named), never resolved and never an edge, and the `unused`
+  report is `complete: false` with `reason: "unresolved_references"`
+  whenever a file imports absolutely.
 - `import_statement` and `import_from_statement` nested inside a function,
   class, or `if` block are references too: the whole file is walked, not
   just its top level.
@@ -185,11 +187,12 @@ across runs.
 
 `dependencies` prints `Dependencies (N files, M edges, K cycle[s])`, the top
 5 files by fan-in and by fan-out, then `No cycles found.` or the numbered
-`Cycles (K)` list. `impact` prints `Impact (target: ...)`, `Fan-in`,
-`Fan-out`, `Direct dependents`, `Blast radius: X of Y files (Z%)`, the
-`Dependents (N shown, M total)` list with `(distance N)` per row,
-`Showing the top N dependents (raise --top for more).` when truncated, and
-`Cycles involving target (K)` when the target sits on a cycle.
+`Cycles (K)` list. `impact` prints `Impact (target: ...)`, `Target`,
+`Fan-in`, `Fan-out`, `Direct dependents`, `Blast radius: X of Y files (Z%)`,
+the `Dependents (N shown, M total)` list with `(distance N)` per row
+(`No dependents found.` when empty), `Showing the top N dependents (raise
+--top for more).` when truncated, and `Cycles involving target (K)` when
+the target sits on a cycle.
 
 ## Limitations
 
@@ -203,8 +206,8 @@ across runs.
   includes are ignored.
 - No Rust `use` or `extern crate` edges: those paths are module-qualified,
   never file-relative.
-- No inline Rust modules: `mod foo { ... }` is not a file reference, so the
-  module tree inside a file contributes no edges of its own.
+- No inline Rust modules as files: `mod foo { ... }` is not a file
+  reference, but a `mod bar;` declared inside it resolves under `foo/`.
 - No C++ system-include search path: angle-bracket includes are ignored.
 - No Python `sys.path`, virtual-environment, or package-root knowledge:
   absolute imports (`import a.b`, `from a.b import c`) are recorded as

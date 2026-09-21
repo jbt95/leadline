@@ -23,7 +23,7 @@ MCP-capable harnesses.
 
 Load `plugin/leadline.ts` as an OpenCode V1 plugin. It registers four
 stable tools that delegate to the shared adapter core and shell out to the
-same binary (identical behavior to the V2 plugin and Pi):
+same binary (the same four tools the V2 plugin and Pi register):
 
 - `leadline_changed` — changed functions vs git base
 - `leadline_function` — one function by file and name

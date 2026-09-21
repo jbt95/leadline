@@ -19,8 +19,9 @@ dependencies; Node built-ins only.
 
 Tools: `leadline_changed`, `leadline_function`, `leadline_gate`, and
 `leadline_secret_check`. Analyzer failures return the error as tool text
-in every harness; only `leadline_secret_check` fails the call itself when
-the gate reports findings or an unavailable scanner. Post-edit feedback
+in every harness. Pi's `leadline_secret_check` fails the call itself when
+the gate reports findings or an unavailable scanner; the OpenCode wrappers
+report the same gate status as warn-mode text. Post-edit feedback
 runs in warn mode only and never gates the agent.
 
 Typecheck with `npm install && npm run check` in this directory.
