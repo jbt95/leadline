@@ -79,6 +79,11 @@ The counters come from one platform seam:
 | Windows | `GetProcessTimes` | `GetProcessMemoryInfo` `WorkingSetSize` | `GetProcessMemoryInfo` `PeakWorkingSetSize` |
 | other | nothing | nothing | nothing |
 
+The peak in each sample is floored at that sample's current RSS: the two
+counters are read at different instants (`getrusage` first), and macOS
+`ru_maxrss` can trail `ri_resident_size` by a page, so a sample never reports
+a peak below the resident size it just observed.
+
 On targets outside the matrix the invocation is still recorded, but no
 sampled or peak cost series appear: nothing is fabricated, and a failed or
 unavailable counter read can never fail a command.

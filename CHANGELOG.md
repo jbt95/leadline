@@ -12,6 +12,10 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 - `--format codeclimate` (alias `gitlab-codequality`), `github-annotations`, `github-summary`, `markdown`, `badge` and `compact` render findings for CI platforms on `check`, `security`, `vulnerabilities`, `sql` and `sql-plan`.
 - `report --from FILE --format NAME` re-renders a saved `check --json` document through any of those formats without re-analyzing, byte-identical to a live run with the same thresholds.
 
+### Fixed
+
+- The peak resident size reported for a sample is never below that sample's current resident size: the two counters are read at different instants, and macOS `ru_maxrss` can trail `ri_resident_size` by a page, which made `leadline_invocation_max_rss_bytes` read below the sampled resident histogram.
+
 ## 0.15.1 - 2026-09-20
 
 ### Fixed

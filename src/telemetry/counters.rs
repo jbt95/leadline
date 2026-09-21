@@ -30,10 +30,19 @@ pub(crate) fn read() -> Option<ProcessSample> {
         + usage.ru_utime.tv_usec as f64 / 1_000_000.0
         + usage.ru_stime.tv_sec as f64
         + usage.ru_stime.tv_usec as f64 / 1_000_000.0;
+    let rss_bytes = current_rss_bytes();
+    // The two counters are read at different instants (`getrusage` first), and
+    // macOS `ru_maxrss` can trail the resident size by a page, so the peak is
+    // floored at the current reading: a sample never reports a peak below the
+    // size it just observed.
+    let peak_rss_bytes = match (peak_rss_bytes(&usage), rss_bytes) {
+        (Some(peak), Some(rss)) => Some(peak.max(rss)),
+        (peak, _) => peak,
+    };
     Some(ProcessSample {
         cpu_seconds,
-        rss_bytes: current_rss_bytes(),
-        peak_rss_bytes: peak_rss_bytes(&usage),
+        rss_bytes,
+        peak_rss_bytes,
     })
 }
 
