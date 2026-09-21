@@ -1,6 +1,10 @@
-# leadline
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jbt95/leadline/main/assets/logo.svg" alt="leadline logo: a sounding line dropping into waves" width="112" />
+</p>
 
-<p>
+<h1 align="center">leadline</h1>
+
+<p align="center">
   <a href="https://github.com/jbt95/leadline/actions/workflows/ci.yml"><img src="https://github.com/jbt95/leadline/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
   <a href="https://github.com/jbt95/leadline/releases"><img src="https://img.shields.io/github/v/release/jbt95/leadline" alt="latest release" /></a>
   <img src="https://img.shields.io/badge/stability-beta-green" alt="stability: beta" />
