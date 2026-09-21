@@ -163,7 +163,7 @@ pub fn analyze_unused(
     let mut entry_points = matched_entries(&files, extra_entries, SOURCE_ENTRY)?;
     entry_points.extend(matched_entries(&files, &config.entries, SOURCE_CONFIG)?);
     entry_points.extend(manifest_entries(&manifests, root, &index));
-    entry_points.extend(convention_entries(&manifests, &files, &index));
+    entry_points.extend(convention_entries(&manifests, &files, &index, &sources)?);
     entry_points.sort_by(|left, right| {
         (left.path.as_str(), left.source).cmp(&(right.path.as_str(), right.source))
     });
@@ -535,12 +535,16 @@ fn collect_strings(value: &serde_json::Value, values: &mut Vec<String>) {
 ///
 /// A directory import and a host loader both resolve those files without an
 /// import edge, so a package's own `index.*` is an entry point even when the
-/// manifest names no source field.
+/// manifest names no source field. The same holds for every other file a
+/// runtime loads or compiles by name: `*.config.*` files, Rust crate roots, C
+/// and C++ translation units, and the Python modules a host runs (`manage.py`
+/// and friends, and any module with a `__main__` guard).
 fn convention_entries(
     manifests: &[(String, String)],
     files: &[String],
     index: &BTreeMap<String, Vec<String>>,
-) -> Vec<EntryPoint> {
+    sources: &[SourceEntry],
+) -> Result<Vec<EntryPoint>> {
     let mut keys = vec![
         "index".to_owned(),
         "main".to_owned(),
@@ -594,7 +598,25 @@ fn convention_entries(
             });
         }
     }
-    entries
+    // Python runs and loads modules by name too: `python -m package` executes
+    // `__main__.py`, the web and tooling frameworks load `manage.py`, `wsgi.py`,
+    // `asgi.py`, `conftest.py`, and `setup.py`, and a module that guards its
+    // entry point with `if __name__ == "__main__":` runs as a script. The tree
+    // walk reads the bytes already in memory, so no file is read twice.
+    for source in sources {
+        if !source.path.ends_with(".py") {
+            continue;
+        }
+        if crate::parser::python::is_conventional_entry(&source.path)
+            || crate::parser::python_has_main_guard(&source.path, &source.bytes)?
+        {
+            entries.push(EntryPoint {
+                path: source.path.clone(),
+                source: SOURCE_CONVENTION,
+            });
+        }
+    }
+    Ok(entries)
 }
 
 /// True for the `*.config.<source extension>` files tooling loads by name.

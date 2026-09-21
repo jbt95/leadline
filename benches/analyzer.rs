@@ -51,6 +51,14 @@ fn language_fixture(language: &str, functions: usize) -> (&'static str, Vec<u8>)
             }
             ("fixture.js", source.into_bytes())
         }
+        "python" => {
+            for index in 0..functions {
+                source.push_str(&format!(
+                    "def f{index}(x):\n    if x > 1:\n        return x + 1\n    return x\n"
+                ));
+            }
+            ("fixture.py", source.into_bytes())
+        }
         "typescript" => {
             for index in 0..functions {
                 source.push_str(&format!(
@@ -114,6 +122,7 @@ fn language_coverage(c: &mut Criterion) {
         "cpp",
         "java",
         "javascript",
+        "python",
         "rust",
         "typescript",
         "tsx",

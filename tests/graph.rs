@@ -29,6 +29,97 @@ fn edge_pairs(report: &DependencyReport) -> Vec<(&str, &str)> {
 }
 
 #[test]
+fn python_relative_imports_resolve_to_files_packages_and_ancestors() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "app/svc/api.py",
+        "from . import models\nfrom .helpers import run\nfrom .. import shared\nfrom ..util.text import clean\nimport os.path\nfrom os import path\n",
+    );
+    write(&root, "app/svc/models.py", "VALUE = 1\n");
+    write(
+        &root,
+        "app/svc/helpers/__init__.py",
+        "def run():\n    return 1\n",
+    );
+    write(&root, "app/__init__.py", "");
+    write(&root, "app/shared.py", "SHARED = 1\n");
+    write(&root, "app/util/__init__.py", "");
+    write(
+        &root,
+        "app/util/text.py",
+        "def clean(value):\n    return value\n",
+    );
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+
+    // Level 1 names a sibling, level 2 climbs to the parent package, and a
+    // dotted module path resolves through the directory tree.
+    assert_eq!(
+        edge_pairs(&report),
+        [
+            ("app/svc/api.py", "app/shared.py"),
+            ("app/svc/api.py", "app/svc/helpers/__init__.py"),
+            ("app/svc/api.py", "app/svc/models.py"),
+            ("app/svc/api.py", "app/util/text.py"),
+        ]
+    );
+    // Absolute imports are package-qualified, so no parser can resolve them;
+    // they are reported as unsupported instead of disappearing.
+    let unresolved: Vec<(&str, &str)> = report
+        .unresolved
+        .iter()
+        .map(|entry| (entry.specifier.as_str(), entry.reason))
+        .collect();
+    assert_eq!(
+        unresolved,
+        [("os", "unsupported"), ("os.path", "unsupported")]
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn python_relative_imports_report_missing_ambiguous_and_out_of_scope() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "pkg/mod.py",
+        "from .missing import a\nfrom .either import value\nfrom . import present\n",
+    );
+    write(&root, "pkg/either.py", "either = 1\n");
+    write(&root, "pkg/either/__init__.py", "package = 1\n");
+    write(&root, "pkg/present.py", "present = 1\n");
+    write(&root, "top.py", "from ..above import b\n");
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+
+    assert_eq!(edge_pairs(&report), [("pkg/mod.py", "pkg/present.py")]);
+    let unresolved: Vec<(&str, &str, u32, &str)> = report
+        .unresolved
+        .iter()
+        .map(|entry| {
+            (
+                entry.source.as_str(),
+                entry.specifier.as_str(),
+                entry.line,
+                entry.reason,
+            )
+        })
+        .collect();
+    assert_eq!(
+        unresolved,
+        [
+            ("pkg/mod.py", "either", 2, "ambiguous"),
+            ("pkg/mod.py", "missing", 1, "not_found"),
+            ("top.py", "../above", 1, "outside_scope"),
+        ]
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn resolves_javascript_and_typescript_references_and_reports_cycles() {
     let root = temporary_directory();
     write(

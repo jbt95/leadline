@@ -309,6 +309,17 @@ fn resolve(
         // beside the declaring file. `use` paths are module-qualified and
         // never reach this resolver.
         RawDependencyKind::RustModule => resolve_rust_module(&reference.specifier, source, paths),
+        // Python relative imports name a module beside the declaring file, so
+        // `from .mod import y` is resolvable: level 1 is the file's own
+        // directory, deeper levels climb one directory each.
+        RawDependencyKind::PythonImport => {
+            resolve_python_module(&reference.specifier, source, paths)
+        }
+        // Absolute Python imports are package-qualified: sys.path and the
+        // package root are invisible to a parser, so the reference is reported
+        // rather than dropped, keeping `complete` honest, and adds no edge —
+        // the same treatment Java wildcard imports get.
+        RawDependencyKind::PythonAbsoluteImport => Resolution::Unresolved("unsupported"),
     }
 }
 
@@ -410,6 +421,25 @@ fn resolve_rust_module(specifier: &str, source: &str, paths: &BTreeSet<String>) 
     candidate_resolution(candidates(
         paths,
         [format!("{base}.rs"), format!("{base}/mod.rs")].into_iter(),
+    ))
+    .unwrap_or(Resolution::Unresolved("not_found"))
+}
+
+/// Resolves one Python relative-import specifier to `<base>.py` or
+/// `<base>/__init__.py`.
+///
+/// The extractor encodes the import level as leading `../` segments (level 1 =
+/// none), so the shared relative walk already places the base: level 1 lands in
+/// the declaring file's own directory and each further level climbs one
+/// directory. Climbing above the analysis root is `outside_scope`, matching
+/// the JavaScript resolver.
+fn resolve_python_module(specifier: &str, source: &str, paths: &BTreeSet<String>) -> Resolution {
+    let Some(base) = relative_target(source, specifier) else {
+        return Resolution::Unresolved("outside_scope");
+    };
+    candidate_resolution(candidates(
+        paths,
+        [format!("{base}.py"), format!("{base}/__init__.py")].into_iter(),
     ))
     .unwrap_or(Resolution::Unresolved("not_found"))
 }

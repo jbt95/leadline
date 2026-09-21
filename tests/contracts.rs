@@ -27,6 +27,11 @@ fn public_language_detection_contract_covers_every_extension() {
         ("example.test.tsx", Some(Language::Tsx)),
         ("example.c", Some(Language::C)),
         ("example.rs", Some(Language::Rust)),
+        ("example.py", Some(Language::Python)),
+        ("example.PY", Some(Language::Python)),
+        // Type stubs declare signatures with no bodies, so they are not
+        // analyzed and not discovered.
+        ("example.pyi", None),
         ("example.json", None),
         ("Makefile", None),
     ] {
@@ -74,6 +79,73 @@ fn documented_metric_edges_are_contracts() {
         ),
     ] {
         assert_eq!(function_metrics("fixture.js", source), expected, "{name}");
+    }
+}
+
+#[test]
+fn python_metric_edges_are_contracts() {
+    for (name, source, expected) in [
+        // `raise` follows JavaScript's `throw`: one cyclomatic point, no
+        // cognitive point.
+        (
+            "raise in a guard",
+            "def f(value):\n    if value < 0:\n        raise ValueError(value)\n    return value\n",
+            (3, 1, 1),
+        ),
+        // `assert` is a debug-time guard the optimizer strips, so it scores
+        // nothing, matching the Rust `panic!` row.
+        (
+            "assert is free",
+            "def f(value):\n    assert value\n    return value\n",
+            (1, 0, 0),
+        ),
+        // The `else` on `for` is another path a reader must follow.
+        (
+            "for else adds a path",
+            "def f(items):\n    for item in items:\n        return item\n    else:\n        return None\n",
+            (2, 2, 1),
+        ),
+        (
+            "while else adds a path",
+            "def f(items):\n    while items:\n        return items\n    else:\n        return None\n",
+            (2, 2, 1),
+        ),
+        // `except` is a catch and `finally` is not a decision; the `else` on
+        // `try` adds one cognitive point and no cyclomatic point.
+        (
+            "except is a catch",
+            "def f():\n    try:\n        return 1\n    except ValueError:\n        return 2\n",
+            (2, 1, 1),
+        ),
+        (
+            "finally is not a decision",
+            "def f():\n    try:\n        return 1\n    finally:\n        return 2\n",
+            (1, 0, 0),
+        ),
+        (
+            "try else adds a path",
+            "def f(value):\n    try:\n        return int(value)\n    except ValueError:\n        return 0\n    else:\n        return 1\n",
+            (2, 2, 1),
+        ),
+        // `with` and `not` are not decisions.
+        (
+            "with is not a decision",
+            "def f(path):\n    with open(path):\n        return 1\n",
+            (1, 0, 0),
+        ),
+        (
+            "not is not a decision",
+            "def f(value):\n    return not value\n",
+            (1, 0, 0),
+        ),
+        // A comprehension scores like the explicit loop it replaces.
+        (
+            "comprehension clauses",
+            "def f(items):\n    return [x for x in items if x]\n",
+            (3, 2, 1),
+        ),
+    ] {
+        assert_eq!(function_metrics("fixture.py", source), expected, "{name}");
     }
 }
 

@@ -13,6 +13,7 @@ pub(crate) mod c_family;
 mod go;
 mod java;
 mod js;
+pub(crate) mod python;
 pub(crate) mod rust;
 
 thread_local! {
@@ -29,6 +30,8 @@ pub(crate) enum RawDependencyKind {
     JavaStatic,
     JavaWildcard,
     LocalInclude,
+    PythonImport,
+    PythonAbsoluteImport,
     RustModule,
 }
 
@@ -304,6 +307,7 @@ pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDe
         Language::Go => go::extract_go_dependencies(root, source),
         Language::Java => java::extract_java_dependencies(root, source),
         Language::Rust => rust::extract_rust_dependencies(root, source),
+        Language::Python => python::extract_relative_imports(root, source),
         Language::JavaScript | Language::TypeScript | Language::Tsx => {
             js::extract_javascript_dependencies(root, source)
         }
@@ -330,6 +334,7 @@ pub(crate) fn parse_bundle(path: &str, source: &[u8]) -> Result<ParsedBundle> {
             Language::Go => go::extract_go_dependencies(root, source),
             Language::Java => java::extract_java_dependencies(root, source),
             Language::Rust => rust::extract_rust_dependencies(root, source),
+            Language::Python => python::extract_relative_imports(root, source),
             Language::JavaScript | Language::TypeScript | Language::Tsx => {
                 js::extract_javascript_dependencies(root, source)
             }
@@ -350,6 +355,15 @@ pub(crate) fn parse_bundles(entries: &[SourceEntry]) -> Result<Vec<(String, Pars
         .into_iter()
         .map(|(path, bundle)| Ok((path, bundle?)))
         .collect()
+}
+
+/// True when a Python module carries an `if __name__ == "__main__":` guard.
+///
+/// Parses `source` with the Python grammar and delegates to the pure tree walk;
+/// `path` must be a Python path, exactly as `SourceEntry` paths are.
+pub(crate) fn python_has_main_guard(path: &str, source: &[u8]) -> Result<bool> {
+    let (_, tree) = parse_tree(path, source)?;
+    Ok(python::has_main_guard(tree.root_node(), source))
 }
 
 /// Parses one host-language file once for SQL call-site analysis and
@@ -379,6 +393,7 @@ pub fn detect_language(path: &str) -> Option<Language> {
         "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Some(Language::Cpp),
         "rs" => Some(Language::Rust),
         "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
+        "py" => Some(Language::Python),
         "ts" | "mts" | "cts" => Some(Language::TypeScript),
         "tsx" => Some(Language::Tsx),
         _ => None,
@@ -393,6 +408,7 @@ fn grammar(language: Language) -> TsLanguage {
         Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
         Language::C => tree_sitter_c::LANGUAGE.into(),
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
+        Language::Python => tree_sitter_python::LANGUAGE.into(),
         Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
     }
@@ -406,7 +422,7 @@ fn discover_tree<'tree>(
 ) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        if is_function(node.kind(), language) {
+        if is_function(node, language) {
             functions.push(node);
         }
         if node.is_error() || node.is_missing() {
@@ -427,7 +443,17 @@ fn discover_tree<'tree>(
         push_children_reversed(node, &mut stack);
     }
 }
-fn is_function(kind: &str, language: Language) -> bool {
+/// True when `node` is a function definition for `language`.
+///
+/// Python's `lambda` keyword token carries the same kind string as the
+/// `lambda` rule, so only named nodes are functions; every other supported
+/// grammar spells its function rules as named nodes too, so the gate is
+/// uniform.
+fn is_function(node: Node<'_>, language: Language) -> bool {
+    if !node.is_named() {
+        return false;
+    }
+    let kind = node.kind();
     match language {
         Language::Go => matches!(
             kind,
@@ -451,6 +477,7 @@ fn is_function(kind: &str, language: Language) -> bool {
         ),
         Language::C | Language::Cpp => matches!(kind, "function_definition" | "lambda_expression"),
         Language::Rust => matches!(kind, "function_item" | "closure_expression"),
+        Language::Python => matches!(kind, "function_definition" | "lambda"),
     }
 }
 
@@ -468,7 +495,7 @@ fn analyze_node(
     let kind = function_kind(node, language);
     let start_byte = node.start_byte() as u64;
     let end_byte = node.end_byte() as u64;
-    let name = function_name(node, source);
+    let name = function_name(node, language, source);
     let recursive = !name.starts_with('<') && calls_self(node, language, &name, source);
     analyze_function(
         FunctionInput {
@@ -500,6 +527,16 @@ fn function_kind(node: Node<'_>, language: Language) -> FunctionKind {
     if language == Language::Cpp && node.kind() == "function_definition" && cpp_is_method(node) {
         return FunctionKind::Method;
     }
+    // Python has no method node: a `def` inside a class body is still a
+    // `function_definition`, so the method verdict walks the enclosing chain.
+    if language == Language::Python {
+        if node.kind() == "lambda" {
+            return FunctionKind::Lambda;
+        }
+        if node.kind() == "function_definition" && python_is_method(node) {
+            return FunctionKind::Method;
+        }
+    }
     match node.kind() {
         "method_definition" => FunctionKind::Method,
         "closure_expression" => FunctionKind::Lambda,
@@ -523,7 +560,7 @@ fn walk_function(
     let mut next_sequence = 0;
     let mut stack = vec![(root, 0, false)];
     while let Some((node, nesting, inside_logical)) = stack.pop() {
-        if node.id() != root.id() && is_function(node.kind(), language) {
+        if node.id() != root.id() && is_function(node, language) {
             if language == Language::Java && node.kind() == "lambda_expression" {
                 events.push(Event::Decision {
                     kind: DecisionKind::Arrow,
@@ -550,9 +587,15 @@ fn walk_function(
             });
         }
         if node.kind() == "if_statement" {
+            // Python repeats the `alternative` field once per `elif_clause`
+            // before the trailing `else_clause`, so the first alternative of an
+            // if/elif chain is an `elif_clause`: it is scored as an else-if, not
+            // as an else, and the final `else_clause` still fires below.
             if let Some(alternative) = node.child_by_field_name("alternative")
-                && alternative.kind() != "if_statement"
-                && alternative.kind() != "else_clause"
+                && !matches!(
+                    alternative.kind(),
+                    "if_statement" | "else_clause" | "elif_clause"
+                )
             {
                 events.push(Event::Else {
                     line: node.start_position().row as u32 + 1,
@@ -572,7 +615,7 @@ fn walk_function(
             });
         }
 
-        let this_logical = logical_operator(node, source).is_some();
+        let this_logical = logical_operator(node, language, source).is_some();
         if this_logical && !inside_logical {
             collect_logical(node, language, next_sequence, nesting, events);
             next_sequence += 1;
@@ -601,7 +644,7 @@ fn walk_function(
                 start: node.start_byte(),
                 end: node.end_byte(),
             };
-            if is_operator(node.kind()) {
+            if is_operator_leaf(node.kind(), language) {
                 events.push(Event::Operator(span));
             } else if is_operand_leaf(node, language) {
                 events.push(Event::Operand(span));
@@ -666,6 +709,25 @@ fn decision_kind(node: Node<'_>, language: Language, source: &[u8]) -> Option<De
         "throw_statement" if !matches!(language, Language::Java | Language::Cpp) => {
             Some(DecisionKind::Throw)
         }
+        _ if language == Language::Python => python_decision_kind(node.kind()),
+        _ => None,
+    }
+}
+
+/// Python-only decision kinds, keyed on tree-sitter-python node kinds.
+///
+/// `elif_clause` is not an `if_statement`: it maps to `If` and is scored as an
+/// else-if, so a chain adds one point per branch and never raises nesting.
+/// `for_in_clause`/`if_clause` are comprehension clauses, scored so a
+/// comprehension reads like the equivalent explicit loop.
+fn python_decision_kind(kind: &str) -> Option<DecisionKind> {
+    match kind {
+        "elif_clause" | "if_clause" => Some(DecisionKind::If),
+        "for_in_clause" => Some(DecisionKind::Loop),
+        "except_clause" => Some(DecisionKind::Catch),
+        "match_statement" => Some(DecisionKind::Switch),
+        "case_clause" => Some(DecisionKind::Case),
+        "raise_statement" => Some(DecisionKind::Throw),
         _ => None,
     }
 }
@@ -692,6 +754,9 @@ fn is_labeled_jump(node: Node<'_>, language: Language) -> bool {
 }
 
 fn is_else_if(node: Node<'_>) -> bool {
+    if node.kind() == "elif_clause" {
+        return true;
+    }
     if !matches!(node.kind(), "if_statement" | "if_expression") {
         return false;
     }
@@ -709,13 +774,17 @@ fn has_if_child(node: Node<'_>) -> bool {
         .any(|child| matches!(child.kind(), "if_statement" | "if_expression"))
 }
 
-fn logical_operator(node: Node<'_>, source: &[u8]) -> Option<LogicalOperator> {
+fn logical_operator(node: Node<'_>, language: Language, source: &[u8]) -> Option<LogicalOperator> {
     // `let_chain` is Rust's `if let A = x && let B = y`: its `&&` separators
     // are direct tokens of the chain, never `binary_expression` operators.
+    // Python spells its logical operators as the keyword tokens inside a
+    // dedicated `boolean_operator` node.
+    let python_boolean = language == Language::Python && node.kind() == "boolean_operator";
     if !matches!(
         node.kind(),
         "binary_expression" | "binary_expression2" | "let_chain"
-    ) {
+    ) && !python_boolean
+    {
         return None;
     }
     let mut cursor = node.walk();
@@ -723,6 +792,8 @@ fn logical_operator(node: Node<'_>, source: &[u8]) -> Option<LogicalOperator> {
         .find_map(|child| match node_text(child, source) {
             "&&" => Some(LogicalOperator::And),
             "||" => Some(LogicalOperator::Or),
+            "and" if language == Language::Python => Some(LogicalOperator::And),
+            "or" if language == Language::Python => Some(LogicalOperator::Or),
             _ => None,
         })
 }
@@ -738,7 +809,7 @@ fn collect_logical(
     while let Some(current) = stack.pop() {
         // Nested function bodies have their own walk: an operator inside an
         // arrow/lambda must not join the enclosing function's sequence.
-        if current.id() != node.id() && is_function(current.kind(), language) {
+        if current.id() != node.id() && is_function(current, language) {
             continue;
         }
         if current.child_count() == 0 {
@@ -747,6 +818,8 @@ fn collect_logical(
             let operator = match current.kind() {
                 "&&" => Some(LogicalOperator::And),
                 "||" => Some(LogicalOperator::Or),
+                "and" if language == Language::Python => Some(LogicalOperator::And),
+                "or" if language == Language::Python => Some(LogicalOperator::Or),
                 _ => None,
             };
             if let Some(operator) = operator {
@@ -826,8 +899,12 @@ fn c_family_function_parameters<'tree>(node: Node<'tree>) -> Option<Node<'tree>>
     }
 }
 
-fn function_name(node: Node<'_>, source: &[u8]) -> String {
-    if node.kind() == "function_definition" {
+fn function_name(node: Node<'_>, language: Language, source: &[u8]) -> String {
+    // Both the C family and Python spell a `def`-like declaration
+    // `function_definition`; only the C family hides the name under a
+    // `declarator`, so the branch stays language-gated and Python falls
+    // through to the `name` field below.
+    if node.kind() == "function_definition" && matches!(language, Language::C | Language::Cpp) {
         return c_family_function_declarator_name(node)
             .map(|name| node_text(name, source).to_owned())
             .unwrap_or_else(|| {
@@ -880,6 +957,18 @@ fn function_name(node: Node<'_>, source: &[u8]) -> String {
     {
         return node_text(pattern, source).to_owned();
     }
+    // Python binds a lambda to an assignment target: `f = lambda x: ...` names
+    // the lambda `f`, the way a Rust closure takes its `let` binding.
+    if node.kind() == "lambda"
+        && language == Language::Python
+        && let Some(binding) = node
+            .parent()
+            .filter(|parent| parent.kind() == "assignment")
+            .and_then(|parent| parent.child_by_field_name("left"))
+        && binding.kind() == "identifier"
+    {
+        return node_text(binding, source).to_owned();
+    }
     if let Some(name) = node.child_by_field_name("name") {
         return node_text(name, source).to_owned();
     }
@@ -911,7 +1000,7 @@ fn function_name(node: Node<'_>, source: &[u8]) -> String {
 fn calls_self(root: Node<'_>, language: Language, name: &str, source: &[u8]) -> bool {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        if node.id() != root.id() && is_function(node.kind(), language) {
+        if node.id() != root.id() && is_function(node, language) {
             continue;
         }
         let callee = match language {
@@ -1022,6 +1111,35 @@ fn calls_self(root: Node<'_>, language: Language, name: &str, source: &[u8]) -> 
                     None
                 }
             }
+            // Python accepts a bare call and a `self.method()` receiver call;
+            // an absolute-import-style module call (`os.path.join`) is another
+            // module's function, never a cycle.
+            Language::Python => {
+                if node.kind() == "call" {
+                    node.child_by_field_name("function").and_then(|function| {
+                        match function.kind() {
+                            "identifier" => Some(function),
+                            "attribute" => {
+                                let is_self =
+                                    function
+                                        .child_by_field_name("object")
+                                        .is_some_and(|object| {
+                                            object.kind() == "identifier"
+                                                && node_text(object, source) == "self"
+                                        });
+                                if is_self {
+                                    function.child_by_field_name("attribute")
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        }
+                    })
+                } else {
+                    None
+                }
+            }
         };
         if callee.is_some_and(|callee| node_text(callee, source) == name) {
             return true;
@@ -1032,6 +1150,32 @@ fn calls_self(root: Node<'_>, language: Language, name: &str, source: &[u8]) -> 
 }
 
 fn parameter_count(node: Node<'_>, language: Language, source: &[u8]) -> u32 {
+    // Python's `parameters` node is also the kind name Rust uses, but Python
+    // adds named `keyword_separator` (`*`) and `positional_separator` (`/`)
+    // children and keeps comments inside the list, so the count is an
+    // allow-list of the six parameter carriers. `self` is a plain
+    // `identifier`, so the receiver counts like any other parameter.
+    if language == Language::Python {
+        return node
+            .child_by_field_name("parameters")
+            .map_or(0, |parameters| {
+                let mut cursor = parameters.walk();
+                parameters
+                    .named_children(&mut cursor)
+                    .filter(|child| {
+                        matches!(
+                            child.kind(),
+                            "identifier"
+                                | "typed_parameter"
+                                | "default_parameter"
+                                | "typed_default_parameter"
+                                | "list_splat_pattern"
+                                | "dictionary_splat_pattern"
+                        )
+                    })
+                    .count() as u32
+            });
+    }
     if matches!(language, Language::C | Language::Cpp)
         && let Some(parameters) = c_family_function_parameters(node)
     {
@@ -1129,6 +1273,22 @@ fn rust_is_method(node: Node<'_>) -> bool {
         .is_some_and(|owner| matches!(owner.kind(), "impl_item" | "trait_item"))
 }
 
+/// True when a Python `function_definition` sits inside a `class_definition`
+/// body: `def run(self)` in `class Worker` is a method, a module-level `def` is
+/// not. The walk crosses nested blocks and decorators; a `def` nested inside a
+/// function that is itself inside a class still reports a method, because the
+/// enclosing chain reaches the class.
+fn python_is_method(node: Node<'_>) -> bool {
+    let mut ancestor = node.parent();
+    while let Some(current) = ancestor {
+        if current.kind() == "class_definition" {
+            return true;
+        }
+        ancestor = current.parent();
+    }
+    false
+}
+
 fn is_logical_loc(kind: &str, language: Language) -> bool {
     matches!(
         kind,
@@ -1190,6 +1350,21 @@ fn is_logical_loc(kind: &str, language: Language) -> bool {
                 | "preproc_elif"
                 | "preproc_else"
         ))
+        || (language == Language::Python
+            && matches!(
+                kind,
+                "raise_statement"
+                    | "with_statement"
+                    | "assert_statement"
+                    | "match_statement"
+                    | "case_clause"
+                    | "global_statement"
+                    | "nonlocal_statement"
+                    | "pass_statement"
+                    | "delete_statement"
+                    | "for_in_clause"
+                    | "if_clause"
+            ))
 }
 
 fn is_operator(kind: &str) -> bool {
@@ -1257,6 +1432,44 @@ fn is_operator(kind: &str) -> bool {
     )
 }
 
+/// True when a childless node is an operator.
+///
+/// Shared operator kinds are keyed on punctuation. Python spells many
+/// operators as keywords, and Java's grammar emits anonymous tokens whose text
+/// is `import`, while other grammars emit `class`, `case`, `from`, `as`, or
+/// `del`; adding those strings to `is_operator` would move another language's
+/// Halstead numbers, so the keyword spellings stay behind the Python gate.
+/// `match` is absent: the shared table already counts it as an operator for
+/// every language, so a Python entry would be inert.
+fn is_operator_leaf(kind: &str, language: Language) -> bool {
+    is_operator(kind)
+        || (language == Language::Python
+            && matches!(
+                kind,
+                "and"
+                    | "or"
+                    | "not"
+                    | "is"
+                    | "lambda"
+                    | "with"
+                    | "as"
+                    | "assert"
+                    | "raise"
+                    | "try"
+                    | "except"
+                    | "finally"
+                    | "elif"
+                    | "def"
+                    | "import"
+                    | "from"
+                    | "del"
+                    | "pass"
+                    | "global"
+                    | "nonlocal"
+                    | "async"
+            ))
+}
+
 /// True when a childless node is an operand.
 ///
 /// Rust reports `true`/`false` as anonymous tokens inside expressions and as
@@ -1267,6 +1480,12 @@ fn is_operand_leaf(node: Node<'_>, language: Language) -> bool {
     if matches!(language, Language::C | Language::Cpp)
         && matches!(node.kind(), "number_literal" | "string_content")
     {
+        return node.is_named();
+    }
+    // Python wraps a literal in a `string` node whose leaf is
+    // `string_content`, so the shared `string` entry never reaches this
+    // check: the leaf is the operand.
+    if language == Language::Python && node.kind() == "string_content" {
         return node.is_named();
     }
     if !is_operand(node.kind()) {
@@ -1305,6 +1524,9 @@ fn is_operand(kind: &str) -> bool {
                 | "boolean_literal"
                 | "char_literal"
                 | "self"
+                | "integer"
+                | "float"
+                | "none"
         )
 }
 
@@ -1336,6 +1558,7 @@ const HOST_SQL_CALLS: &[&str] = &[
     "ExecContext",
     "query_as",
     "query_scalar",
+    "executemany",
 ];
 
 fn is_loop_kind(kind: &str) -> bool {
@@ -1389,6 +1612,14 @@ fn host_sql_sites_from_tree(language: Language, source: &[u8], root: Node<'_>) -
                     || (language == Language::Rust
                         && first_argument.is_some_and(|argument| {
                             subtree_contains_format_macro(argument, source)
+                        }))
+                    // Python builds query text with f-strings, `%` formatting,
+                    // `.format(...)`, or `+` concatenation, none of which the
+                    // shared `template_substitution`/`binary_expression` probes
+                    // can see.
+                    || (language == Language::Python
+                        && first_argument.is_some_and(|argument| {
+                            subtree_is_dynamic_python(argument, source)
                         }));
             let inside_loop = has_loop_ancestor(node, language);
             if seen.insert((node.start_byte(), node.end_byte(), dynamic, inside_loop)) {
@@ -1452,6 +1683,18 @@ fn sql_call_target<'a>(
             (name_node, node.child_by_field_name("arguments")?)
         }
         Language::Cpp => return None,
+        Language::Python => {
+            if node.kind() != "call" {
+                return None;
+            }
+            let function = node.child_by_field_name("function")?;
+            let name_node = match function.kind() {
+                "identifier" => function,
+                "attribute" => function.child_by_field_name("attribute")?,
+                _ => return None,
+            };
+            (name_node, node.child_by_field_name("arguments")?)
+        }
         Language::Rust => {
             if node.kind() != "call_expression" {
                 return None;
@@ -1489,7 +1732,7 @@ fn first_named_child<'a>(node: Node<'a>) -> Option<Node<'a>> {
 fn subtree_is_dynamic(root: Node<'_>, language: Language) -> bool {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        if node.id() != root.id() && is_function(node.kind(), language) {
+        if node.id() != root.id() && is_function(node, language) {
             continue;
         }
         if node.kind() == "template_substitution" {
@@ -1503,6 +1746,46 @@ fn subtree_is_dynamic(root: Node<'_>, language: Language) -> bool {
     false
 }
 
+/// True when a Python argument subtree builds query text dynamically.
+///
+/// Python has no template substitution and its concatenation is a
+/// `binary_operator`, not a `binary_expression`: an f-string carries
+/// `interpolation` children, and `%` formatting, `.format(...)`, and `+`
+/// concatenation all hide the text from a literal reader. Nested function
+/// bodies are not entered, mirroring `subtree_is_dynamic`.
+fn subtree_is_dynamic_python(root: Node<'_>, source: &[u8]) -> bool {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.id() != root.id() && is_function(node, Language::Python) {
+            continue;
+        }
+        match node.kind() {
+            "interpolation" => return true,
+            "binary_operator"
+                if matches!(
+                    node.child_by_field_name("operator")
+                        .map(|operator| node_text(operator, source)),
+                    Some("+" | "%")
+                ) =>
+            {
+                return true;
+            }
+            "call" if python_call_is_format(node, source) => return true,
+            _ => {}
+        }
+        push_children_reversed(node, &mut stack);
+    }
+    false
+}
+
+/// True when a Python call is a `str.format(...)` method call.
+fn python_call_is_format(node: Node<'_>, source: &[u8]) -> bool {
+    node.child_by_field_name("function")
+        .filter(|function| function.kind() == "attribute")
+        .and_then(|function| function.child_by_field_name("attribute"))
+        .is_some_and(|name| node_text(name, source) == "format")
+}
+
 /// True when the subtree holds a `Sprintf`-family call (Go only):
 /// `fmt.Sprintf("...%v...", x)` builds the query text dynamically by
 /// construction. Nested function bodies are not entered, mirroring
@@ -1510,7 +1793,7 @@ fn subtree_is_dynamic(root: Node<'_>, language: Language) -> bool {
 fn subtree_contains_sprintf(root: Node<'_>, source: &[u8]) -> bool {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        if node.id() != root.id() && is_function(node.kind(), Language::Go) {
+        if node.id() != root.id() && is_function(node, Language::Go) {
             continue;
         }
         if node.kind() == "call_expression"
@@ -1537,7 +1820,7 @@ fn subtree_contains_sprintf(root: Node<'_>, source: &[u8]) -> bool {
 fn subtree_contains_format_macro(root: Node<'_>, source: &[u8]) -> bool {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        if node.id() != root.id() && is_function(node.kind(), Language::Rust) {
+        if node.id() != root.id() && is_function(node, Language::Rust) {
             continue;
         }
         if node.kind() == "macro_invocation"
@@ -1568,7 +1851,7 @@ fn has_loop_ancestor(node: Node<'_>, language: Language) -> bool {
         if is_loop_kind(kind) {
             return true;
         }
-        if is_function(kind, language) {
+        if is_function(parent, language) {
             return false;
         }
         current = parent.parent();

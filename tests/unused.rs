@@ -499,3 +499,117 @@ fn package_directory_conventions_cover_index_and_config_files() {
     assert!(report.complete, "{report:?}");
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn python_run_conventions_keep_their_modules_out_of_the_report() {
+    let root = temporary_directory();
+    // `python -m package` executes `__main__.py`, so the file is an entry
+    // point and its own imports are reachable.
+    write(
+        &root,
+        "pkg/__main__.py",
+        "from .runner import start\n\nstart()\n",
+    );
+    write(
+        &root,
+        "pkg/runner.py",
+        "def start() -> int:\n    return 1\n",
+    );
+    // A module guard makes the file runnable: `python pkg/guard.py` runs it
+    // even though nothing imports it.
+    write(
+        &root,
+        "pkg/guard.py",
+        "from .library import helper\n\n\ndef main() -> int:\n    return helper()\n\n\nif __name__ == \"__main__\":\n    main()\n",
+    );
+    write(
+        &root,
+        "pkg/library.py",
+        "def helper() -> int:\n    return 2\n",
+    );
+    // Django's loader runs `manage.py` by name, with no import edge.
+    write(&root, "manage.py", "def main() -> int:\n    return 0\n");
+    // A library module nothing imports is the finding this analysis exists to
+    // produce.
+    write(
+        &root,
+        "pkg/orphan.py",
+        "def unused_helper() -> int:\n    return 3\n",
+    );
+    // A guard below the module body never runs the file, and an unrelated
+    // comparison only looks like a guard.
+    write(
+        &root,
+        "pkg/nested_guard.py",
+        "def run() -> int:\n    if __name__ == \"__main__\":\n        return 1\n    return 0\n",
+    );
+    write(
+        &root,
+        "pkg/not_a_guard.py",
+        "if mode == \"prod\":\n    pass\n",
+    );
+
+    let report = analyze_unused(&root, &[], &[], &UnusedConfig::default()).unwrap();
+
+    let entries = entry_rows(&report);
+    for expected in [
+        ("manage.py", "convention"),
+        ("pkg/__main__.py", "convention"),
+        ("pkg/guard.py", "convention"),
+    ] {
+        assert!(entries.contains(&expected), "{expected:?} in {entries:?}");
+    }
+    assert_eq!(
+        unused_file_paths(&report),
+        ["pkg/nested_guard.py", "pkg/not_a_guard.py", "pkg/orphan.py"]
+    );
+    assert!(report.complete, "{:?}", report.reason);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn python_relative_imports_resolve_while_absolute_ones_stay_unresolved() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "manage.py",
+        "from .pkg.relative import run\n\nrun()\n",
+    );
+    write(
+        &root,
+        "pkg/relative.py",
+        "from .shadow import helper\n\n\ndef run() -> int:\n    return helper()\n",
+    );
+    write(
+        &root,
+        "pkg/shadow.py",
+        "def helper() -> int:\n    return 1\n",
+    );
+    // Both absolute specifiers name a file beside the importing module, which
+    // is exactly the shape a resolver must not guess at: `import shadow`
+    // names a module on `sys.path`, not `pkg/shadow.py`.
+    write(
+        &root,
+        "pkg/absolute.py",
+        "import shadow\nimport only_absolute\n\n\ndef other() -> int:\n    return shadow.helper()\n",
+    );
+    write(
+        &root,
+        "pkg/only_absolute.py",
+        "def helper() -> int:\n    return 2\n",
+    );
+
+    let report = analyze_unused(&root, &[], &[], &UnusedConfig::default()).unwrap();
+
+    // The relative chain `manage.py` -> `pkg/relative.py` -> `pkg/shadow.py`
+    // resolves, so neither file is reported; the absolutely imported module is
+    // named by nothing else and stays a row.
+    assert_eq!(
+        unused_file_paths(&report),
+        ["pkg/absolute.py", "pkg/only_absolute.py"]
+    );
+    assert_eq!(report.unresolved, 2);
+    assert!(!report.complete);
+    assert_eq!(report.reason, Some("unresolved_references"));
+    std::fs::remove_dir_all(root).unwrap();
+}

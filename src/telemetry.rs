@@ -486,6 +486,7 @@ const LABEL_VALUES: &[(&str, &[&str])] = &[
             "cpp",
             "java",
             "javascript",
+            "python",
             "rust",
             "typescript",
             "tsx",
@@ -1430,6 +1431,7 @@ mod tests {
         assert_eq!(language_label("src/Main.java"), Some("java"));
         assert_eq!(language_label("src/api.HPP"), Some("cpp"));
         assert_eq!(language_label("app.min.MJS"), Some("javascript"));
+        assert_eq!(language_label("src/doctor.py"), Some("python"));
         assert_eq!(language_label("src/index.TS"), Some("typescript"));
         assert_eq!(language_label("src/view.tsx"), Some("tsx"));
         assert_eq!(language_label("notes.md"), None);

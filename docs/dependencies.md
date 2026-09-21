@@ -1,7 +1,10 @@
 # Dependencies and impact
 
-Static file-level dependency intelligence for Go, JavaScript, TypeScript, Java, Rust, C, and C++.
+Static file-level dependency intelligence for Go, JavaScript, TypeScript, Java, Rust, C, C++, and Python.
 Go imports are module-qualified paths, so `GoImport` references are `Ignored` and never produce edges.
+Python absolute imports are module-qualified paths on `sys.path`, so
+`PythonAbsoluteImport` references are recorded as `unresolved` with reason
+`unsupported` and never produce edges.
 The analyzer parses code with Tree-sitter and never executes it: no build
 runtime, no network, no project scripts.
 
@@ -125,6 +128,31 @@ C++ (`.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`):
   as `#include HEADER_FILE` are ignored. The analyzer does not know compiler
   include search paths or macro expansion state, so it does not guess.
 
+Python (`.py`):
+
+- Relative imports — `from . import x`, `from .mod import y`,
+  `from ..pkg.sub import z` — resolve to a file relative to the declaring
+  file's own directory → `kind: "import"`. The level climbs directories:
+  one dot (`.`) stays in the declaring file's own directory, two dots (`..`)
+  climb one directory, three dots climb two. Candidates are `<base>.py` and
+  `<base>/__init__.py`, so `from ..pkg.sub import z` in `app/svc/api.py`
+  names `app/pkg/sub.py` or `app/pkg/sub/__init__.py`.
+- A bare `from . import a, b` imports submodules of the current package, so
+  it produces one reference per imported name: `a` resolves to `a.py` or
+  `a/__init__.py` beside the declaring file, and `b` likewise.
+- Relative outcomes: several candidates → `ambiguous` (both `mod.py` and
+  `mod/__init__.py` exist); no candidate → `not_found`; a level that climbs
+  above the analysis root → `outside_scope`.
+- Absolute dotted imports — `import a.b`, `import a.b as c`,
+  `from a.b import d` — name a module on `sys.path`, which a parser cannot
+  see. They are recorded as `unresolved` with reason `unsupported` (one row
+  per module path named), never resolved and never an edge, so the report
+  stays honest: `complete` is `false` with
+  `reason: "unresolved_references"` whenever a file imports absolutely.
+- `import_statement` and `import_from_statement` nested inside a function,
+  class, or `if` block are references too: the whole file is walked, not
+  just its top level.
+
 Every edge carries `"confidence": "high"` by construction; the agent-json
 projection drops it but keeps every `unresolved` reference, so agents never
 mistake "unresolved" for "no dependency".
@@ -178,6 +206,15 @@ across runs.
 - No inline Rust modules: `mod foo { ... }` is not a file reference, so the
   module tree inside a file contributes no edges of its own.
 - No C++ system-include search path: angle-bracket includes are ignored.
+- No Python `sys.path`, virtual-environment, or package-root knowledge:
+  absolute imports (`import a.b`, `from a.b import c`) are recorded as
+  `unsupported`, never resolved.
+- No Python dynamic imports: `importlib.import_module(...)` and
+  `__import__(...)` calls are invisible to the graph.
+- No `.pyi` stubs: they declare signatures without bodies.
+- No Python attribute-to-submodule resolution: `from .mod import name`
+  references the module `mod` only, so a name that is really a submodule of
+  a package resolves through that package's `__init__.py`, or not at all.
 - No C++ preprocessor expansion: macro-built include paths are ignored.
 - No method or function call graph: edges are file-level import/call-form
   evidence only (`call` means the `require()` / `import()` form, not a call
