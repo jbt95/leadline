@@ -92,6 +92,23 @@ are reported as parse errors and score nothing; the modern `?` operator
 scores as above. Rust files are therefore not score-comparable with
 Go/Java/JS/TS files.
 
+### C counting policy
+
+C follows the shared cyclomatic and cognitive rules for conditionals,
+loops, switches, ternaries, and `&&`/`||`. The C grammar emits both
+`case` and `default` as `case_statement`, so each arm adds 1 cyclomatic
+and 0 cognitive. C has no `catch` or `throw` constructs. A
+`goto_statement` and its `labeled_statement` each add 1 cognitive and 0
+cyclomatic. Direct self-recursion adds 1 cognitive.
+
+Preprocessor conditionals (`#if`, `#ifdef`, `#elif`, and `#else`) count
+toward logical LOC but are not decisions. A lone `void` parameter means
+zero parameters, and `...` is not a named parameter. Function-like macro
+bodies are raw `preproc_arg` text, not expressions, so decisions, loops,
+and switches inside them are not scored. Macro-heavy C files can
+therefore under-report complexity, like Rust files with control flow
+inside macro token trees.
+
 ## Cognitive complexity
 
 Add `1 + current nesting` for `if`, loops, `catch`, `switch`, and ternary expressions. An `else if` adds 1 and continues the original chain. A final `else` adds 1. A labeled `break` or `continue` adds 1. Structural constructs increase nesting for structural descendants.

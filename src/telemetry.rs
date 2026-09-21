@@ -481,7 +481,7 @@ const LABEL_VALUES: &[(&str, &[&str])] = &[
     ),
     (
         "language",
-        &["java", "javascript", "rust", "typescript", "tsx"],
+        &["c", "java", "javascript", "rust", "typescript", "tsx"],
     ),
 ];
 

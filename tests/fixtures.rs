@@ -94,6 +94,19 @@ fn tiny_fixtures_define_default_v1() {
     assert_complexity("rust/labels.rs", "find", 3, 4, 2, 2);
     assert_complexity("rust/let_chain.rs", "both", 3, 2, 1, 2);
     assert_complexity("rust/try_operator.rs", "parse", 2, 0, 0, 1);
+
+    assert_complexity("c/empty.c", "empty", 1, 0, 0, 0);
+    assert_complexity("c/decisions.c", "choose", 4, 5, 2, 1);
+    assert_complexity("c/logic.c", "logic", 3, 2, 0, 3);
+    assert_complexity("c/loops.c", "loops", 4, 6, 3, 1);
+    assert_complexity("c/recursion.c", "fact", 2, 2, 1, 1);
+    assert_complexity("c/switch.c", "classify", 3, 1, 1, 1);
+    assert_complexity("c/ternary.c", "absolute", 2, 1, 1, 1);
+    assert_complexity("c/goto.c", "jumps", 1, 2, 0, 0);
+    assert_complexity("c/preprocessor.c", "preprocessed", 1, 0, 0, 1);
+    assert_complexity("c/parameters.c", "none", 1, 0, 0, 0);
+    assert_complexity("c/parameters.c", "variadic", 1, 0, 0, 1);
+    assert_complexity("c/macros.c", "macro_body", 1, 0, 0, 1);
 }
 
 #[test]
@@ -127,6 +140,65 @@ fn rust_kinds_and_parity() {
     assert_eq!(rust_choose.cyclomatic, go_choose.cyclomatic);
     assert_eq!(rust_choose.cognitive, go_choose.cognitive);
     assert_eq!(rust_choose.max_nesting, go_choose.max_nesting);
+}
+
+#[test]
+fn c_function_kind_and_javascript_parity() {
+    let c_file = fixture("c/decisions.c");
+    assert_eq!(function(&c_file, "choose").kind, FunctionKind::Function);
+    let javascript_file = fixture("javascript/decisions.js");
+    let c_choose = &function(&c_file, "choose").metrics;
+    let javascript_choose = &function(&javascript_file, "choose").metrics;
+    assert_eq!(c_choose.cyclomatic, javascript_choose.cyclomatic);
+    assert_eq!(c_choose.cognitive, javascript_choose.cognitive);
+    assert_eq!(c_choose.max_nesting, javascript_choose.max_nesting);
+}
+
+#[test]
+fn go_grouped_parameters_survive_c_support() {
+    let go = leadline::analyze_source(
+        "grouped.go",
+        b"package fixtures\nfunc grouped(a, b, c bool) {}\n",
+    )
+    .unwrap();
+    assert_eq!(function(&go, "grouped").metrics.parameters, 3);
+}
+
+#[test]
+fn c_only_discovers_function_definitions() {
+    let file = leadline::analyze_source(
+        "definitions.c",
+        b"int forward(int value);\nint defined(int value) { return value; }\n",
+    )
+    .unwrap();
+    assert_eq!(
+        file.functions
+            .iter()
+            .map(|function| function.name.as_str())
+            .collect::<Vec<_>>(),
+        ["defined"]
+    );
+}
+
+#[test]
+fn c_preprocessor_conditionals_only_add_logical_loc() {
+    let file = fixture("c/preprocessor.c");
+    let metrics = &function(&file, "preprocessed").metrics;
+    assert_eq!(metrics.logical_loc, 4);
+    assert_eq!((metrics.cyclomatic, metrics.cognitive), (1, 0));
+}
+
+#[test]
+fn c_number_and_string_literals_are_halstead_operands() {
+    let number =
+        leadline::analyze_source("number.c", b"int probe(int value) { return value + 42; }\n")
+            .unwrap();
+    assert_eq!(function(&number, "probe").metrics.halstead_n2, 3);
+
+    let string =
+        leadline::analyze_source("string.c", b"const char *text(void) { return \"x\"; }\n")
+            .unwrap();
+    assert_eq!(function(&string, "text").metrics.halstead_n2, 2);
 }
 
 #[test]

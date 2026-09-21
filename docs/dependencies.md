@@ -1,6 +1,6 @@
 # Dependencies and impact
 
-Static file-level dependency intelligence for Go, JavaScript, TypeScript, Java, and Rust.
+Static file-level dependency intelligence for C, Go, JavaScript, TypeScript, Java, and Rust.
 Go imports are module-qualified paths, so `GoImport` references are `Ignored` and never produce edges.
 The analyzer parses code with Tree-sitter and never executes it: no build
 runtime, no network, no project scripts.
@@ -84,6 +84,17 @@ Java (`.java`):
 - Same-package uses without an import statement produce no edge. Only
   explicit imports are evidence.
 
+C (`.c`):
+
+- `#include "path/to/file.c"` resolves the exact path relative to the
+  including file's directory → `kind: "import"`. Includes carry their own
+  extension, so the resolver does not probe alternatives.
+- A quoted include with no discovered exact target is `unresolved` with
+  reason `not_found`.
+- `#include <system.h>` and macro-built paths such as `#include HEADER`
+  are ignored. The system search path and macro expansion environment are
+  unknown, so the analyzer does not guess.
+
 Rust (`.rs`):
 
 - `mod foo;` (a module declaration without a body) resolves inside the
@@ -146,6 +157,9 @@ across runs.
 - No wildcard Java imports (`import pkg.*` is recorded, never resolved).
 - No same-package implicit Java references: files using a type without an
   explicit import contribute no edge.
+- No C compiler include paths or macro expansion: only exact quoted paths
+  relative to the including file resolve; angle-bracket and macro-built
+  includes are ignored.
 - No Rust `use` or `extern crate` edges: those paths are module-qualified,
   never file-relative.
 - No inline Rust modules: `mod foo { ... }` is not a file reference, so the

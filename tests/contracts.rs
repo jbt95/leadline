@@ -22,6 +22,7 @@ fn public_language_detection_contract_covers_every_extension() {
         ("example.mts", Some(Language::TypeScript)),
         ("example.cts", Some(Language::TypeScript)),
         ("example.test.tsx", Some(Language::Tsx)),
+        ("example.c", Some(Language::C)),
         ("example.rs", Some(Language::Rust)),
         ("example.json", None),
         ("Makefile", None),

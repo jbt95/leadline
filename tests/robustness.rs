@@ -73,6 +73,10 @@ const SOURCE_SEEDS: &[(&str, &str)] = &[
         "class Seed {\n  int max(int a, int b) {\n    if (a > b) {\n      return a;\n    }\n    return b;\n  }\n}\n",
     ),
     (
+        "seed.c",
+        "int max(int a, int b) {\n  if (a > b) {\n    return a;\n  }\n  return b;\n}\n",
+    ),
+    (
         "seed.rs",
         "struct Counter {\n    n: i32,\n}\n\nimpl Counter {\n    fn add(&mut self, delta: i32) -> Option<i32> {\n        match delta {\n            0 => None,\n            _ => {\n                self.n += delta;\n                Some(self.n)\n            }\n        }\n    }\n}\n\nfn first(values: &[i32]) -> Option<i32> {\n    let mut found = None;\n    'outer: for value in values {\n        if *value > 0 {\n            found = Some(*value);\n            break 'outer;\n        }\n    }\n    found\n}\n",
     ),
