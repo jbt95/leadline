@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.16.0 - 2026-09-21
+
 ### Added
 
 - `unused` reports files no entry point reaches, `dependencies` entries no source file of their manifest imports, and JS/TS exports no import or re-export covers. Entry points come from `--entry`, `[unused] entries`, every discovered `package.json`, and the `index.*`/`main.*` and `*.config.*` conventions. Test files are excluded unless `--include-tests`. Informational only, and it says when unresolved references make reachability incomplete.
