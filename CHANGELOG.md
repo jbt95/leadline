@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.17.0 - 2026-09-21
+
 ### Added
 
 - Python language support: `analyze`, `check`, `changed`, and duplication tokenization handle `.py` sources (functions, methods, lambdas, comprehension clauses, `match` statements, `with`, and `try`/`except`/`finally`), while `.pyi` stubs stay out because they declare signatures with no bodies. The Python counting policy scores each comprehension `for` as a loop and each comprehension `if` as a branch, adds one cognitive point for the `else` on `for`, `while`, and `try` because it is another path a reader must follow, scores `raise` at +1 cyclomatic and +0 cognitive like JavaScript's `throw`, and scores `assert` at nothing. Dependency analysis resolves relative imports only, so absolute dotted imports produce no edges.

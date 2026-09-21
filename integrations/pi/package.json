@@ -1,6 +1,6 @@
 {
   "name": "leadline-pi",
-  "version": "0.16.2",
+  "version": "0.17.0",
   "description": "Native Pi extension for the leadline analyzer (warn-mode feedback, no metric logic)",
   "type": "module",
   "keywords": ["pi-package", "pi-extension"],
