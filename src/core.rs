@@ -15,6 +15,7 @@ pub enum Language {
     Go,
     Java,
     JavaScript,
+    Cpp,
     Rust,
     TypeScript,
     Tsx,
@@ -27,6 +28,7 @@ impl Language {
             Language::Go => "go",
             Language::Java => "java",
             Language::JavaScript => "javascript",
+            Language::Cpp => "cpp",
             Language::Rust => "rust",
             Language::TypeScript => "typescript",
             Language::Tsx => "tsx",
@@ -364,7 +366,11 @@ pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis
                     | DecisionKind::Try
                     | DecisionKind::Throw
                     | DecisionKind::Arrow => 1,
-                    DecisionKind::Catch if input.language != Language::Java => 1,
+                    DecisionKind::Catch
+                        if !matches!(input.language, Language::Java | Language::Cpp) =>
+                    {
+                        1
+                    }
                     DecisionKind::Catch | DecisionKind::Switch => 0,
                 };
                 let cognitive_increment = if else_if {

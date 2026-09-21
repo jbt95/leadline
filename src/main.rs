@@ -3296,6 +3296,11 @@ fn doctor_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut incomplete = false;
     for (language, file, snippet) in [
         (
+            "cpp",
+            "doctor.cpp",
+            "int check(bool value) { if (value) { return 1; } return 0; }",
+        ),
+        (
             "java",
             "Doctor.java",
             "class Doctor { void check() { int x = 1; } }",

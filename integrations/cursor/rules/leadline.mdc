@@ -1,6 +1,6 @@
 ---
 description: Use leadline for complexity feedback on changed code
-globs: ["**/*.java", "**/*.js", "**/*.ts", "**/*.tsx", "**/*.rs"]
+globs: ["**/*.java", "**/*.js", "**/*.ts", "**/*.tsx", "**/*.h", "**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.hpp", "**/*.hh", "**/*.hxx", "**/*.rs"]
 alwaysApply: false
 ---
 

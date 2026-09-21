@@ -94,6 +94,18 @@ fn tiny_fixtures_define_default_v1() {
     assert_complexity("rust/labels.rs", "find", 3, 4, 2, 2);
     assert_complexity("rust/let_chain.rs", "both", 3, 2, 1, 2);
     assert_complexity("rust/try_operator.rs", "parse", 2, 0, 0, 1);
+
+    assert_complexity("cpp/empty.cpp", "empty", 1, 0, 0, 0);
+    assert_complexity("cpp/decisions.cpp", "choose", 4, 5, 2, 1);
+    assert_complexity("cpp/exceptions.cpp", "parse", 2, 2, 1, 1);
+    assert_complexity("cpp/lambda.cpp", "positive", 2, 1, 1, 1);
+    assert_complexity("cpp/method.cpp", "add", 2, 1, 1, 1);
+    assert_complexity("cpp/range.cpp", "sum", 2, 1, 1, 1);
+    assert_complexity("cpp/template.cpp", "identity", 1, 0, 0, 1);
+    assert_complexity("cpp/ternary.cpp", "sign", 2, 1, 1, 1);
+    assert_complexity("cpp/header.h", "header_value", 1, 0, 0, 1);
+    assert_complexity("cpp/parameters.cpp", "no_args", 1, 0, 0, 0);
+    assert_complexity("cpp/parameters.cpp", "optional", 1, 0, 0, 1);
 }
 
 #[test]
@@ -127,6 +139,22 @@ fn rust_kinds_and_parity() {
     assert_eq!(rust_choose.cyclomatic, go_choose.cyclomatic);
     assert_eq!(rust_choose.cognitive, go_choose.cognitive);
     assert_eq!(rust_choose.max_nesting, go_choose.max_nesting);
+}
+
+#[test]
+fn cpp_kinds_and_parity() {
+    let method = fixture("cpp/method.cpp");
+    assert_eq!(function(&method, "add").kind, FunctionKind::Method);
+    let lambda = fixture("cpp/lambda.cpp");
+    assert_eq!(function(&lambda, "positive").kind, FunctionKind::Lambda);
+
+    let cpp_file = fixture("cpp/decisions.cpp");
+    let js_file = fixture("javascript/decisions.js");
+    let cpp_choose = &function(&cpp_file, "choose").metrics;
+    let js_choose = &function(&js_file, "choose").metrics;
+    assert_eq!(cpp_choose.cyclomatic, js_choose.cyclomatic);
+    assert_eq!(cpp_choose.cognitive, js_choose.cognitive);
+    assert_eq!(cpp_choose.max_nesting, js_choose.max_nesting);
 }
 
 #[test]
@@ -237,6 +265,8 @@ fn functions_carry_stable_ids_and_byte_spans() {
         "tsx/component.tsx",
         "rust/decisions.rs",
         "rust/closure.rs",
+        "cpp/decisions.cpp",
+        "cpp/lambda.cpp",
     ] {
         let file = fixture(relative);
         assert!(!file.functions.is_empty(), "no functions in {relative}");

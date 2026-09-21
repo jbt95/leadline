@@ -49,6 +49,22 @@ fn discovery_finds_rust_sources() {
 }
 
 #[test]
+fn discovery_finds_cpp_sources() {
+    let root = temporary_directory();
+    std::fs::create_dir_all(root.join("include")).unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("include/api.h"), "int api();\n").unwrap();
+    std::fs::write(root.join("src/main.cpp"), "int main() { return 0; }\n").unwrap();
+    std::fs::write(root.join("notes.txt"), "not source\n").unwrap();
+    let discovered = leadline::discovery::discover(&root).unwrap();
+    assert_eq!(
+        discovered,
+        vec![root.join("include/api.h"), root.join("src/main.cpp")]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn explicit_ignored_file_is_analyzable() {
     let root = temporary_directory();
     std::fs::write(root.join(".gitignore"), "ignored.ts\n").unwrap();

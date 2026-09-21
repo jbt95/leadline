@@ -298,6 +298,9 @@ fn resolve(
         RawDependencyKind::Java => resolve_java(&reference.specifier, false, java_types),
         RawDependencyKind::JavaStatic => resolve_java(&reference.specifier, true, java_types),
         RawDependencyKind::JavaWildcard => Resolution::Unresolved("unsupported"),
+        RawDependencyKind::LocalInclude => {
+            resolve_local_include(&reference.specifier, source, paths)
+        }
         // Go imports are module-qualified paths (`fmt`,
         // `github.com/org/repo/pkg`), never file-relative, so without
         // module-graph resolution there is nothing sound to resolve.
@@ -382,6 +385,17 @@ fn resolve_javascript(specifier: &str, source: &str, paths: &BTreeSet<String>) -
         }
     }
     Resolution::Unresolved("not_found")
+}
+
+fn resolve_local_include(specifier: &str, source: &str, paths: &BTreeSet<String>) -> Resolution {
+    let Some(target) = relative_target(source, specifier) else {
+        return Resolution::Unresolved("not_found");
+    };
+    if paths.contains(&target) {
+        Resolution::Resolved(target)
+    } else {
+        Resolution::Unresolved("not_found")
+    }
 }
 
 /// Resolves one Rust `mod foo;` declaration to `foo.rs` or `foo/mod.rs` inside

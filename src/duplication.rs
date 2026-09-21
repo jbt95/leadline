@@ -397,6 +397,7 @@ fn run_hash(language: Language, run: &[u32]) -> u64 {
         Language::Go => 0x733d_ae2b_9e37_07c1,
         Language::Java => 0x9e37_79b9_7f4a_7c15,
         Language::JavaScript => 0xc2b2_ae3d_27d4_eb4f,
+        Language::Cpp => 0x51ed_270b_9a3c_6f85,
         Language::Rust => 0xd1b5_4a32_d192_ed03,
         Language::TypeScript => 0x1656_67b1_9e37_79f9,
         Language::Tsx => 0x27d4_eb2f_1656_67b1,
