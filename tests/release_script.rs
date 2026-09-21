@@ -133,7 +133,19 @@ fn release_fixture() -> PathBuf {
 /// Give `root` a bare `origin` carrying its `main` and its `v0.1.0` tag.
 fn bare_remote(root: &Path) -> PathBuf {
     let remote = temporary_directory().join("origin.git");
-    git(root, &["init", "-q", "--bare", remote.to_str().unwrap()]);
+    // `-b main` matters: without it the bare HEAD follows the runner's
+    // init.defaultBranch, and a clone of it has no branch called main.
+    git(
+        root,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            remote.to_str().unwrap(),
+        ],
+    );
     git(root, &["remote", "add", "origin", remote.to_str().unwrap()]);
     git(root, &["push", "-q", "-u", "origin", "main"]);
     git(root, &["push", "-q", "origin", "v0.1.0"]);

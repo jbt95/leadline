@@ -4,6 +4,10 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Changed
+
+- Releases are cut automatically from the conventional commits merged to `main`: `feat` is a minor bump, `fix`/`perf`/`revert` patch, `!` or `BREAKING CHANGE` major. `scripts/release.sh` syncs every version file and closes the changelog, verifies the bumped tree, and pushes the commit and tag atomically; the `Auto release` workflow then dispatches the `Release` workflow with the new tag.
+
 ## 0.16.0 - 2026-09-21
 
 ### Added
