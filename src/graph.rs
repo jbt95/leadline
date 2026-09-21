@@ -298,13 +298,13 @@ fn resolve(
         RawDependencyKind::Java => resolve_java(&reference.specifier, false, java_types),
         RawDependencyKind::JavaStatic => resolve_java(&reference.specifier, true, java_types),
         RawDependencyKind::JavaWildcard => Resolution::Unresolved("unsupported"),
+        RawDependencyKind::LocalInclude => {
+            resolve_local_include(&reference.specifier, source, paths)
+        }
         // Go imports are module-qualified paths (`fmt`,
         // `github.com/org/repo/pkg`), never file-relative, so without
         // module-graph resolution there is nothing sound to resolve.
         RawDependencyKind::GoImport => Resolution::Ignored,
-        RawDependencyKind::LocalInclude => {
-            resolve_local_include(&reference.specifier, source, paths)
-        }
         // Rust modules are files: `mod foo;` names `foo.rs` or `foo/mod.rs`
         // beside the declaring file. `use` paths are module-qualified and
         // never reach this resolver.

@@ -57,7 +57,7 @@ Direct dependency licenses were checked from Cargo metadata:
 
 | Dependency | License |
 | --- | --- |
-| Tree-sitter and all six grammar packages | MIT |
+| Tree-sitter and all eight grammar packages | MIT |
 | `ignore` | Unlicense OR MIT |
 | `quick-xml` | MIT |
 | `rayon`, `serde`, `serde_json`, `criterion` | MIT OR Apache-2.0 |

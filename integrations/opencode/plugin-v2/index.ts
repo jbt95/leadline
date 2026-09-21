@@ -23,10 +23,10 @@ interface FunctionInput {
   name?: string;
 }
 
-// Leadline analyzes C/Java/JS/TS/TSX/Rust only. The hook skips the analyzer when
+// Leadline analyzes C/C++/Java/JS/TS/TSX/Rust only. The hook skips the analyzer when
 // the edited file definitely falls outside that scope; unknown input shapes
 // fall through to analysis (fail-open, never a missed regression).
-const LEADLINE_EXTENSIONS = [".c", ".java", ".js", ".jsx", ".ts", ".tsx", ".rs"] as const;
+const LEADLINE_EXTENSIONS = [".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".java", ".js", ".jsx", ".rs", ".ts", ".tsx"] as const;
 
 function editedPath(input: unknown): string | undefined {
   if (typeof input !== "object" || input === null) {

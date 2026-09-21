@@ -7,9 +7,11 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 ### Added
 
 - C language support: `analyze`, `check`, `changed`, duplication tokenization, and dependency analysis handle `.c` sources. Quoted includes resolve relative to their source file, while angle-bracket and macro-built includes stay ignored.
+- C++ language support: analysis, checks, changed-code metrics, and duplication tokenization handle `.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, and `.hxx` sources. Quoted includes resolve to exact project-relative files; system and macro-built includes stay ignored.
 - Rust language support: `analyze`, `check`, `changed`, and duplication tokenization handle `.rs` sources (functions, closures, `match` arms, `if let`/`while let`, `?` try-operator, labeled `break`/`continue`). The Rust counting policy has no `catch`/`throw`/ternary rows, scores the `?` try-operator at +1 cyclomatic and +0 cognitive, and scores nothing inside macro bodies, so Rust files are not score-comparable with Go/Java/JS/TS files.
 - Rust dependency graph resolves file-relative `mod foo;` declarations against `foo.rs` and `foo/mod.rs` (ambiguity and misses reported), ignores `use` and `extern crate` paths as module-qualified, and SQL risk analysis recognizes `sqlx::query`/`query_as`/`query_scalar` and `query`/`execute`-family calls with `format!`/`concat!` and `+`-concat dynamic detection.
 - `unused` treats Cargo crate roots as entry points — `lib.rs`, `main.rs`, `build.rs`, and every `.rs` file under a `bin`, `benches`, `examples`, or `tests` directory — so a Rust crate's own sources are no longer reported as unreachable.
+- `unused` treats every C and C++ translation unit (`.c`, `.cpp`, `.cc`, `.cxx`) as an entry point, because a build compiles those files rather than including them, so a compiled source is never reachable over include edges. Headers stay subject to reachability, where an unreferenced header is still a candidate row.
 
 ## 0.16.2 - 2026-09-21
 

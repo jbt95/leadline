@@ -120,6 +120,44 @@ fn dependency_rows(report: &UnusedReport) -> Vec<(&str, &str, &str)> {
 }
 
 #[test]
+fn c_translation_units_are_entry_points() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "src/main.c",
+        "#include \"util.h\"\nint main(void) { return util(1); }\n",
+    );
+    write(&root, "src/util.h", "int util(int value);\n");
+    write(
+        &root,
+        "src/util.c",
+        "#include \"util.h\"\nint util(int value) { return value + 1; }\n",
+    );
+    write(
+        &root,
+        "src/api.cpp",
+        "#include \"util.h\"\nint api(int v) { return util(v); }\n",
+    );
+    write(&root, "src/extra.h", "int extra(int value);\n");
+
+    let report = analyze_unused(&root, &[], &[], &UnusedConfig::default()).unwrap();
+
+    // A compiled source file is never included, so it can only be an entry
+    // point; a header nothing includes stays a candidate row.
+    assert_eq!(unused_file_paths(&report), ["src/extra.h"]);
+    let entries = entry_rows(&report);
+    for expected in [
+        ("src/api.cpp", "convention"),
+        ("src/main.c", "convention"),
+        ("src/util.c", "convention"),
+    ] {
+        assert!(entries.contains(&expected), "{expected:?} in {entries:?}");
+    }
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn rust_crate_roots_are_entry_points() {
     let root = temporary_directory();
     write(&root, "src/lib.rs", "mod a;\nmod b;\n");

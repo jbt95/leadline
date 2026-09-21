@@ -583,6 +583,17 @@ fn convention_entries(
             });
         }
     }
+    // A C or C++ translation unit is compiled rather than included, so no edge
+    // can reach it either; headers stay subject to reachability, because a
+    // library's public header has no in-repository includer.
+    for path in files {
+        if crate::parser::c_family::is_translation_unit(path) {
+            entries.push(EntryPoint {
+                path: path.clone(),
+                source: SOURCE_CONVENTION,
+            });
+        }
+    }
     entries
 }
 

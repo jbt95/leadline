@@ -108,6 +108,33 @@ bodies are raw `preproc_arg` text, not expressions, so decisions, loops,
 and switches inside them are not scored. Macro-heavy C files can
 therefore under-report complexity, like Rust files with control flow
 inside macro token trees.
+### C++ counting policy
+
+C++ discovers only `function_definition` and `lambda_expression` nodes.
+Declarations and prototypes without a body are not functions. Lambdas are
+scored independently and use an `auto` initializer or assignment target as
+their name when one exists. Inline class or struct definitions and qualified
+definitions such as `Type::method` are methods.
+
+C++ follows the shared control-flow rules with these adjustments.
+Range-based `for` statements are loops. Every `case_statement`, including a
+`default:` label, is a Case and adds 1 cyclomatic. `catch` and `throw` follow
+Java semantics: `catch` adds no cyclomatic point, and `throw` adds no
+cyclomatic or cognitive point. A `goto` statement and a label each add 1
+cognitive point without changing cyclomatic complexity. Preprocessor
+conditionals (`#if`, `#ifdef`, `#elif`, and `#else`) are logical lines only;
+they are not decisions.
+
+Parameter count includes `parameter_declaration` and
+`optional_parameter_declaration` nodes, excludes variadic parameters, and
+treats a lone unnamed `void` parameter as zero parameters. Direct calls by a
+function's bare or qualified name count as recursion. A call through `this`
+also counts, but a same-named call through another object does not.
+
+Function-like macro bodies are raw `preproc_arg` text, not syntax trees.
+Decisions and loops inside them are therefore not scored, so macro-heavy
+files under-report control flow. Their token text contributes to Halstead
+only when the grammar exposes a recognized leaf.
 
 ## Cognitive complexity
 

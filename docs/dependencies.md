@@ -1,6 +1,6 @@
 # Dependencies and impact
 
-Static file-level dependency intelligence for C, Go, JavaScript, TypeScript, Java, and Rust.
+Static file-level dependency intelligence for Go, JavaScript, TypeScript, Java, Rust, C, and C++.
 Go imports are module-qualified paths, so `GoImport` references are `Ignored` and never produce edges.
 The analyzer parses code with Tree-sitter and never executes it: no build
 runtime, no network, no project scripts.
@@ -112,6 +112,19 @@ Rust (`.rs`):
   module-qualified, never file-relative: they are ignored and never produce
   edges or `unresolved` rows, the same treatment Go imports get.
 
+C++ (`.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`):
+
+- `#include "path/file.hpp"` resolves the exact path relative to the
+  including file's directory and produces `kind: "import"`. Includes carry
+  their own extension, so resolution does not probe other extensions or
+  directory index names.
+- A missing quoted include is `unresolved` with reason `not_found`. An
+  include whose `..` components leave the analysis root is also
+  `not_found`.
+- System includes such as `#include <vector>` and macro-built includes such
+  as `#include HEADER_FILE` are ignored. The analyzer does not know compiler
+  include search paths or macro expansion state, so it does not guess.
+
 Every edge carries `"confidence": "high"` by construction; the agent-json
 projection drops it but keeps every `unresolved` reference, so agents never
 mistake "unresolved" for "no dependency".
@@ -164,6 +177,8 @@ across runs.
   never file-relative.
 - No inline Rust modules: `mod foo { ... }` is not a file reference, so the
   module tree inside a file contributes no edges of its own.
+- No C++ system-include search path: angle-bracket includes are ignored.
+- No C++ preprocessor expansion: macro-built include paths are ignored.
 - No method or function call graph: edges are file-level import/call-form
   evidence only (`call` means the `require()` / `import()` form, not a call
   graph).

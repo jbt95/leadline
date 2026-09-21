@@ -133,6 +133,28 @@ fn c_local_includes_resolve_relative_paths_and_report_only_missing_quotes() {
     assert_eq!(report.unresolved[0].specifier, "missing.c");
     assert_eq!(report.unresolved[0].line, 2);
     assert_eq!(report.unresolved[0].reason, "not_found");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cpp_local_includes_resolve_and_report_missing_files() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "src/main.cpp",
+        "#include \"../include/api.hpp\"\n#include \"missing.hpp\"\n#include <vector>\n#include HEADER_FILE\nint main() { return api(); }\n",
+    );
+    write(&root, "include/api.hpp", "int api();\n");
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+
+    assert_eq!(edge_pairs(&report), [("src/main.cpp", "include/api.hpp")]);
+    let unresolved: Vec<(&str, &str)> = report
+        .unresolved
+        .iter()
+        .map(|entry| (entry.specifier.as_str(), entry.reason))
+        .collect();
+    assert_eq!(unresolved, [("missing.hpp", "not_found")]);
 
     std::fs::remove_dir_all(root).unwrap();
 }

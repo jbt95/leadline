@@ -481,7 +481,15 @@ const LABEL_VALUES: &[(&str, &[&str])] = &[
     ),
     (
         "language",
-        &["c", "java", "javascript", "rust", "typescript", "tsx"],
+        &[
+            "c",
+            "cpp",
+            "java",
+            "javascript",
+            "rust",
+            "typescript",
+            "tsx",
+        ],
     ),
 ];
 
@@ -1420,6 +1428,7 @@ mod tests {
     #[test]
     fn language_label_maps_extensions_only() {
         assert_eq!(language_label("src/Main.java"), Some("java"));
+        assert_eq!(language_label("src/api.HPP"), Some("cpp"));
         assert_eq!(language_label("app.min.MJS"), Some("javascript"));
         assert_eq!(language_label("src/index.TS"), Some("typescript"));
         assert_eq!(language_label("src/view.tsx"), Some("tsx"));

@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::path::Path;
 use tree_sitter::{Language as TsLanguage, Node, Parser, Tree};
 
-mod c;
+pub(crate) mod c_family;
 mod go;
 mod java;
 mod js;
@@ -300,7 +300,7 @@ pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDe
     let (language, tree) = parse_tree(path, source)?;
     let root = tree.root_node();
     Ok(match language {
-        Language::C => c::extract_c_dependencies(root, source),
+        Language::C | Language::Cpp => c_family::extract_local_includes(root, source),
         Language::Go => go::extract_go_dependencies(root, source),
         Language::Java => java::extract_java_dependencies(root, source),
         Language::Rust => rust::extract_rust_dependencies(root, source),
@@ -326,7 +326,7 @@ pub(crate) fn parse_bundle(path: &str, source: &[u8]) -> Result<ParsedBundle> {
     Ok(ParsedBundle {
         analysis: analyze_tree(path, language, source, root),
         dependencies: match language {
-            Language::C => c::extract_c_dependencies(root, source),
+            Language::C | Language::Cpp => c_family::extract_local_includes(root, source),
             Language::Go => go::extract_go_dependencies(root, source),
             Language::Java => java::extract_java_dependencies(root, source),
             Language::Rust => rust::extract_rust_dependencies(root, source),
@@ -376,6 +376,7 @@ pub fn detect_language(path: &str) -> Option<Language> {
         "c" => Some(Language::C),
         "java" => Some(Language::Java),
         "go" => Some(Language::Go),
+        "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Some(Language::Cpp),
         "rs" => Some(Language::Rust),
         "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
         "ts" | "mts" | "cts" => Some(Language::TypeScript),
@@ -388,6 +389,7 @@ fn grammar(language: Language) -> TsLanguage {
     match language {
         Language::Go => tree_sitter_go::LANGUAGE.into(),
         Language::Java => tree_sitter_java::LANGUAGE.into(),
+        Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
         Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
         Language::C => tree_sitter_c::LANGUAGE.into(),
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
@@ -447,7 +449,7 @@ fn is_function(kind: &str, language: Language) -> bool {
                 | "arrow_function"
                 | "method_definition"
         ),
-        Language::C => kind == "function_definition",
+        Language::C | Language::Cpp => matches!(kind, "function_definition" | "lambda_expression"),
         Language::Rust => matches!(kind, "function_item" | "closure_expression"),
     }
 }
@@ -493,6 +495,9 @@ fn function_kind(node: Node<'_>, language: Language) -> FunctionKind {
         return FunctionKind::Method;
     }
     if language == Language::Rust && node.kind() == "function_item" && rust_is_method(node) {
+        return FunctionKind::Method;
+    }
+    if language == Language::Cpp && node.kind() == "function_definition" && cpp_is_method(node) {
         return FunctionKind::Method;
     }
     match node.kind() {
@@ -642,7 +647,8 @@ fn decision_kind(node: Node<'_>, language: Language, source: &[u8]) -> Option<De
         | "while_expression"
         | "loop_expression"
         | "for_expression"
-        | "do_statement" => Some(DecisionKind::Loop),
+        | "do_statement"
+        | "for_range_loop" => Some(DecisionKind::Loop),
         "catch_clause" => Some(DecisionKind::Catch),
         "switch_statement"
         | "switch_expression"
@@ -651,15 +657,15 @@ fn decision_kind(node: Node<'_>, language: Language, source: &[u8]) -> Option<De
         | "select_statement"
         | "match_expression" => Some(DecisionKind::Switch),
         "switch_case" | "expression_case" | "type_case" | "communication_case" | "default_case"
-        | "match_arm" => Some(DecisionKind::Case),
+        | "match_arm" | "case_statement" => Some(DecisionKind::Case),
         "switch_label" if node_text(node, source).trim_start().starts_with("case") => {
             Some(DecisionKind::Case)
         }
-        "case_statement" if language == Language::C => Some(DecisionKind::Case),
-        "ternary_expression" => Some(DecisionKind::Ternary),
-        "conditional_expression" if language == Language::C => Some(DecisionKind::Ternary),
+        "ternary_expression" | "conditional_expression" => Some(DecisionKind::Ternary),
         "try_expression" => Some(DecisionKind::Try),
-        "throw_statement" if language != Language::Java => Some(DecisionKind::Throw),
+        "throw_statement" if !matches!(language, Language::Java | Language::Cpp) => {
+            Some(DecisionKind::Throw)
+        }
         _ => None,
     }
 }
@@ -676,7 +682,11 @@ fn is_labeled_jump(node: Node<'_>, language: Language) -> bool {
             node.named_children(&mut cursor)
                 .any(|child| child.kind() == "label")
         }
-        "goto_statement" | "labeled_statement" if language == Language::C => true,
+        "goto_statement" | "labeled_statement"
+            if matches!(language, Language::C | Language::Cpp) =>
+        {
+            true
+        }
         _ => false,
     }
 }
@@ -753,6 +763,37 @@ fn collect_logical(
     }
 }
 
+fn cpp_is_method(node: Node<'_>) -> bool {
+    if c_family_declarator_is_qualified(node) {
+        return true;
+    }
+    let mut saw_field_list = false;
+    let mut ancestor = node.parent();
+    while let Some(current) = ancestor {
+        if current.kind() == "field_declaration_list" {
+            saw_field_list = true;
+        } else if matches!(current.kind(), "class_specifier" | "struct_specifier") {
+            return saw_field_list;
+        }
+        ancestor = current.parent();
+    }
+    false
+}
+
+fn c_family_declarator_is_qualified(node: Node<'_>) -> bool {
+    let Some(mut declarator) = node.child_by_field_name("declarator") else {
+        return false;
+    };
+    loop {
+        if declarator.kind() == "qualified_identifier" {
+            return true;
+        }
+        let Some(inner) = declarator.child_by_field_name("declarator") else {
+            return false;
+        };
+        declarator = inner;
+    }
+}
 fn c_family_function_declarator_name<'tree>(node: Node<'tree>) -> Option<Node<'tree>> {
     let mut declarator = node.child_by_field_name("declarator")?;
     loop {
@@ -775,13 +816,13 @@ fn c_family_function_declarator_name<'tree>(node: Node<'tree>) -> Option<Node<'t
 fn c_family_function_parameters<'tree>(node: Node<'tree>) -> Option<Node<'tree>> {
     let mut declarator = node.child_by_field_name("declarator")?;
     loop {
-        match declarator.kind() {
-            "function_declarator" => return declarator.child_by_field_name("parameters"),
-            "pointer_declarator" | "reference_declarator" | "parenthesized_declarator" => {
-                declarator = declarator.child_by_field_name("declarator")?;
-            }
-            _ => return None,
+        if matches!(
+            declarator.kind(),
+            "function_declarator" | "abstract_function_declarator"
+        ) {
+            return declarator.child_by_field_name("parameters");
         }
+        declarator = declarator.child_by_field_name("declarator")?;
     }
 }
 
@@ -793,6 +834,18 @@ fn function_name(node: Node<'_>, source: &[u8]) -> String {
                 let point = node.start_position();
                 format!("<anonymous@{}:{}>", point.row + 1, point.column + 1)
             });
+    }
+    if node.kind() == "lambda_expression"
+        && let Some(parent) = node.parent()
+    {
+        let binding = match parent.kind() {
+            "init_declarator" => parent.child_by_field_name("declarator"),
+            "assignment_expression" => parent.child_by_field_name("left"),
+            _ => None,
+        };
+        if let Some(binding) = binding {
+            return node_text(binding, source).to_owned();
+        }
     }
     if node.kind() == "func_literal" {
         // The literal sits in the right-hand `expression_list`; the
@@ -911,12 +964,25 @@ fn calls_self(root: Node<'_>, language: Language, name: &str, source: &[u8]) -> 
                     None
                 }
             }
-            Language::C => {
+            // C and C++ accept a bare call and a scoped `Type::method` path;
+            // only a `this->method()` receiver is the current type's own
+            // dispatch, so a call on another object is not a cycle.
+            Language::C | Language::Cpp => {
                 if node.kind() == "call_expression" {
                     node.child_by_field_name("function").and_then(|function| {
                         match function.kind() {
                             "identifier" => Some(function),
                             "qualified_identifier" => function.child_by_field_name("name"),
+                            "field_expression" => {
+                                let is_self = function
+                                    .child_by_field_name("argument")
+                                    .is_some_and(|argument| node_text(argument, source) == "this");
+                                if is_self {
+                                    function.child_by_field_name("field")
+                                } else {
+                                    None
+                                }
+                            }
                             _ => None,
                         }
                     })
@@ -966,37 +1032,35 @@ fn calls_self(root: Node<'_>, language: Language, name: &str, source: &[u8]) -> 
 }
 
 fn parameter_count(node: Node<'_>, language: Language, source: &[u8]) -> u32 {
-    let parameters = if language == Language::C {
-        c_family_function_parameters(node)
-    } else {
-        node.child_by_field_name("parameters")
-    };
-    if let Some(parameters) = parameters {
-        if language == Language::C && parameters.kind() == "parameter_list" {
-            let mut cursor = parameters.walk();
-            let mut declarations = parameters
-                .named_children(&mut cursor)
-                .filter(|child| child.kind() == "parameter_declaration");
-            let Some(first) = declarations.next() else {
-                return 0;
-            };
-            if declarations.next().is_none()
-                && first.child_by_field_name("declarator").is_none()
-                && first
+    if matches!(language, Language::C | Language::Cpp)
+        && let Some(parameters) = c_family_function_parameters(node)
+    {
+        let mut count = 0;
+        let mut lone_void = false;
+        let mut cursor = parameters.walk();
+        for declaration in parameters
+            .named_children(&mut cursor)
+            .filter(|declaration| {
+                matches!(
+                    declaration.kind(),
+                    "parameter_declaration" | "optional_parameter_declaration"
+                )
+            })
+        {
+            count += 1;
+            lone_void = count == 1
+                && declaration.child_by_field_name("declarator").is_none()
+                && declaration
                     .child_by_field_name("type")
-                    .is_some_and(|kind| node_text(kind, source) == "void")
-            {
-                return 0;
-            }
-            let mut cursor = parameters.walk();
-            return parameters
-                .named_children(&mut cursor)
-                .filter(|child| child.kind() == "parameter_declaration")
-                .count() as u32;
+                    .is_some_and(|kind| node_text(kind, source) == "void");
         }
-        // tree-sitter-go groups names (`func f(a, b, c bool)` is one
-        // parameter declaration with three `name` fields). The receiver
-        // (`receiver` field) is never counted.
+        return if lone_void { 0 } else { count };
+    }
+    if let Some(parameters) = node.child_by_field_name("parameters") {
+        // Go groups names (`func f(a, b, c bool)` is one
+        // parameter_declaration with three `name` fields); only
+        // tree-sitter-go emits `parameter_list`, so this arm is Go-only.
+        // The receiver (`receiver` field) is never counted.
         if language == Language::Go && parameters.kind() == "parameter_list" {
             let mut cursor = parameters.walk();
             return parameters
@@ -1113,13 +1177,14 @@ fn is_logical_loc(kind: &str, language: Language) -> bool {
             | "match_arm"
             | "break_expression"
             | "continue_expression"
-    ) || (language == Language::C
+    ) || (matches!(language, Language::C | Language::Cpp)
         && matches!(
             kind,
             "declaration"
                 | "goto_statement"
                 | "labeled_statement"
                 | "case_statement"
+                | "for_range_loop"
                 | "preproc_if"
                 | "preproc_ifdef"
                 | "preproc_elif"
@@ -1199,7 +1264,9 @@ fn is_operator(kind: &str) -> bool {
 /// language spells its literals as named nodes, which the `is_named` gate
 /// already covers.
 fn is_operand_leaf(node: Node<'_>, language: Language) -> bool {
-    if language == Language::C && matches!(node.kind(), "number_literal" | "string_content") {
+    if matches!(language, Language::C | Language::Cpp)
+        && matches!(node.kind(), "number_literal" | "string_content")
+    {
         return node.is_named();
     }
     if !is_operand(node.kind()) {
@@ -1384,6 +1451,7 @@ fn sql_call_target<'a>(
             };
             (name_node, node.child_by_field_name("arguments")?)
         }
+        Language::Cpp => return None,
         Language::Rust => {
             if node.kind() != "call_expression" {
                 return None;

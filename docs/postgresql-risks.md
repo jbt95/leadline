@@ -7,6 +7,11 @@ dependency. Findings are review prompts, not proof of runtime behavior or
 index usage: estimates reflect the planner's view, and every rule is a
 syntactic heuristic with documented boundaries.
 
+C and C++ are analyzed for complexity and dependencies, but their query call
+sites are not recognized yet: libpq (`PQexec`) and SQLite (`sqlite3_exec`)
+calls stay invisible to this command, so a C or C++ repository reports only
+the `.sql` file rules.
+
 ## Rules
 
 | Rule | Severity | Contract | Remediation |

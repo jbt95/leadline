@@ -80,6 +80,10 @@ const SOURCE_SEEDS: &[(&str, &str)] = &[
         "seed.rs",
         "struct Counter {\n    n: i32,\n}\n\nimpl Counter {\n    fn add(&mut self, delta: i32) -> Option<i32> {\n        match delta {\n            0 => None,\n            _ => {\n                self.n += delta;\n                Some(self.n)\n            }\n        }\n    }\n}\n\nfn first(values: &[i32]) -> Option<i32> {\n    let mut found = None;\n    'outer: for value in values {\n        if *value > 0 {\n            found = Some(*value);\n            break 'outer;\n        }\n    }\n    found\n}\n",
     ),
+    (
+        "seed.cpp",
+        "#include <vector>\n\nint sum(const std::vector<int>& values) {\n    int total = 0;\n    for (int value : values) {\n        total += value;\n    }\n    return total;\n}\n",
+    ),
 ];
 
 const LCOV_SEED: &str = "TN:\nSF:seed.ts\nDA:1,1\nDA:2,1\nDA:3,0\nDA:5,2\nend_of_record\nSF:Seed.java\nDA:2,3\nDA:5,0\nend_of_record\n";

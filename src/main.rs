@@ -3301,6 +3301,11 @@ fn doctor_command(args: &[String]) -> Result<ExitCode, CliError> {
             "int check(int value) { if (value) { return 1; } return 0; }",
         ),
         (
+            "cpp",
+            "doctor.cpp",
+            "int check(bool value) { if (value) { return 1; } return 0; }",
+        ),
+        (
             "java",
             "Doctor.java",
             "class Doctor { void check() { int x = 1; } }",
