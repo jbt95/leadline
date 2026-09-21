@@ -32,7 +32,7 @@ function text(run: () => Promise<string>): Promise<string> {
 export const tools = [
   {
     name: "leadline_changed",
-    description: "Call after editing Java/JS/TS/TSX, fixing bugs, refactoring, or before committing to spot complexity regressions vs a git base.",
+    description: "Call after editing C/C++/Go/Java/JS/TS/TSX/Rust/Python, fixing bugs, refactoring, or before committing to spot complexity regressions vs a git base.",
     parameters: {
       base: "git base revision, default HEAD~1",
       path: "limit analysis to this path",

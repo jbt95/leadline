@@ -484,6 +484,7 @@ const LABEL_VALUES: &[(&str, &[&str])] = &[
         &[
             "c",
             "cpp",
+            "go",
             "java",
             "javascript",
             "python",

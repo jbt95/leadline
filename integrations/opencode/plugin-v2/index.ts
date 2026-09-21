@@ -23,10 +23,10 @@ interface FunctionInput {
   name?: string;
 }
 
-// Leadline analyzes C/C++/Java/JS/TS/TSX/Rust/Python only. The hook skips the analyzer when
+// Leadline analyzes C/C++/Go/Java/JS/TS/TSX/Rust/Python only. The hook skips the analyzer when
 // the edited file definitely falls outside that scope; unknown input shapes
 // fall through to analysis (fail-open, never a missed regression).
-const LEADLINE_EXTENSIONS = [".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".java", ".js", ".jsx", ".py", ".rs", ".ts", ".tsx"] as const;
+const LEADLINE_EXTENSIONS = [".c", ".cc", ".cjs", ".cpp", ".cts", ".cxx", ".go", ".h", ".hh", ".hpp", ".hxx", ".java", ".js", ".jsx", ".mjs", ".mts", ".py", ".rs", ".ts", ".tsx"] as const;
 
 function editedPath(input: unknown): string | undefined {
   if (typeof input !== "object" || input === null) {
@@ -72,7 +72,7 @@ export default Plugin.define({
     await ctx.tool.transform((editor) => {
       editor.add({
         name: "leadline_changed",
-        description: "Call after editing C/C++/Java/JS/TS/TSX/Rust/Python, fixing bugs, refactoring, or before committing to spot complexity regressions vs a git base.",
+        description: "Call after editing C/C++/Go/Java/JS/TS/TSX/Rust/Python, fixing bugs, refactoring, or before committing to spot complexity regressions vs a git base.",
         input: {
           type: "object",
           properties: {
