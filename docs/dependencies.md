@@ -1,6 +1,6 @@
 # Dependencies and impact
 
-Static file-level dependency intelligence for Go, JavaScript, TypeScript, and Java.
+Static file-level dependency intelligence for Go, JavaScript, TypeScript, Java, and Rust.
 Go imports are module-qualified paths, so `GoImport` references are `Ignored` and never produce edges.
 The analyzer parses code with Tree-sitter and never executes it: no build
 runtime, no network, no project scripts.
@@ -84,6 +84,23 @@ Java (`.java`):
 - Same-package uses without an import statement produce no edge. Only
   explicit imports are evidence.
 
+Rust (`.rs`):
+
+- `mod foo;` (a module declaration without a body) resolves inside the
+  declaring file's module directory to `foo.rs` or `foo/mod.rs` →
+  `kind: "import"`. A `mod.rs` file or a crate root (`lib.rs`, `main.rs`,
+  `build.rs`, a `bin`/`benches`/`examples`/`tests` target) owns its own
+  directory, so `src/parser/mod.rs` reaches `src/parser/rust.rs`; any other
+  module file owns the directory named after it, so `src/telemetry.rs`
+  reaches `src/telemetry/counters.rs`. Exactly one candidate found resolves;
+  both candidates present is `ambiguous`; neither present is `not_found`.
+- `mod foo { ... }` (inline module) is not a file reference and produces no
+  edge.
+- `use ...` paths (`use crate::a::b;`, `use super::x;`, `use self::y;`,
+  `use serde::Deserialize;`) and `extern crate` declarations are
+  module-qualified, never file-relative: they are ignored and never produce
+  edges or `unresolved` rows, the same treatment Go imports get.
+
 Every edge carries `"confidence": "high"` by construction; the agent-json
 projection drops it but keeps every `unresolved` reference, so agents never
 mistake "unresolved" for "no dependency".
@@ -129,6 +146,10 @@ across runs.
 - No wildcard Java imports (`import pkg.*` is recorded, never resolved).
 - No same-package implicit Java references: files using a type without an
   explicit import contribute no edge.
+- No Rust `use` or `extern crate` edges: those paths are module-qualified,
+  never file-relative.
+- No inline Rust modules: `mod foo { ... }` is not a file reference, so the
+  module tree inside a file contributes no edges of its own.
 - No method or function call graph: edges are file-level import/call-form
   evidence only (`call` means the `require()` / `import()` form, not a call
   graph).

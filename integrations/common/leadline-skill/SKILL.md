@@ -6,7 +6,7 @@ description: Function-level complexity feedback via the leadline analyzer. Use a
 # Leadline skill
 
 `leadline` is a fast, deterministic function-level complexity analyzer
-(Go, Java, JavaScript, TypeScript, TSX). It reports signals about
+(Go, Java, JavaScript, TypeScript, TSX, Rust). It reports signals about
 maintainability risk. It never judges correctness.
 
 ## When to run

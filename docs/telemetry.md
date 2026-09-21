@@ -41,7 +41,7 @@ variable says.
 | `leadline_mcp_response_bytes` | histogram | `method` | Response bytes, same bounds as requests. |
 | `leadline_findings_total` | counter | `surface`, `operation`, `kind`, `state` | What the gates report. `check`: one `kind` per family (`function`, `parse_error`, `security`, `vulnerability`, `sql`) with `state="violation"` (zero counts never create a row). `debt`: `kind="function"` with `state="new"`/`"resolved"`, and `kind="risk"` with `state="increased"`/`"added"`. Recorded on both surfaces. |
 | `leadline_security_findings_total` | counter | `surface`, `operation`, `kind` (`security`/`vulnerability`/`sql`), `severity` (`unknown`/`low`/`medium`/`high`/`critical`) | Scanner violations by family and severity, from `check` on either surface. |
-| `leadline_parse_errors_total` | counter | `surface`, `operation`, `language` (`java`/`javascript`/`typescript`/`tsx`) | Parse errors by language, from `check` on either surface. |
+| `leadline_parse_errors_total` | counter | `surface`, `operation`, `language` (`java`/`javascript`/`typescript`/`tsx`/`rust`) | Parse errors by language, from `check` on either surface. |
 | `leadline_debt_functions` | gauge | `surface`, `state` | Standing function debt (`state="existing"`) from the most recent `debt` run. |
 | `leadline_build_info` | gauge | `version`, `metrics_schema` | Constant `1`; identifies the analyzer version that rendered the file. |
 

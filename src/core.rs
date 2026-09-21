@@ -15,6 +15,7 @@ pub enum Language {
     Go,
     Java,
     JavaScript,
+    Rust,
     TypeScript,
     Tsx,
 }
@@ -26,6 +27,7 @@ impl Language {
             Language::Go => "go",
             Language::Java => "java",
             Language::JavaScript => "javascript",
+            Language::Rust => "rust",
             Language::TypeScript => "typescript",
             Language::Tsx => "tsx",
         }
@@ -70,6 +72,7 @@ pub enum DecisionKind {
     Switch,
     Case,
     Ternary,
+    Try,
     Throw,
     Arrow,
 }
@@ -315,6 +318,7 @@ fn decision_rule(kind: DecisionKind, else_if: bool) -> &'static str {
         DecisionKind::Switch => "switch",
         DecisionKind::Case => "case",
         DecisionKind::Ternary => "ternary",
+        DecisionKind::Try => "try",
         DecisionKind::Throw => "throw",
         DecisionKind::Arrow => "->",
     }
@@ -339,12 +343,16 @@ pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis
                 else_if,
                 line,
             } => {
-                // Case/Throw/Arrow add no nesting level: Case is a label, and
-                // Throw/Arrow are non-structural leaves, so none of them raise
-                // the enclosing depth the way If/Loop/Switch/Ternary do.
+                // Case/Throw/Arrow/Try add no nesting level: Case is a label,
+                // and Throw/Arrow/Try are non-structural leaves, so none of
+                // them raise the enclosing depth the way If/Loop/Switch/
+                // Ternary do.
                 if !matches!(
                     kind,
-                    DecisionKind::Case | DecisionKind::Throw | DecisionKind::Arrow
+                    DecisionKind::Case
+                        | DecisionKind::Throw
+                        | DecisionKind::Arrow
+                        | DecisionKind::Try
                 ) {
                     max_nesting = max_nesting.max(if else_if { nesting } else { nesting + 1 });
                 }
@@ -353,6 +361,7 @@ pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis
                     | DecisionKind::Loop
                     | DecisionKind::Case
                     | DecisionKind::Ternary
+                    | DecisionKind::Try
                     | DecisionKind::Throw
                     | DecisionKind::Arrow => 1,
                     DecisionKind::Catch if input.language != Language::Java => 1,
@@ -362,7 +371,10 @@ pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis
                     1
                 } else if matches!(
                     kind,
-                    DecisionKind::Case | DecisionKind::Throw | DecisionKind::Arrow
+                    DecisionKind::Case
+                        | DecisionKind::Throw
+                        | DecisionKind::Arrow
+                        | DecisionKind::Try
                 ) {
                     0
                 } else {

@@ -36,6 +36,19 @@ fn discovery_finds_go_sources() {
 }
 
 #[test]
+fn discovery_finds_rust_sources() {
+    let root = temporary_directory();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("target/debug")).unwrap();
+    std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(root.join("target/debug/build.rs"), "fn build() {}\n").unwrap();
+    std::fs::write(root.join("notes.txt"), "not source\n").unwrap();
+    let discovered = leadline::discovery::discover(&root).unwrap();
+    assert_eq!(discovered, vec![root.join("src/main.rs")]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn explicit_ignored_file_is_analyzable() {
     let root = temporary_directory();
     std::fs::write(root.join(".gitignore"), "ignored.ts\n").unwrap();

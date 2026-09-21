@@ -12,6 +12,7 @@ use tree_sitter::{Language as TsLanguage, Node, Parser, Tree};
 mod go;
 mod java;
 mod js;
+pub(crate) mod rust;
 
 thread_local! {
     static THREAD_PARSER: RefCell<Parser> = RefCell::new(Parser::new());
@@ -26,6 +27,7 @@ pub(crate) enum RawDependencyKind {
     Java,
     JavaStatic,
     JavaWildcard,
+    RustModule,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -273,6 +275,7 @@ fn normalize_leaf(node: Node<'_>, source: &[u8]) -> Option<String> {
         || kind == "integer"
         || kind == "float"
         || kind == "int_literal"
+        || kind == "integer_literal"
         || kind == "float_literal"
         || kind == "imaginary_literal"
         || kind == "decimal_integer_literal"
@@ -297,6 +300,7 @@ pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDe
     Ok(match language {
         Language::Go => go::extract_go_dependencies(root, source),
         Language::Java => java::extract_java_dependencies(root, source),
+        Language::Rust => rust::extract_rust_dependencies(root, source),
         Language::JavaScript | Language::TypeScript | Language::Tsx => {
             js::extract_javascript_dependencies(root, source)
         }
@@ -321,6 +325,7 @@ pub(crate) fn parse_bundle(path: &str, source: &[u8]) -> Result<ParsedBundle> {
         dependencies: match language {
             Language::Go => go::extract_go_dependencies(root, source),
             Language::Java => java::extract_java_dependencies(root, source),
+            Language::Rust => rust::extract_rust_dependencies(root, source),
             Language::JavaScript | Language::TypeScript | Language::Tsx => {
                 js::extract_javascript_dependencies(root, source)
             }
@@ -366,6 +371,7 @@ pub fn detect_language(path: &str) -> Option<Language> {
     {
         "java" => Some(Language::Java),
         "go" => Some(Language::Go),
+        "rs" => Some(Language::Rust),
         "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
         "ts" | "mts" | "cts" => Some(Language::TypeScript),
         "tsx" => Some(Language::Tsx),
@@ -378,6 +384,7 @@ fn grammar(language: Language) -> TsLanguage {
         Language::Go => tree_sitter_go::LANGUAGE.into(),
         Language::Java => tree_sitter_java::LANGUAGE.into(),
         Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
+        Language::Rust => tree_sitter_rust::LANGUAGE.into(),
         Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
     }
@@ -434,6 +441,7 @@ fn is_function(kind: &str, language: Language) -> bool {
                 | "arrow_function"
                 | "method_definition"
         ),
+        Language::Rust => matches!(kind, "function_item" | "closure_expression"),
     }
 }
 
@@ -477,8 +485,12 @@ fn function_kind(node: Node<'_>, language: Language) -> FunctionKind {
     if language == Language::Go && node.kind() == "method_declaration" {
         return FunctionKind::Method;
     }
+    if language == Language::Rust && node.kind() == "function_item" && rust_is_method(node) {
+        return FunctionKind::Method;
+    }
     match node.kind() {
         "method_definition" => FunctionKind::Method,
+        "closure_expression" => FunctionKind::Lambda,
         "constructor_declaration" | "compact_constructor_declaration" => FunctionKind::Constructor,
         "lambda_expression" => FunctionKind::Lambda,
         "arrow_function" => FunctionKind::Arrow,
@@ -541,9 +553,7 @@ fn walk_function(
                 nesting,
             });
         }
-        if matches!(node.kind(), "break_statement" | "continue_statement")
-            && node.named_child_count() > 0
-        {
+        if is_labeled_jump(node) {
             events.push(Event::LabeledJump {
                 line: node.start_position().row as u32 + 1,
                 nesting,
@@ -581,7 +591,7 @@ fn walk_function(
             };
             if is_operator(node.kind()) {
                 events.push(Event::Operator(span));
-            } else if node.is_named() && is_operand(node.kind()) {
+            } else if is_operand_leaf(node, language) {
                 events.push(Event::Operand(span));
             }
             continue;
@@ -617,32 +627,52 @@ fn walk_function(
 
 fn decision_kind(node: Node<'_>, language: Language, source: &[u8]) -> Option<DecisionKind> {
     match node.kind() {
-        "if_statement" => Some(DecisionKind::If),
+        "if_statement" | "if_expression" => Some(DecisionKind::If),
         "for_statement"
         | "for_in_statement"
         | "enhanced_for_statement"
         | "while_statement"
+        | "while_expression"
+        | "loop_expression"
+        | "for_expression"
         | "do_statement" => Some(DecisionKind::Loop),
         "catch_clause" => Some(DecisionKind::Catch),
         "switch_statement"
         | "switch_expression"
         | "expression_switch_statement"
         | "type_switch_statement"
-        | "select_statement" => Some(DecisionKind::Switch),
-        "switch_case" | "expression_case" | "type_case" | "communication_case" | "default_case" => {
-            Some(DecisionKind::Case)
-        }
+        | "select_statement"
+        | "match_expression" => Some(DecisionKind::Switch),
+        "switch_case" | "expression_case" | "type_case" | "communication_case" | "default_case"
+        | "match_arm" => Some(DecisionKind::Case),
         "switch_label" if node_text(node, source).trim_start().starts_with("case") => {
             Some(DecisionKind::Case)
         }
         "ternary_expression" => Some(DecisionKind::Ternary),
+        "try_expression" => Some(DecisionKind::Try),
         "throw_statement" if language != Language::Java => Some(DecisionKind::Throw),
         _ => None,
     }
 }
 
+/// True when a `break`/`continue` carries a label.
+fn is_labeled_jump(node: Node<'_>) -> bool {
+    match node.kind() {
+        // Go and the C-family grammars expose the label as the only named
+        // child. Rust exposes a `label` node, so `break value` stays a value
+        // jump rather than a labeled one.
+        "break_statement" | "continue_statement" => node.named_child_count() > 0,
+        "break_expression" | "continue_expression" => {
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor)
+                .any(|child| child.kind() == "label")
+        }
+        _ => false,
+    }
+}
+
 fn is_else_if(node: Node<'_>) -> bool {
-    if node.kind() != "if_statement" {
+    if !matches!(node.kind(), "if_statement" | "if_expression") {
         return false;
     }
     node.parent().is_some_and(|parent| {
@@ -656,11 +686,16 @@ fn is_else_if(node: Node<'_>) -> bool {
 fn has_if_child(node: Node<'_>) -> bool {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
-        .any(|child| child.kind() == "if_statement")
+        .any(|child| matches!(child.kind(), "if_statement" | "if_expression"))
 }
 
 fn logical_operator(node: Node<'_>, source: &[u8]) -> Option<LogicalOperator> {
-    if !matches!(node.kind(), "binary_expression" | "binary_expression2") {
+    // `let_chain` is Rust's `if let A = x && let B = y`: its `&&` separators
+    // are direct tokens of the chain, never `binary_expression` operators.
+    if !matches!(
+        node.kind(),
+        "binary_expression" | "binary_expression2" | "let_chain"
+    ) {
         return None;
     }
     let mut cursor = node.walk();
@@ -731,6 +766,16 @@ fn function_name(node: Node<'_>, source: &[u8]) -> String {
                 return node_text(name, source).to_owned();
             }
         }
+    }
+    // Rust closures take their name from the `let` binding when one exists.
+    if node.kind() == "closure_expression"
+        && let Some(pattern) = node
+            .parent()
+            .filter(|parent| parent.kind() == "let_declaration")
+            .and_then(|parent| parent.child_by_field_name("pattern"))
+        && pattern.kind() == "identifier"
+    {
+        return node_text(pattern, source).to_owned();
     }
     if let Some(name) = node.child_by_field_name("name") {
         return node_text(name, source).to_owned();
@@ -816,6 +861,38 @@ fn calls_self(root: Node<'_>, language: Language, name: &str, source: &[u8]) -> 
                     None
                 }
             }
+            // Rust accepts a bare call, a scoped `Type::method` path, and a
+            // receiver call, but only `self.method()` is the current type's
+            // own dispatch; `other.method()` is not a cycle. A turbofish call
+            // (`count::<T>()`) reports the callee as a `generic_function`.
+            Language::Rust => {
+                if node.kind() == "call_expression" {
+                    node.child_by_field_name("function").and_then(|function| {
+                        let function = if function.kind() == "generic_function" {
+                            function.child_by_field_name("function")?
+                        } else {
+                            function
+                        };
+                        match function.kind() {
+                            "identifier" => Some(function),
+                            "scoped_identifier" => function.child_by_field_name("name"),
+                            "field_expression" => {
+                                let is_self = function
+                                    .child_by_field_name("value")
+                                    .is_some_and(|value| value.kind() == "self");
+                                if is_self {
+                                    function.child_by_field_name("field")
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        }
+                    })
+                } else {
+                    None
+                }
+            }
         };
         if callee.is_some_and(|callee| node_text(callee, source) == name) {
             return true;
@@ -843,6 +920,17 @@ fn parameter_count(node: Node<'_>) -> u32 {
                         .max(1)
                 })
                 .sum();
+        }
+        // Rust receivers (`self`, `&self`, `&mut self`) are dispatch syntax,
+        // not inputs; Go receivers are excluded the same way. Only Rust
+        // emits a `parameters` node, so this arm cannot reach another
+        // language's parameter list.
+        if parameters.kind() == "parameters" {
+            let mut cursor = parameters.walk();
+            return parameters
+                .named_children(&mut cursor)
+                .filter(|child| child.kind() != "self_parameter")
+                .count() as u32;
         }
         return if matches!(
             parameters.kind(),
@@ -877,6 +965,15 @@ fn parameter_count(node: Node<'_>) -> u32 {
         });
     }
     node.child_by_field_name("parameter").map_or(0, |_| 1)
+}
+
+/// True when a Rust `function_item` sits in an `impl` or `trait` body:
+/// `fn add(&self)` inside `impl Point` is a method, a free `fn add()` is not.
+fn rust_is_method(node: Node<'_>) -> bool {
+    node.parent()
+        .filter(|parent| parent.kind() == "declaration_list")
+        .and_then(|parent| parent.parent())
+        .is_some_and(|owner| matches!(owner.kind(), "impl_item" | "trait_item"))
 }
 
 fn is_logical_loc(kind: &str) -> bool {
@@ -917,6 +1014,16 @@ fn is_logical_loc(kind: &str) -> bool {
             | "select_statement"
             | "expression_switch_statement"
             | "type_switch_statement"
+            | "let_declaration"
+            | "return_expression"
+            | "if_expression"
+            | "while_expression"
+            | "loop_expression"
+            | "for_expression"
+            | "match_expression"
+            | "match_arm"
+            | "break_expression"
+            | "continue_expression"
     )
 }
 
@@ -973,6 +1080,8 @@ fn is_operator(kind: &str) -> bool {
             | "catch"
             | "break"
             | "continue"
+            | "loop"
+            | "match"
             | "instanceof"
             | "in"
             | "typeof"
@@ -981,6 +1090,19 @@ fn is_operator(kind: &str) -> bool {
             | "await"
             | "yield"
     )
+}
+
+/// True when a childless node is an operand.
+///
+/// Rust reports `true`/`false` as anonymous tokens inside expressions and as
+/// named `boolean_literal` patterns, so both spellings count; every other
+/// language spells its literals as named nodes, which the `is_named` gate
+/// already covers.
+fn is_operand_leaf(node: Node<'_>, language: Language) -> bool {
+    if !is_operand(node.kind()) {
+        return false;
+    }
+    node.is_named() || (language == Language::Rust && matches!(node.kind(), "true" | "false"))
 }
 
 fn is_operand(kind: &str) -> bool {
@@ -1009,6 +1131,10 @@ fn is_operand(kind: &str) -> bool {
                 | "null"
                 | "this"
                 | "super"
+                | "integer_literal"
+                | "boolean_literal"
+                | "char_literal"
+                | "self"
         )
 }
 
@@ -1038,6 +1164,8 @@ const HOST_SQL_CALLS: &[&str] = &[
     "QueryRowContext",
     "Exec",
     "ExecContext",
+    "query_as",
+    "query_scalar",
 ];
 
 fn is_loop_kind(kind: &str) -> bool {
@@ -1047,6 +1175,9 @@ fn is_loop_kind(kind: &str) -> bool {
             | "for_in_statement"
             | "enhanced_for_statement"
             | "while_statement"
+            | "while_expression"
+            | "loop_expression"
+            | "for_expression"
             | "do_statement"
     )
 }
@@ -1081,6 +1212,13 @@ fn host_sql_sites_from_tree(language: Language, source: &[u8], root: Node<'_>) -
                     || (language == Language::Go
                         && first_argument.is_some_and(|argument| {
                             subtree_contains_sprintf(argument, source)
+                        }))
+                    // Rust builds query text with `format!`/`concat!` rather
+                    // than `+` concatenation, so the same argument never
+                    // carries a `binary_expression` signal.
+                    || (language == Language::Rust
+                        && first_argument.is_some_and(|argument| {
+                            subtree_contains_format_macro(argument, source)
                         }));
             let inside_loop = has_loop_ancestor(node, language);
             if seen.insert((node.start_byte(), node.end_byte(), dynamic, inside_loop)) {
@@ -1142,6 +1280,26 @@ fn sql_call_target<'a>(
             };
             (name_node, node.child_by_field_name("arguments")?)
         }
+        Language::Rust => {
+            if node.kind() != "call_expression" {
+                return None;
+            }
+            let function = node.child_by_field_name("function")?;
+            // `sqlx::query_as::<_, User>(..)` reports the callee as a
+            // `generic_function`; the name sits under its own `function` field.
+            let function = if function.kind() == "generic_function" {
+                function.child_by_field_name("function")?
+            } else {
+                function
+            };
+            let name_node = match function.kind() {
+                "identifier" => function,
+                "scoped_identifier" => function.child_by_field_name("name")?,
+                "field_expression" => function.child_by_field_name("field")?,
+                _ => return None,
+            };
+            (name_node, node.child_by_field_name("arguments")?)
+        }
     };
     let name = node_text(name_node, source).to_owned();
     Some((name, first_named_child(arguments)))
@@ -1192,6 +1350,30 @@ fn subtree_contains_sprintf(root: Node<'_>, source: &[u8]) -> bool {
                 _ => None,
             };
             if callee.is_some_and(|name| node_text(name, source).contains("Sprintf")) {
+                return true;
+            }
+        }
+        push_children_reversed(node, &mut stack);
+    }
+    false
+}
+
+/// True when the subtree holds a `format!`/`concat!` macro invocation
+/// (Rust only): `format!("SELECT ... {x}")` builds the query text
+/// dynamically by construction. Nested function bodies are not entered,
+/// mirroring `subtree_is_dynamic`.
+fn subtree_contains_format_macro(root: Node<'_>, source: &[u8]) -> bool {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.id() != root.id() && is_function(node.kind(), Language::Rust) {
+            continue;
+        }
+        if node.kind() == "macro_invocation"
+            && let Some(macro_name) = node.child_by_field_name("macro")
+        {
+            let text = node_text(macro_name, source);
+            let name = text.rsplit("::").next().unwrap_or(text);
+            if matches!(name, "format" | "concat") {
                 return true;
             }
         }

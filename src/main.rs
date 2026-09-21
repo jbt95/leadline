@@ -3315,6 +3315,11 @@ fn doctor_command(args: &[String]) -> Result<ExitCode, CliError> {
             "doctor.tsx",
             "function check(x: boolean): number { if (x) { return 1; } return 0; }",
         ),
+        (
+            "rust",
+            "doctor.rs",
+            "fn check(x: bool) -> i32 { if x { 1 } else { 0 } }",
+        ),
     ] {
         let outcome = match leadline::analyze_source(file, snippet.as_bytes()) {
             Ok(report) if !report.functions.is_empty() => {

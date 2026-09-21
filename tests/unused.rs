@@ -120,6 +120,43 @@ fn dependency_rows(report: &UnusedReport) -> Vec<(&str, &str, &str)> {
 }
 
 #[test]
+fn rust_crate_roots_are_entry_points() {
+    let root = temporary_directory();
+    write(&root, "src/lib.rs", "mod a;\nmod b;\n");
+    write(&root, "src/a.rs", "pub fn a() -> i32 {\n    1\n}\n");
+    write(&root, "src/b.rs", "pub fn b() -> i32 {\n    2\n}\n");
+    write(&root, "src/dead.rs", "pub fn dead() -> i32 {\n    3\n}\n");
+    write(
+        &root,
+        "src/bin/tool.rs",
+        "fn main() {\n    println!(\"tool\");\n}\n",
+    );
+    write(
+        &root,
+        "benches/bench.rs",
+        "fn main() {\n    println!(\"bench\");\n}\n",
+    );
+
+    let report = analyze_unused(&root, &[], &[], &UnusedConfig::default()).unwrap();
+
+    assert_eq!(
+        unused_file_paths(&report),
+        ["src/dead.rs"],
+        "crate roots make their own modules reachable"
+    );
+    let entries = entry_rows(&report);
+    for expected in [
+        ("src/lib.rs", "convention"),
+        ("src/bin/tool.rs", "convention"),
+        ("benches/bench.rs", "convention"),
+    ] {
+        assert!(entries.contains(&expected), "{expected:?} in {entries:?}");
+    }
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn fixture_reports_exact_lists_and_identical_bytes_across_runs() {
     let root = fixture();
     let report = analyze_unused(&root, &[], &[], &UnusedConfig::default()).unwrap();

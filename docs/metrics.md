@@ -66,6 +66,32 @@ logical LOC only). Method receivers are excluded from the parameter
 count. Go has no `?`-style error returns; explicit `if err != nil`
 checks count as ordinary `if` decisions.
 
+### Rust counting policy
+
+Rust follows the shared cyclomatic and cognitive tables with these
+adjustments. `if`/`if let`, `while`/`while let`, `loop`, `for`, `else if`,
+and `else` behave exactly as the shared rule states, and `&&`/`||` count
+exactly as in every other language, including the `&&` separators between
+the `let` conditions of an `if let` chain. `match` follows the `switch`
+row: the header is +0 cyclomatic and +1 + nesting cognitive, and each arm
+is +1 cyclomatic as a Case and +0 cognitive. Rust has no ternary, `catch`,
+or `throw`, so those rows never apply. The `?` try-operator adds 1
+cyclomatic and 0 cognitive and raises no nesting: it is an implicit early
+return. A labeled `break`/`continue` adds 1 cognitive and direct
+self-recursion adds 1, as in every other language. `panic!`,
+`unreachable!`, `unwrap()`, and `expect()` are calls, not decisions, and
+add nothing. A `self` parameter (`&self`, `&mut self`, `self`,
+`self: Box<Self>`) is excluded from the parameter count, the same way a Go
+method receiver is not counted. Macro bodies (`println!`, `assert!`,
+`json!`, `vec!`) are token trees, not expressions, so decisions, loops,
+and `match` inside them are not scored and macro-heavy files under-report;
+macro token leaves count toward Halstead only where their text is a
+recognized operator or operand. The legacy `try!(...)` macro is a parse
+error for this grammar (`try` is a reserved keyword), so those call sites
+are reported as parse errors and score nothing; the modern `?` operator
+scores as above. Rust files are therefore not score-comparable with
+Go/Java/JS/TS files.
+
 ## Cognitive complexity
 
 Add `1 + current nesting` for `if`, loops, `catch`, `switch`, and ternary expressions. An `else if` adds 1 and continues the original chain. A final `else` adds 1. A labeled `break` or `continue` adds 1. Structural constructs increase nesting for structural descendants.

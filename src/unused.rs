@@ -573,6 +573,16 @@ fn convention_entries(
             });
         }
     }
+    // Cargo compiles crate roots by name rather than through an import edge, so
+    // without them a Rust crate reads as entirely unused.
+    for path in files {
+        if crate::parser::rust::is_crate_root(path) {
+            entries.push(EntryPoint {
+                path: path.clone(),
+                source: SOURCE_CONVENTION,
+            });
+        }
+    }
     entries
 }
 

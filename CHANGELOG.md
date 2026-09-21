@@ -4,6 +4,12 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Added
+
+- Rust language support: `analyze`, `check`, `changed`, and duplication tokenization handle `.rs` sources (functions, closures, `match` arms, `if let`/`while let`, `?` try-operator, labeled `break`/`continue`). The Rust counting policy has no `catch`/`throw`/ternary rows, scores the `?` try-operator at +1 cyclomatic and +0 cognitive, and scores nothing inside macro bodies, so Rust files are not score-comparable with Go/Java/JS/TS files.
+- Rust dependency graph resolves file-relative `mod foo;` declarations against `foo.rs` and `foo/mod.rs` (ambiguity and misses reported), ignores `use` and `extern crate` paths as module-qualified, and SQL risk analysis recognizes `sqlx::query`/`query_as`/`query_scalar` and `query`/`execute`-family calls with `format!`/`concat!` and `+`-concat dynamic detection.
+- `unused` treats Cargo crate roots as entry points — `lib.rs`, `main.rs`, `build.rs`, and every `.rs` file under a `bin`, `benches`, `examples`, or `tests` directory — so a Rust crate's own sources are no longer reported as unreachable.
+
 ## 0.16.2 - 2026-09-21
 
 ### Changed
@@ -25,7 +31,7 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ### Added
 
-- `unused` reports files no entry point reaches, `dependencies` entries no source file of their manifest imports, and JS/TS exports no import or re-export covers. Entry points come from `--entry`, `[unused] entries`, every discovered `package.json`, and the `index.*`/`main.*` and `*.config.*` conventions. Test files are excluded unless `--include-tests`. Informational only, and it says when unresolved references make reachability incomplete.
+- `unused` reports files no entry point reaches, `dependencies` entries no source file of its manifest imports, and JS/TS exports no import or re-export covers. Entry points come from `--entry`, `[unused] entries`, every discovered `package.json`, and the `index.*`/`main.*` and `*.config.*` conventions. Test files are excluded unless `--include-tests`. Informational only, and it says when unresolved references make reachability incomplete.
 - `--format codeclimate` (alias `gitlab-codequality`), `github-annotations`, `github-summary`, `markdown`, `badge` and `compact` render findings for CI platforms on `check`, `security`, `vulnerabilities`, `sql` and `sql-plan`.
 - `report --from FILE --format NAME` re-renders a saved `check --json` document through any of those formats without re-analyzing, byte-identical to a live run with the same thresholds.
 

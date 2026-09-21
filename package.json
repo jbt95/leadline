@@ -2,7 +2,7 @@
   "name": "leadline",
   "version": "0.16.2",
   "private": true,
-  "description": "Deterministic function-level complexity analysis for Java, JavaScript, TypeScript, and TSX.",
+  "description": "Deterministic function-level complexity analysis for Go, Java, JavaScript, TypeScript, TSX, and Rust.",
   "keywords": ["pi-package", "pi-extension", "complexity", "static-analysis"],
   "exports": {
     "./server": "./integrations/opencode/plugin-v2/index.ts"

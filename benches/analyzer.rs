@@ -51,6 +51,14 @@ fn language_fixture(language: &str, functions: usize) -> (&'static str, Vec<u8>)
             }
             ("fixture.tsx", source.into_bytes())
         }
+        "rust" => {
+            for index in 0..functions {
+                source.push_str(&format!(
+                    "fn f{index}(x: i32) -> i32 {{ if x > 1 {{ x + 1 }} else {{ x }} }}\n"
+                ));
+            }
+            ("fixture.rs", source.into_bytes())
+        }
         _ => unreachable!("known benchmark language"),
     }
 }
@@ -85,7 +93,7 @@ fn source_scaling(c: &mut Criterion) {
 fn language_coverage(c: &mut Criterion) {
     let mut group = c.benchmark_group("language_analysis");
     group.sample_size(10);
-    for language in ["java", "javascript", "typescript", "tsx"] {
+    for language in ["java", "javascript", "rust", "typescript", "tsx"] {
         let (path, source) = language_fixture(language, 2_000);
         assert_valid_fixture(path, &source, 2_000);
         group.throughput(Throughput::Bytes(source.len() as u64));

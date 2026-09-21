@@ -583,11 +583,13 @@ fn host_sql_matrix_across_languages() {
   }
 }
 "#;
+    let rust = "fn find(db: &PgPool, name: &str) {\n    sqlx::query_as::<_, User>(&format!(\"UPDATE users SET n = '{name}'\")).execute(db);\n}\n";
     let cases = [
         ("src/a.ts", ts),
         ("src/b.js", js),
         ("src/c.tsx", tsx),
         ("src/Dao.java", java),
+        ("src/db.rs", rust),
     ];
     for (path, source) in cases {
         let functions = host_functions(path, source.as_bytes());
@@ -615,6 +617,16 @@ fn host_sql_matrix_across_languages() {
         findings
             .iter()
             .any(|finding| finding.rule_id == "sql/query-in-loop")
+    );
+
+    let rust_loop = "fn run(db: &Pool, ids: &[i32]) {\n    for id in ids {\n        sqlx::query_scalar::<_, i64>(\"SELECT 1 WHERE id = $1\").execute(db);\n    }\n}\n";
+    let functions = host_functions("src/db.rs", rust_loop.as_bytes());
+    let findings = analyze_host_sql("src/db.rs", rust_loop.as_bytes(), &functions).unwrap();
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.rule_id == "sql/query-in-loop"),
+        "{findings:?}"
     );
 }
 

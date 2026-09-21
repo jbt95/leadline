@@ -302,6 +302,10 @@ fn resolve(
         // `github.com/org/repo/pkg`), never file-relative, so without
         // module-graph resolution there is nothing sound to resolve.
         RawDependencyKind::GoImport => Resolution::Ignored,
+        // Rust modules are files: `mod foo;` names `foo.rs` or `foo/mod.rs`
+        // beside the declaring file. `use` paths are module-qualified and
+        // never reach this resolver.
+        RawDependencyKind::RustModule => resolve_rust_module(&reference.specifier, source, paths),
     }
 }
 
@@ -378,6 +382,25 @@ fn resolve_javascript(specifier: &str, source: &str, paths: &BTreeSet<String>) -
         }
     }
     Resolution::Unresolved("not_found")
+}
+
+/// Resolves one Rust `mod foo;` declaration to `foo.rs` or `foo/mod.rs` inside
+/// the declaring file's module directory.
+///
+/// The directory is not simply the file's own: `src/parser/mod.rs` declares
+/// siblings, while `src/telemetry.rs` declares children under `src/telemetry/`.
+fn resolve_rust_module(specifier: &str, source: &str, paths: &BTreeSet<String>) -> Resolution {
+    let directory = crate::parser::rust::module_directory(source);
+    let base = if directory.is_empty() {
+        specifier.to_owned()
+    } else {
+        format!("{directory}/{specifier}")
+    };
+    candidate_resolution(candidates(
+        paths,
+        [format!("{base}.rs"), format!("{base}/mod.rs")].into_iter(),
+    ))
+    .unwrap_or(Resolution::Unresolved("not_found"))
 }
 
 fn candidates(paths: &BTreeSet<String>, candidates: impl Iterator<Item = String>) -> Vec<String> {

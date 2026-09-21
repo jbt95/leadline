@@ -74,6 +74,26 @@ fn tiny_fixtures_define_default_v1() {
     assert_complexity("go/loop.go", "sum", 2, 1, 1, 1);
     assert_complexity("go/closure.go", "outer", 1, 0, 0, 1);
     assert_complexity("go/closure.go", "double", 1, 0, 0, 1);
+
+    assert_complexity("rust/empty.rs", "empty", 1, 0, 0, 0);
+    assert_complexity("rust/decisions.rs", "choose", 4, 5, 2, 1);
+    assert_complexity("rust/logic.rs", "logic", 3, 2, 0, 3);
+    assert_complexity("rust/loop.rs", "sum", 2, 1, 1, 1);
+    assert_complexity("rust/recursion.rs", "fact", 2, 2, 1, 1);
+    assert_complexity("rust/recursion.rs", "down", 2, 2, 1, 1);
+    assert_complexity("rust/macros.rs", "log", 1, 0, 0, 1);
+    assert_complexity("rust/macros.rs", "pick_macro", 1, 0, 0, 1);
+    assert_complexity("rust/macros.rs", "guarded", 2, 2, 1, 1);
+    assert_complexity("rust/macros.rs", "checked", 1, 0, 0, 1);
+    assert_complexity("rust/macros.rs", "allow", 2, 1, 0, 1);
+    assert_complexity("rust/method.rs", "add", 1, 0, 0, 1);
+    assert_complexity("rust/closure.rs", "outer", 1, 0, 0, 1);
+    assert_complexity("rust/closure.rs", "double", 1, 0, 0, 1);
+    assert_complexity("rust/match_arms.rs", "label", 4, 1, 1, 1);
+    assert_complexity("rust/match_arms.rs", "label_last", 4, 1, 1, 1);
+    assert_complexity("rust/labels.rs", "find", 3, 4, 2, 2);
+    assert_complexity("rust/let_chain.rs", "both", 3, 2, 1, 2);
+    assert_complexity("rust/try_operator.rs", "parse", 2, 0, 0, 1);
 }
 
 #[test]
@@ -91,6 +111,41 @@ fn go_method_kind_and_parity() {
     assert_eq!(go_choose.cyclomatic, js_choose.cyclomatic);
     assert_eq!(go_choose.cognitive, js_choose.cognitive);
     assert_eq!(go_choose.max_nesting, js_choose.max_nesting);
+}
+
+#[test]
+fn rust_kinds_and_parity() {
+    let method = fixture("rust/method.rs");
+    assert_eq!(function(&method, "add").kind, FunctionKind::Method);
+    let closure = fixture("rust/closure.rs");
+    assert_eq!(function(&closure, "double").kind, FunctionKind::Lambda);
+
+    let rust_file = fixture("rust/decisions.rs");
+    let go_file = fixture("go/decisions.go");
+    let rust_choose = &function(&rust_file, "choose").metrics;
+    let go_choose = &function(&go_file, "choose").metrics;
+    assert_eq!(rust_choose.cyclomatic, go_choose.cyclomatic);
+    assert_eq!(rust_choose.cognitive, go_choose.cognitive);
+    assert_eq!(rust_choose.max_nesting, go_choose.max_nesting);
+}
+
+#[test]
+fn rust_macro_bodies_are_unscored_but_their_leaves_count() {
+    let file = fixture("rust/macros.rs");
+    let log = &function(&file, "log").metrics;
+    assert_eq!(log.max_nesting, 0);
+    assert!(
+        log.halstead_total_operands > 0,
+        "macro token leaves count as operands"
+    );
+    // `vec![if .. { } else { }]` is a token tree, so the branch never scores.
+    assert_complexity("rust/macros.rs", "pick_macro", 1, 0, 0, 1);
+    // `flag || true` holds three distinct operands across four occurrences:
+    // the function name, the parameter, the body use, and the literal, which
+    // the grammar reports as an anonymous token but still counts.
+    let allow = &function(&file, "allow").metrics;
+    assert_eq!(allow.halstead_n2, 3);
+    assert_eq!(allow.halstead_total_operands, 4);
 }
 
 #[test]
@@ -180,6 +235,8 @@ fn functions_carry_stable_ids_and_byte_spans() {
         "typescript/method.ts",
         "typescript/anonymous.ts",
         "tsx/component.tsx",
+        "rust/decisions.rs",
+        "rust/closure.rs",
     ] {
         let file = fixture(relative);
         assert!(!file.functions.is_empty(), "no functions in {relative}");

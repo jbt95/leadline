@@ -1,7 +1,7 @@
 # Static PostgreSQL risk analysis
 
 `leadline sql [PATH]` flags high-signal PostgreSQL query risks in `.sql`
-files and obvious query call sites in Go, Java, JavaScript, TypeScript, and TSX —
+files and obvious query call sites in Go, Java, JavaScript, TypeScript, TSX, and Rust —
 without executing SQL, connecting to a database, or adding a parser
 dependency. Findings are review prompts, not proof of runtime behavior or
 index usage: estimates reflect the planner's view, and every rule is a
@@ -51,6 +51,13 @@ configurable via `[sql]` (`minimum_severity` gates, it never rescores).
   Loop state stops at the nearest function boundary, so nested functions are
   never blamed for an outer loop. Call receivers and argument text never
   cross over.
+- Rust call sites are recognized on `sqlx::query(...)`, `sqlx::query_as(...)`,
+  `sqlx::query_scalar(...)`, method calls such as `conn.execute(...)` or
+  `client.query(...)`, and any call whose terminal name matches the
+  `query`/`execute` family above. A Rust call site is dynamic when its first
+  argument holds a `format!` or `concat!` macro invocation or a `+`
+  concatenation. Loop attribution is unchanged: a call inside a loop, before
+  any enclosing function boundary, is flagged `inside_loop`.
 - One finding per statement per rule (host sites: one per rule per site).
 
 ## Limits and inputs

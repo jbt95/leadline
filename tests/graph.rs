@@ -112,6 +112,92 @@ fn go_imports_are_ignored_in_the_graph() {
 }
 
 #[test]
+fn rust_modules_resolve_to_files() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "src/lib.rs",
+        "mod parser;\nmod util;\npub use parser::run;\n",
+    );
+    write(&root, "src/parser.rs", "pub fn run() {}\n");
+    write(&root, "src/util/mod.rs", "pub fn helper() {}\n");
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+
+    assert_eq!(
+        edge_pairs(&report),
+        [
+            ("src/lib.rs", "src/parser.rs"),
+            ("src/lib.rs", "src/util/mod.rs")
+        ]
+    );
+    assert!(
+        report.unresolved.is_empty(),
+        "use paths are module-qualified and ignored"
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rust_module_declarations_resolve_from_the_module_directory() {
+    let root = temporary_directory();
+    write(&root, "src/lib.rs", "mod telemetry;\nmod parser;\n");
+    write(&root, "src/telemetry.rs", "mod counters;\nmod sampler;\n");
+    write(&root, "src/telemetry/counters.rs", "pub fn count() {}\n");
+    write(&root, "src/telemetry/sampler.rs", "pub fn sample() {}\n");
+    write(&root, "src/parser/mod.rs", "mod rust;\n");
+    write(&root, "src/parser/rust.rs", "pub fn parse() {}\n");
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+
+    assert_eq!(
+        edge_pairs(&report),
+        [
+            ("src/lib.rs", "src/parser/mod.rs"),
+            ("src/lib.rs", "src/telemetry.rs"),
+            ("src/parser/mod.rs", "src/parser/rust.rs"),
+            ("src/telemetry.rs", "src/telemetry/counters.rs"),
+            ("src/telemetry.rs", "src/telemetry/sampler.rs"),
+        ]
+    );
+    assert!(report.unresolved.is_empty(), "{:?}", report.unresolved);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rust_modules_handle_inline_bodies_ambiguity_and_misses() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "src/lib.rs",
+        "mod inline {\n    mod nested;\n}\nmod ambiguous;\nmod missing;\n",
+    );
+    write(&root, "src/inline/nested.rs", "pub fn nested() {}\n");
+    write(&root, "src/ambiguous.rs", "pub fn a() {}\n");
+    write(&root, "src/ambiguous/mod.rs", "pub fn b() {}\n");
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+
+    assert_eq!(
+        edge_pairs(&report),
+        [("src/lib.rs", "src/inline/nested.rs")]
+    );
+    let unresolved: Vec<(&str, &str)> = report
+        .unresolved
+        .iter()
+        .map(|entry| (entry.specifier.as_str(), entry.reason))
+        .collect();
+    assert_eq!(
+        unresolved,
+        [("ambiguous", "ambiguous"), ("missing", "not_found")]
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn supports_js_tsx_reexports_and_unique_emitted_javascript_resolution() {
     let root = temporary_directory();
     write(

@@ -479,7 +479,10 @@ const LABEL_VALUES: &[(&str, &[&str])] = &[
         "severity",
         &["unknown", "low", "medium", "high", "critical"],
     ),
-    ("language", &["java", "javascript", "typescript", "tsx"]),
+    (
+        "language",
+        &["java", "javascript", "rust", "typescript", "tsx"],
+    ),
 ];
 
 /// Hard ceiling per series list; real usage stays in the low hundreds.
