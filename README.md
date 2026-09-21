@@ -12,14 +12,6 @@ Deterministic function-level complexity analysis for Go, Java, JavaScript, C, C+
 
 `leadline` reports physical and logical LOC, parameters, nesting, cyclomatic and cognitive complexity, Halstead metrics, maintainability, coverage, and CRAP. It parses code with Tree-sitter and never executes it: no build runtime, no network, no project scripts.
 
-<p align="center">
-  <a href="assets/leadline-promo.mp4"><img src="assets/promo-poster.png" alt="Leadline 30-second promo video — click to play" width="720" /></a>
-</p>
-
-<p align="center">
-  <em>▶ <a href="assets/leadline-promo.mp4">Watch Leadline in 30 seconds</a> — an AI agent ships a change, Leadline measures it, the loop iterates.</em>
-</p>
-
 ## Contents
 
 Start here: [installation](docs/installation.md), [CLI reference](docs/cli-reference.md), [configuration](docs/configuration.md).
