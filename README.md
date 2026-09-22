@@ -88,6 +88,21 @@ leadline mcp --port 3000
 
 A bare `--port` means 3000 (`0` asks the OS for a free port); when the requested port is taken the server picks a free one and prints the actual address to stderr. `GET /health` reports status in HTTP mode.
 
+**Local metrics server.** `leadline stats` analyzes once and serves the page and the canonical `Project` JSON over loopback. The page covers the quality gate, measures, complexity distributions, hotspots, coupling, trends, policy violations, and live telemetry — sorting and filtering canonical values only, and naming the reason when a section has no data to show. Read-only with respect to the repository, and the URL goes to stderr so stdout stays clean:
+
+```console
+leadline stats
+leadline stats . --port 4000 --open
+```
+
+`--port` defaults to 3000 (`0` asks the OS for a free port; a taken port falls back to a free one with a note on stderr), `--host` defaults to `127.0.0.1`, `--open` launches the default browser at the served URL, and `GET /api/project` is byte-identical to `project --json`.
+
+![leadline stats overview: quality gate, reliability, coverage, policy, top risk, and language mix](assets/stats-overview.png)
+
+| Telemetry (live CPU, memory, latency p90) | Hotspots (risk treemap, churn vs complexity) |
+|---|---|
+| ![leadline stats telemetry: invocation badges and per-operation p90 timeseries](assets/stats-telemetry.png) | ![leadline stats hotspots: risk treemap, churn scatter, and component bars](assets/stats-hotspots.png) |
+
 **Skill and hooks.** Point your harness at the canonical skill in `integrations/common/leadline-skill/SKILL.md`, and run post-edit hooks in warn mode — surface regressions, never fail silently:
 
 ```console
@@ -108,6 +123,8 @@ flowchart TD
     CLI --> Human["Humans and CI: terminal, JSON, SARIF, exit codes 0-5"]
     CLI --> MCP["MCP server, read-only stdio or HTTP: twenty tools"]
     MCP --> Harnesses["Claude Code, Pi, OMP, OpenCode, Codex, Gemini, Cursor, Cline, Windsurf, Copilot"]
+    CLI --> Stats["Local metrics server, read-only loopback page: stats"]
+    Stats --> Human
     CLI --> Skill["Skill and hooks: SKILL.md, changed agent-json, check warn mode"]
     Skill --> Harnesses
 ```
@@ -250,8 +267,8 @@ leadline snapshot . --output trends.json
 `project` joins every analytics section (dependencies, churn, coupling,
 ownership, duplication, policy, risk) into one deterministic document; `debt`
 classifies threshold transitions and risk deltas between complete repository
-states; `snapshot` appends one HEAD-keyed trend point. The static web report is
-not built yet.
+states; `snapshot` appends one HEAD-keyed trend point. The static web report
+export is not built yet.
 
 Find files that repeatedly change together even when no import connects them:
 
