@@ -277,7 +277,17 @@ fn web_dist_matches_web_src_fingerprint() {
     for file in &files {
         feed(file.as_bytes());
         feed(&[0]);
-        feed(&std::fs::read(web.join(file)).unwrap());
+        let bytes = std::fs::read(web.join(file)).unwrap();
+        let mut index = 0;
+        while index < bytes.len() {
+            // A Windows checkout stores CRLF; the hash sees LF either way.
+            if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+                index += 1;
+                continue;
+            }
+            feed(&bytes[index..index + 1]);
+            index += 1;
+        }
     }
     let stored = std::fs::read_to_string(web.join("dist").join(".src-hash")).expect(
         "web/dist/.src-hash is missing: run `npm run build` in web/ to regenerate the bundle",

@@ -686,7 +686,7 @@ fn op_costs_on(state: &MetricState, limit: usize) -> Vec<OpCost> {
         }
     }
     let mut operations: Vec<(&str, u64)> = calls.into_iter().collect();
-    operations.sort_by(|left, right| right.1.cmp(&left.1));
+    operations.sort_by_key(|operation| std::cmp::Reverse(operation.1));
     operations
         .into_iter()
         .take(limit)

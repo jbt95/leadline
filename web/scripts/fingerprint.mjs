@@ -2,7 +2,8 @@
 //
 // Runs last in `npm run build` (after vite wipes dist/) and writes
 // dist/.src-hash: the FNV-1a 64 hex of every file under web/src, fed as
-// relpath bytes, one 0x00 byte, then file bytes, in sorted path order.
+// relpath bytes, one 0x00 byte, then file bytes with CRLF normalized to LF
+// (so Windows checkouts hash the same), in sorted path order.
 // tests/stats.rs recomputes the same digest: any src change without a
 // rebuild fails the suite with no node involved.
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -40,7 +41,12 @@ const files = walk(src).sort();
 for (const file of files) {
   feed(encoder.encode(file));
   feed([0]);
-  feed(readFileSync(join(web, file)));
+  const bytes = readFileSync(join(web, file));
+  for (let i = 0; i < bytes.length; i++) {
+    // A Windows checkout stores CRLF; the hash sees LF either way.
+    if (bytes[i] === 0x0d && bytes[i + 1] === 0x0a) continue;
+    feed([bytes[i]]);
+  }
 }
 
 const out = join(web, "dist", ".src-hash");
