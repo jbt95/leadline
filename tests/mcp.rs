@@ -2119,7 +2119,7 @@ fn mcp_args_parse_port_and_host() {
         mcp_args(&["--port"]),
         Ok(Some(leadline::mcp::HttpOptions {
             host: "127.0.0.1".to_owned(),
-            port: leadline::mcp::DEFAULT_HTTP_PORT,
+            port: leadline::http::DEFAULT_PORT,
         }))
     );
     assert_eq!(mcp_args(&["--port", "0"]).unwrap().unwrap().port, 0);
@@ -2139,7 +2139,7 @@ fn mcp_args_parse_port_and_host() {
 fn http_bind_falls_back_to_free_port_when_taken() {
     let guard = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let taken = guard.local_addr().unwrap().port();
-    let (_listener, actual, fell_back) = leadline::mcp::bind_http("127.0.0.1", taken).unwrap();
+    let (_listener, actual, fell_back) = leadline::http::bind("127.0.0.1", taken).unwrap();
     assert!(fell_back);
     assert_ne!(actual, taken);
 }

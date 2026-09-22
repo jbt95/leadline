@@ -1,0 +1,29 @@
+{
+  "name": "leadline-stats",
+  "version": "0.17.0",
+  "private": true,
+  "description": "Local project-metrics dashboard served by the leadline binary. Built bundle is checked in under web/dist and embedded at compile time; runtime stays offline.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build && tailwindcss -i src/index.css -o dist/assets/index.css",
+    "test": "node --test test/",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "clsx": "2.1.1",
+    "lucide-react": "0.454.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "recharts": "^2.15.3",
+    "tailwind-merge": "2.5.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.12",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.4",
+    "tailwindcss": "4.1.12",
+    "typescript": "5.6.3",
+    "vite": "6.0.3"
+  }
+}

@@ -653,6 +653,112 @@ fn family_for(metric: &str) -> Option<&'static Family> {
     FAMILIES.iter().find(|family| family.name == metric)
 }
 
+/// One operation's p90 costs, sampled for the stats timeseries ring.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct OpCost {
+    pub operation: String,
+    pub latency_p90: Option<f64>,
+    pub cpu_p90: Option<f64>,
+    pub cpu_seconds_p90: Option<f64>,
+    pub rss_p90: Option<f64>,
+}
+
+/// Top operations by invocations with their p90 latency, CPU utilization,
+/// and peak RSS interpolated Prometheus-style from merged histogram rows.
+/// Capped at 12 operations so one series sample stays small.
+pub fn op_costs(directory: &Path, limit: usize) -> Vec<OpCost> {
+    let state = read_state(directory);
+    let mut calls: BTreeMap<&str, u64> = BTreeMap::new();
+    for row in state
+        .counters
+        .iter()
+        .filter(|row| row.metric == "leadline_invocations_total")
+    {
+        if let Some(operation) = row.labels.get("operation") {
+            *calls.entry(operation.as_str()).or_default() = calls
+                .get(operation.as_str())
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(row.value);
+        }
+    }
+    let mut operations: Vec<(&str, u64)> = calls.into_iter().collect();
+    operations.sort_by(|left, right| right.1.cmp(&left.1));
+    operations
+        .into_iter()
+        .take(limit)
+        .map(|(operation, _)| OpCost {
+            operation: operation.to_owned(),
+            latency_p90: merged_quantile(
+                &state,
+                "leadline_invocation_duration_seconds",
+                operation,
+                0.9,
+            ),
+            cpu_p90: merged_quantile(&state, "leadline_invocation_cpu_ratio", operation, 0.9),
+            cpu_seconds_p90: merged_quantile(
+                &state,
+                "leadline_invocation_cpu_seconds",
+                operation,
+                0.9,
+            ),
+            rss_p90: merged_quantile(&state, "leadline_invocation_max_rss_bytes", operation, 0.9),
+        })
+        .collect()
+}
+
+/// Merges one histogram family's rows for an operation across outcomes and
+/// interpolates one quantile; `None` without usable rows or bounds.
+fn merged_quantile(
+    state: &MetricState,
+    metric: &str,
+    operation: &str,
+    quantile: f64,
+) -> Option<f64> {
+    let bounds = family_for(metric)?.buckets;
+    if bounds.is_empty() {
+        return None;
+    }
+    let mut count = 0u64;
+    let mut buckets = vec![0u64; bounds.len()];
+    let mut matched = false;
+    for row in state.summaries.iter().filter(|row| {
+        row.metric == metric
+            && row
+                .labels
+                .get("operation")
+                .is_some_and(|value| value == operation)
+            && row.buckets.len() == bounds.len()
+    }) {
+        matched = true;
+        count = count.saturating_add(row.count);
+        for (slot, add) in buckets.iter_mut().zip(row.buckets.iter()) {
+            *slot = slot.saturating_add(*add);
+        }
+    }
+    if !matched || count == 0 {
+        return None;
+    }
+    let rank = quantile * count as f64;
+    let index = buckets
+        .iter()
+        .position(|cumulative| *cumulative as f64 >= rank)
+        .unwrap_or(bounds.len() - 1);
+    let upper = bounds[index];
+    if !upper.is_finite() {
+        return index.checked_sub(1).map(|previous| bounds[previous]);
+    }
+    let lower = index
+        .checked_sub(1)
+        .map_or(0.0, |previous| bounds[previous]);
+    let before = index.checked_sub(1).map_or(0, |previous| buckets[previous]);
+    let width = buckets[index].saturating_sub(before);
+    if width == 0 {
+        return Some(upper);
+    }
+    Some(lower + (rank - before as f64) / width as f64 * (upper - lower))
+}
+
 fn valid_row(row: &Row) -> bool {
     family_for(&row.metric).is_some_and(|family| valid_labels(family, &row.labels))
 }
@@ -871,6 +977,41 @@ fn update_store(directory: &Path, update: impl FnOnce(&mut MetricState)) -> std:
     Ok(())
 }
 
+/// Latest sampled CPU (millicores) and RSS (bytes) across all live gauge
+/// rows, for the stats sampler. Missing rows read as `None`.
+pub fn live_cost(directory: &Path) -> (Option<u64>, Option<u64>) {
+    let state = read_state(directory);
+    let max = |metric: &str| {
+        state
+            .gauges
+            .iter()
+            .filter(|row| row.metric == metric)
+            .map(|row| row.value)
+            .max()
+    };
+    (
+        max("leadline_live_cpu_millicores"),
+        max("leadline_live_rss_bytes"),
+    )
+}
+/// Store-wide cumulative totals for the stats sampler: invocations and gate
+/// findings across every surface and operation. A missing or unreadable
+/// store reads as zero, so a fresh directory still yields a series.
+pub fn store_totals(directory: &Path) -> (u64, u64) {
+    let state = read_state(directory);
+    let sum = |metric: &str| {
+        state
+            .counters
+            .iter()
+            .filter(|row| row.metric == metric)
+            .fold(0u64, |total, row| total.saturating_add(row.value))
+    };
+    (
+        sum("leadline_invocations_total"),
+        sum("leadline_findings_total"),
+    )
+}
+
 /// Reads the store, tolerating missing, unreadable, corrupt, and
 /// schema-mismatched files by starting fresh.
 fn read_state(directory: &Path) -> MetricState {
@@ -879,6 +1020,71 @@ fn read_state(directory: &Path) -> MetricState {
         .and_then(|bytes| serde_json::from_slice::<MetricState>(&bytes).ok())
         .filter(|state| state.schema_version == STATE_SCHEMA_VERSION)
         .unwrap_or_default()
+}
+
+/// Largest telemetry store the stats page will serve (1 MiB); the bounded
+/// store stays far below it, so anything larger is not our file.
+const MAX_SNAPSHOT_BYTES: u64 = 1024 * 1024;
+
+/// Serves the local metrics store to the loopback stats page as JSON.
+/// Unset or empty `LEADLINE_METRICS_DIR` answers a disabled envelope so the
+/// page states its reason instead of guessing. A missing store answers an
+/// empty `ok` — counters accumulate as commands run. The store holds only
+/// fixed label sets, counts, and durations, never repositories, paths,
+/// arguments, findings, or identities, so serving it over loopback reveals
+/// nothing sensitive.
+pub fn snapshot_json() -> serde_json::Value {
+    let Some(directory) = metrics_directory() else {
+        return serde_json::json!({
+            "status": "disabled",
+            "reason": "telemetry is off: set LEADLINE_METRICS_DIR on the server to record CPU, memory, and latency",
+        });
+    };
+    snapshot_json_for(&directory)
+}
+
+fn snapshot_json_for(directory: &Path) -> serde_json::Value {
+    let path = directory.join(STATE_FILE_NAME);
+    match std::fs::metadata(&path).map(|metadata| metadata.len()) {
+        Ok(size) if size > MAX_SNAPSHOT_BYTES => {
+            return serde_json::json!({
+                "status": "error",
+                "reason": "telemetry store too large to serve",
+            });
+        }
+        _ => {}
+    }
+    let empty = MetricState::default();
+    let state = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<MetricState>(&bytes).ok())
+        .filter(|state| state.schema_version == STATE_SCHEMA_VERSION)
+        .unwrap_or(empty);
+    // Histogram rows carry their family's bucket bounds so readers can
+    // compute quantiles the same way Prometheus' histogram_quantile does;
+    // the endpoint itself aggregates nothing.
+    let summaries: Vec<serde_json::Value> = state
+        .summaries
+        .iter()
+        .map(|row| {
+            let bounds = family_for(&row.metric).map_or(&[][..], |family| family.buckets);
+            serde_json::json!({
+                "metric": row.metric,
+                "labels": row.labels,
+                "count": row.count,
+                "sum": row.sum,
+                "buckets": row.buckets,
+                "bounds": bounds,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "status": "ok",
+        "schema_version": state.schema_version,
+        "counters": state.counters,
+        "summaries": summaries,
+        "gauges": state.gauges,
+    })
 }
 
 /// Writes through a per-process sibling temporary file and rename, so a
@@ -1509,4 +1715,138 @@ mod tests {
         assert_eq!(row.sum, 7.0);
         assert_eq!(row.buckets, vec![1, 3, 1, 1, 1, 1, 1, 1]);
     }
+
+    /// Store totals sum invocation and finding counters, reading zero for a
+    /// missing store.
+    #[test]
+    fn telemetry_totals_sum_and_read_zero_for_missing() {
+        let directory =
+            std::env::temp_dir().join(format!("leadline-telemetry-totals-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        assert_eq!(store_totals(&directory), (0, 0));
+
+        let mut state = MetricState::default();
+        state.increment(
+            "leadline_invocations_total",
+            &[
+                ("surface", "cli"),
+                ("operation", "check"),
+                ("outcome", "success"),
+            ],
+            3,
+        );
+        state.increment(
+            "leadline_findings_total",
+            &[
+                ("surface", "cli"),
+                ("operation", "check"),
+                ("kind", "function"),
+                ("state", "new"),
+            ],
+            2,
+        );
+        std::fs::write(
+            directory.join("state.json"),
+            serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(store_totals(&directory), (3, 2));
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// Live cost reads the peak sampler gauges, and zeros when absent.
+    #[test]
+    fn live_cost_reads_peak_gauges() {
+        let directory =
+            std::env::temp_dir().join(format!("leadline-telemetry-live-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        assert_eq!(live_cost(&directory), (None, None));
+
+        let mut state = MetricState::default();
+        state.set(
+            "leadline_live_cpu_millicores",
+            &[("surface", "cli"), ("operation", "check")],
+            250,
+        );
+        state.set(
+            "leadline_live_rss_bytes",
+            &[("surface", "cli"), ("operation", "check")],
+            134217728,
+        );
+        std::fs::write(
+            directory.join("state.json"),
+            serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(live_cost(&directory), (Some(250), Some(134217728)));
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// The stats page snapshot serves the store's rows, an empty `ok` for a
+    /// missing store, and an error past the size cap — never the raw file.
+    #[test]
+    fn telemetry_snapshot_serves_rows_empty_and_oversize() {
+        let directory = std::env::temp_dir().join(format!(
+            "leadline-telemetry-snapshot-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+
+        let empty = snapshot_json_for(&directory);
+        assert_eq!(empty["status"], "ok");
+        assert_eq!(empty["counters"].as_array().unwrap().len(), 0);
+
+        let mut state = MetricState::default();
+        state.increment(
+            "leadline_invocations_total",
+            &[
+                ("surface", "cli"),
+                ("operation", "stats"),
+                ("outcome", "success"),
+            ],
+            2,
+        );
+        std::fs::write(
+            directory.join("state.json"),
+            serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
+        let served = snapshot_json_for(&directory);
+        assert_eq!(served["status"], "ok");
+        assert_eq!(served["schema_version"], STATE_SCHEMA_VERSION);
+        assert_eq!(served["counters"][0]["value"], 2);
+        assert_eq!(served["counters"][0]["labels"]["operation"], "stats");
+
+        let mut timed = MetricState::default();
+        timed.observe(
+            "leadline_invocation_duration_seconds",
+            &[
+                ("surface", "cli"),
+                ("operation", "check"),
+                ("outcome", "success"),
+            ],
+            0.2,
+        );
+        std::fs::write(
+            directory.join("state.json"),
+            serde_json::to_vec(&timed).unwrap(),
+        )
+        .unwrap();
+        let histograms = snapshot_json_for(&directory);
+        assert_eq!(histograms["summaries"][0]["count"], 1);
+        assert_eq!(histograms["summaries"][0]["sum"], 0.2);
+        let bounds = histograms["summaries"][0]["bounds"]
+            .as_array()
+            .expect("histogram rows carry bucket bounds");
+        assert!(bounds.len() > 4, "duration family has real bounds");
+
+        std::fs::write(directory.join("state.json"), vec![0u8; 1024 * 1024 + 1]).unwrap();
+        assert_eq!(snapshot_json_for(&directory)["status"], "error");
+
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
 }

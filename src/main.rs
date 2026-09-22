@@ -118,7 +118,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
 }
 
 /// Every command [`dispatch_command`] accepts, so metric labels stay bounded.
-const CLI_OPERATIONS: [&str; 31] = [
+const CLI_OPERATIONS: [&str; 32] = [
     "analyze",
     "function",
     "changed",
@@ -146,6 +146,7 @@ const CLI_OPERATIONS: [&str; 31] = [
     "doctor",
     "update",
     "mcp",
+    "stats",
     "index",
     "skill",
     "version",
@@ -242,6 +243,7 @@ fn dispatch_command(args: Vec<String>) -> Result<ExitCode, CliError> {
         "doctor" => doctor_command(&args[1..]),
         "update" => update_command(&args[1..]),
         "mcp" => mcp_command(&args[1..]),
+        "stats" => stats_command(&args[1..]),
         "index" => index_command(&args[1..]),
         "skill" | "--skill" => {
             print!("{SKILL_TEXT}");
@@ -892,6 +894,56 @@ fn risk_command(args: &[String]) -> Result<ExitCode, CliError> {
 
 /// Canonical project build across every analytics section.
 fn project_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let parsed = parse_project_args(args, "project")?;
+    let report = leadline::analytics::build(&parsed.request)
+        .map_err(|error| CliError::incomplete(error.to_string()))?;
+    if parsed.agent_json {
+        println!(
+            "{}",
+            serde_json::to_string(&leadline::agent::project_agent_json(&report))
+                .map_err(|error| CliError::internal(error.to_string()))?
+        );
+    } else if parsed.json {
+        print_json(&report, true)?;
+    } else {
+        print!("{}", leadline::report::terminal_project(&report));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Serves the canonical project model over loopback, with a page that shows
+/// it and `POST /api/refresh` to re-analyze.
+fn stats_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let (rest, options) = leadline::stats::parse_serve_flags(args).map_err(CliError::usage)?;
+    if rest
+        .iter()
+        .any(|argument| matches!(argument.as_str(), "--json" | "--format"))
+    {
+        return Err(CliError::usage(
+            "--json and --format do not apply to stats: the canonical JSON is served at \
+             /api/project",
+        ));
+    }
+    let parsed = parse_project_args(&rest, "stats")?;
+    leadline::stats::serve(parsed.request, options).map_err(|error| {
+        match error.downcast::<leadline::stats::AnalysisError>() {
+            Ok(analysis) => CliError::incomplete(analysis.to_string()),
+            Err(error) => CliError::internal(error.to_string()),
+        }
+    })?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The one analysis request `project` and `stats` share.
+struct ProjectArgs {
+    request: leadline::analytics::ProjectRequest,
+    json: bool,
+    agent_json: bool,
+}
+
+/// Parses the analysis flags `project` and `stats` share; `command` names the
+/// caller in unknown-option errors.
+fn parse_project_args(args: &[String], command: &str) -> Result<ProjectArgs, CliError> {
     let mut path = PathBuf::from(".");
     let mut has_path = false;
     let mut json = false;
@@ -1004,7 +1056,9 @@ fn project_command(args: &[String]) -> Result<ExitCode, CliError> {
                 has_path = true;
             }
             value => {
-                return Err(CliError::usage(format!("unknown project option '{value}'")));
+                return Err(CliError::usage(format!(
+                    "unknown {command} option '{value}'"
+                )));
             }
         }
         index += 1;
@@ -1014,30 +1068,20 @@ fn project_command(args: &[String]) -> Result<ExitCode, CliError> {
             "--json and --format agent-json are exclusive",
         ));
     }
-    let request = leadline::analytics::ProjectRequest {
-        path,
-        target,
-        window,
-        mutation_inputs,
-        test_maps,
-        ownership_mode: ownership_mode.unwrap_or(OwnershipMode::AggregateOnly),
-        snapshots_path,
-        coverage: has_coverage.then_some(coverage),
-    };
-    let report = leadline::analytics::build(&request)
-        .map_err(|error| CliError::incomplete(error.to_string()))?;
-    if agent_json {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::agent::project_agent_json(&report))
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
-    } else if json {
-        print_json(&report, true)?;
-    } else {
-        print!("{}", leadline::report::terminal_project(&report));
-    }
-    Ok(ExitCode::SUCCESS)
+    Ok(ProjectArgs {
+        request: leadline::analytics::ProjectRequest {
+            path,
+            target,
+            window,
+            mutation_inputs,
+            test_maps,
+            ownership_mode: ownership_mode.unwrap_or(OwnershipMode::AggregateOnly),
+            snapshots_path,
+            coverage: has_coverage.then_some(coverage),
+        },
+        json,
+        agent_json,
+    })
 }
 
 fn set_ownership_mode(
@@ -4069,7 +4113,7 @@ fn usage() -> &'static str {
     "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--index DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--sarif FILE] [--baseline-sarif FILE] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--osv FILE] [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--sql] [--sql-fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--index DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]
   leadline security [PATH] --sarif FILE [--baseline-sarif FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--json] [--format agent-json|sarif] [--top N]\n  leadline risk [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]
   leadline dependencies [PATH] [--json] [--format agent-json]
-  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline sql [PATH] [--large-offset N] [--migration-root DIR] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline vulnerabilities [PATH] --osv FILE [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline sql-plan --current DIR --baseline DIR [--max-cost-increase-percent N] [--max-plan-rows-ratio N] [--max-estimate-error-ratio N] [--json] [--format agent-json|sarif] [--top N]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp [--port [N] [--host ADDR]]\n  leadline index [PATH] [--output DIR] [--verify] [--json]\n  leadline skill\n  leadline update [--integrations]\n  leadline version\n  leadline --version"
+  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline sql [PATH] [--large-offset N] [--migration-root DIR] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline vulnerabilities [PATH] --osv FILE [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline sql-plan --current DIR --baseline DIR [--max-cost-increase-percent N] [--max-plan-rows-ratio N] [--max-estimate-error-ratio N] [--json] [--format agent-json|sarif] [--top N]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp [--port [N] [--host ADDR]]\n  leadline stats [PATH] [--port [N]] [--host ADDR] [--open] [--since 30d|90d|365d] [--target REV] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline index [PATH] [--output DIR] [--verify] [--json]\n  leadline skill\n  leadline update [--integrations]\n  leadline version\n  leadline --version"
 }
 
 #[cfg(test)]

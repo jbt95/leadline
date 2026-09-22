@@ -35,6 +35,7 @@ leadline version
 leadline doctor [PATH]
 leadline update [--integrations]
 leadline mcp [--port [N] [--host ADDR]]
+leadline stats [PATH] [--port [N]] [--host ADDR] [--open] [--lcov FILE | --jacoco FILE | --coverage FILE] [--since 30d|90d|365d] [--target REV] [--pit FILE | --stryker FILE | --test-map FILE] [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities]
 leadline skill
 ```
 
@@ -67,7 +68,19 @@ leadline skill
 - `doctor`: self-check parsers, coverage readers, `git`, and `leadline.toml`.
 - `update`: replace the running binary with the latest GitHub release. Reads the release `VERSION`, downloads the platform archive, verifies it against the release `SHA256SUMS`, and replaces the running executable (atomic rename on Unix, rename-swap on Windows). `LEADLINE_BASE_URL` points at a mirror. Never automatic, no `--json`/`--format`, never exposed over MCP; download, verification, or extraction failure exits `3` and leaves the installed binary untouched. With `--integrations`, it then refreshes detected Pi, OMP, and Claude Code integrations through each harness's own CLI (`pi update git:github.com/jbt95/leadline`, `omp plugin install git:github.com/jbt95/leadline --force`, `claude plugin update leadline@leadline`); OpenCode local plugin paths are reported with `opencode2 service restart` guidance and never modified. Integration failures do not stop later updates and exit `3`.
 - `mcp`: serve the read-only MCP tool API over stdio (default; request lines are bounded at 32 MiB); the only writes are the opt-in local metrics store, confined to `LEADLINE_METRICS_DIR` ([telemetry.md](telemetry.md)). `--port [N]` serves the same tools over HTTP instead (`POST /mcp`, plus `GET /health` for status): a bare `--port` means 3000, `0` asks the OS for a free port, and a taken port falls back to a free one with the actual address printed to stderr. `--host ADDR` sets the bind address (default `127.0.0.1`) and requires `--port`, because it configures only the HTTP transport. HTTP mode bounds every request (bounded header lines, whole-request read and write deadlines, a 64 MiB in-flight body budget, a fixed worker ceiling that answers 503 when saturated) and rejects non-loopback browser `Origin` headers with 403 per the MCP Streamable HTTP spec; clients that send no `Origin` are unaffected. MCP tools read `leadline.toml` from the analysis root, so `[analysis].exclude`, `[sql]`, and `[vulnerabilities]` behave exactly as they do on the CLI.
+- `stats`: analyze once and serve the canonical `Project` over loopback with an embedded, read-only page. `PATH` defaults to `.`, and every analysis flag is the one `project` parses (`--json` and `--format` are rejected with a usage error pointing at `/api/project`). `--port` defaults to 3000 (a bare `--port` means 3000, `0` asks the OS for a free port, and a taken port falls back to a free one with a note on stderr); `--host ADDR` defaults to `127.0.0.1` and does not require `--port`; `--open` launches the default browser at the served URL, best effort. The URL line goes to **stderr** (`leadline: stats on http://127.0.0.1:3000`), so stdout stays clean for pipelines. Exit codes follow the CLI contract: `2` usage, `3` incomplete analysis, `4` input error. See the endpoint table below.
 - `skill` / `--skill`: print the canonical agent skill (`integrations/common/leadline-skill/SKILL.md`, baked into the binary).
+
+`stats` endpoints (loopback-bound, read-only; unknown paths are `404`, unsupported methods on a known path are `405`, and a failed refresh answers `500` with the previous snapshot still served):
+
+| Method | Path | Response |
+| --- | --- | --- |
+| GET | `/` | the embedded page (React dashboard built from `web/`, checked in under `web/dist`) |
+| GET | `/assets/app.js`, `/assets/index.css`, `/logo.svg` | embedded assets (`/logo.svg` is the shipped `assets/logo.svg`, included at build time) |
+| GET | `/api/project` | canonical `Project` JSON, byte-identical to `project --json` |
+| GET | `/api/telemetry` | local telemetry store snapshot (`ok` with counters/summaries/gauges, `disabled` when `LEADLINE_METRICS_DIR` is unset, or `error` when the store exceeds 1 MiB); see [telemetry.md](telemetry.md) |
+| POST | `/api/refresh` | `200` with fresh `meta` once the re-analysis finishes on that connection; `409` when one is already running |
+| GET | `/health` | `{"status":"ok","analyzed_at":…,"head_commit":…,"analyzer_version":…}` |
 
 ## Flags
 
@@ -131,8 +144,9 @@ leadline skill
 | `--include-tests` | unused | Analyze test files as ordinary candidates instead of leaving them out. |
 | `--verify` | index | Re-derive every file instead of reusing stored analysis, and report whether the stored index was reproduced exactly. |
 | `--integrations` | update | After replacing the binary, refresh detected Pi, OMP, and Claude Code integrations through each harness's own CLI. |
-| `--port [N]` | mcp | Serve HTTP instead of stdio; bare means 3000, `0` asks the OS, taken ports fall back free. |
-| `--host ADDR` | mcp | Bind address for HTTP mode (default `127.0.0.1`); requires `--port`. |
+| `--port [N]` | mcp, stats | Serve HTTP instead of stdio on `mcp`; on `stats` the flag only sets the port. Bare means 3000, `0` asks the OS, taken ports fall back free with a note on stderr. |
+| `--host ADDR` | mcp, stats | Bind address (default `127.0.0.1`). `mcp` requires `--port` with it, because it configures only the HTTP transport; `stats` does not. |
+| `--open` | stats | Launch the default browser at the served URL, best effort; the browser never opens without the flag. |
 
 Budget flags with `--json` or default terminal output are a usage error (exit `2`), never silently ignored. `--top 0` and unparsable budget values are usage errors.
 

@@ -9,7 +9,10 @@ hotspots), B (temporal coupling), C (dependencies and impact), and D
 comparison with `project`/`debt`/`snapshot` commands, deterministic source
 snapshots and Git analytics, ownership, duplication, policy with `change-risk`,
 mutation/test adapters, the canonical `Project` model, and the trend store.
-The static web report and standalone MCP parity for `mutation` remain open.
+The local metrics server (`leadline stats`) shipped the interactive web report
+form; the static `code-health-report/` export, partitioned data files, and the
+single-file `report.html` mode remain open, as does standalone MCP parity for
+`mutation`.
 
 The product question is not "how many metrics do we have" but "where is
 engineering risk concentrated, why does it matter, and what does changed code
@@ -76,6 +79,8 @@ Current modules:
 | `mutation`, `test_relationships` | PIT/Stryker ingestion and explicit test maps | released |
 | `duplication`, `policy` | token-clone detection and architecture rules | released |
 | `project`, `snapshots`, `analytics` | canonical model, trend store, orchestration | released |
+| `http` | shared HTTP transport for `mcp` and `stats`: bind with free-port fallback, request limits, deadlines, `Host`/`Origin` guards | released |
+| `stats` | loopback metrics server: embedded page, canonical `Project` JSON, single-flight refresh | released |
 | `report` (extended) | canonical report model plus static site generator (planned) | Milestone F |
 
 ## Normalized analytics schema
@@ -200,7 +205,7 @@ scope mismatch falls back to a full analysis.
 | C | dependency extraction, fan-in/out, transitive dependents, blast radius, cycles | **implemented** |
 | D | explainable `change-risk` model (complexity, CRAP, churn, impact, ownership concentration, policy) | **implemented** |
 | E | diff intelligence: new vs existing vs resolved debt, risk regressions | **implemented** |
-| F | static web report MVP: overview, distributions, hotspots, explorers, dependencies | not started; canonical `Project` model ready |
+| F | web report MVP: overview, distributions, hotspots, explorers, dependencies | local server (`stats`) shipped; static export, partitioning, and single-file mode open |
 | G | historical snapshots and trends, treemap, coupling and cycle views | store + `snapshot` CLI done; report views pending |
 | H | mutation ingestion (PIT, Stryker) and test-to-code relationships | adapters + `mutation` CLI done; MCP pending |
 | I | duplication detection and architecture policies with drift detection | **implemented** |

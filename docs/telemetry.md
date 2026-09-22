@@ -24,7 +24,7 @@ variable says.
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `leadline_invocations_total` | counter | `surface` (`cli`/`mcp`), `operation`, `outcome` | One per invocation or tool call. `outcome` is `success`, `gate_failed`, `usage_error`, `incomplete`, `input_error`, or `internal_error` (`gate_failed` mirrors exit `1`; `other` exists as a defensive fallback and no current command produces it). |
+| `leadline_invocations_total` | counter | `surface` (`cli`/`mcp`), `operation`, `outcome` | One per invocation or tool call. `operation` is the CLI command name or the MCP tool name, so `leadline stats` records `operation="stats"` and an unknown first argument records `other`. `outcome` is `success`, `gate_failed`, `usage_error`, `incomplete`, `input_error`, or `internal_error` (`gate_failed` mirrors exit `1`; `other` exists as a defensive fallback and no current command produces it). |
 | `leadline_invocation_duration_seconds` | histogram | `surface`, `operation`, `outcome` | Wall-clock duration: cumulative `_bucket` samples over fixed bounds (`0.005`–`30` seconds, plus `+Inf`), with `_count` and `_sum`. Percentiles: `histogram_quantile(0.9, sum by (le, operation) (rate(leadline_invocation_duration_seconds_bucket[1h])))`; the mean is still `_sum` / `_count`. |
 | `leadline_invocation_cpu_seconds` | histogram | `surface`, `operation`, `outcome` | CPU seconds (user plus system) the invocation consumed, measured from just after start-up: the whole command on the CLI, the delta across one tool call on MCP. Same `_bucket`/`_count`/`_sum` shape as duration, with its own bounds (`0.005`–`300` seconds). |
 | `leadline_invocation_max_rss_bytes` | histogram | `surface`, `operation`, `outcome` | Peak resident set size at finish, in bytes (`16` MiB–`16` GiB bounds). On MCP this is the server's high-water mark, not a per-call figure. |
@@ -143,6 +143,24 @@ A falling `new` count beside a steady `resolved` count is the shape of
 regressions being caught before they land. A rising `existing` gauge is the
 shape of accepted debt growing.
 
+## Stats page
+
+`leadline stats` serves this same store to its loopback dashboard at
+`GET /api/telemetry`: invocation counts, latency percentiles, live CPU and
+memory gauges, and gate finding counts. Histogram rows also carry their
+bucket bounds so the page can interpolate p50/p90/p99 latency, p90 CPU, and
+p90 peak memory per operation. Every five seconds the server samples the
+sampler's live CPU/RSS gauges plus store-wide totals into a capped ring of
+720 points (one hour), served as the `series` array behind the CPU,
+memory, and invocation-rate timeseries: those curves show what real
+invocations consumed, never the idling server process. The page shows a
+Telemetry section with those figures, or states that telemetry is off when
+`LEADLINE_METRICS_DIR` is unset on the server. If the persisted store is
+larger than 1 MiB, the endpoint reports an `error` status instead of serving
+it. Otherwise it reads the bounded store,
+adds histogram bucket bounds, and appends the in-memory `series` ring
+(including per-operation p90 summaries); it never mutates the persisted store.
+
 ## Grafana Alloy and Prometheus
 
 Alloy (or the OpenTelemetry Collector) moves telemetry; it does not store it.
@@ -219,7 +237,6 @@ server also records its own traffic: `leadline_mcp_sessions_total` and
 ended (`transport` is `stdio` here; an HTTP server runs until its host kills
 it, so it records no session row),
 `leadline_mcp_requests_total` counts every JSON-RPC request by method,
-`leadline_mcp_errors_total` counts protocol and transport failures by reason,
 `leadline_mcp_inflight_calls` shows concurrency, and
 `leadline_mcp_request_bytes`/`leadline_mcp_response_bytes` size the payloads.
 The server keeps its read-only guarantee for the analyzed repository: when

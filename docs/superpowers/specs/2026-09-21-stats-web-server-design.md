@@ -1,24 +1,26 @@
 # Local metrics server (`leadline stats`) design
 
-**Status:** Approved in chat on 2026-09-21; awaiting written-spec review.
+**Status:** Approved in chat on 2026-09-21. **Amended 2026-09-22** to describe
+what shipped: the page is no longer hand-written HTML/CSS/JS, it is a bundled
+React dashboard. See *Supersedes*.
 
-**Scope:** Serve the canonical `Project` model over loopback with an embedded,
-hand-written page, so a human can see every metric leadline produces without
-reading terminal output or JSON.
+**Scope:** Serve the canonical `Project` model over loopback with an embedded
+page, so a human can see every metric leadline produces without reading
+terminal output or JSON.
 
 ## Goals
 
 1. One command analyzes once, serves the page and the canonical JSON, and can
    re-analyze on demand from a button.
-2. The page renders every section of `Project`, and names the missing input
-   when a section cannot be computed.
-3. Zero new dependencies and no build step: reuse the HTTP layer already
-   hardened inside `src/mcp.rs`, embed hand-written HTML/CSS/JS with
-   `include_str!`, draw charts as inline SVG.
+2. The page renders the sections listed under *The page*, and names the missing
+   input when a section cannot be computed.
+3. Reuse the HTTP layer already hardened inside `src/mcp.rs`; embed the built
+   dashboard with `include_str!` so the binary serves a complete UI with nothing
+   beside it and the runtime stays offline.
 4. Loopback by default, with the same `Host`/`Origin` validation MCP uses, and
    read-only with respect to the analyzed repository.
 5. Keep the frontend a pure renderer: it sorts, filters, and formats; it never
-   computes a metric, a score, or a ranking.
+   computes a metric, a score, or a ranking over `Project`.
 
 ## Non-Goals
 
@@ -29,7 +31,8 @@ reading terminal output or JSON.
   calls and loads no CDN asset.
 - Any write action from the page: no threshold editing, no baseline writing,
   no snapshot capture.
-- A JavaScript build step, a framework, a chart library, or an npm dependency.
+- Server-side rendering, a dev server at runtime, or installing anything at
+  runtime. `web/node_modules` exists only to build `web/dist`.
 - New metrics, new joins, or new fields on the `Project` contract: the page
   renders exactly what `Project` carries. Per-function Halstead values and the
   maintainability index are not part of it and stay available through
@@ -37,6 +40,18 @@ reading terminal output or JSON.
   review.
 
 ## Supersedes
+
+**Superseded 2026-09-22 — "Zero new dependencies and no build step" (Goal 3),
+and the Non-Goal "A JavaScript build step, a framework, a chart library, or an
+npm dependency."** The page ships as a React 18 + TypeScript app built with
+Vite and Tailwind, charting with Recharts and icons from lucide-react. The
+bundle is produced by `npm run build` in `web/`, checked in under `web/dist`,
+and embedded at compile time. What survives from the original intent is the
+part that mattered: **the runtime is offline and dependency-free.** The binary
+serves three embedded assets and the page fetches only its own server. The
+build-time dependency tree is a development cost, not a runtime one. The
+reason for the change is that hand-written SVG charting did not scale to the
+treemap, sankey, and scatter views the sections needed.
 
 The 2026-09-13 remaining-analytics-milestones spec listed "a report server,
 network calls, telemetry, or a single-file HTML mode" as non-goals. That entry
@@ -66,6 +81,7 @@ src/http.rs  ── shared: bind with free-port fallback, request read, response
                 write, deadlines, connection ceiling, Host/Origin guards
 src/mcp.rs   ── uses src/http.rs (transport behavior unchanged)
 src/stats.rs ── routes, snapshot state, options parsing, embedded assets
+web/         ── the dashboard source; web/dist is what gets embedded
 ```
 
 Module boundaries:
@@ -76,8 +92,10 @@ Module boundaries:
 2. `src/stats.rs` owns routing, the snapshot, and option parsing. It never
    parses source code: it calls the same project builder the `project` command
    calls and keeps the serialized result.
-3. `src/stats/` holds `index.html`, `stats.css`, and `stats.js`, embedded with
-   `include_str!`. No template engine, no bundler.
+3. `web/` holds the dashboard. `web/dist/index.html`, `web/dist/assets/app.js`,
+   and `web/dist/assets/index.css` are embedded with `include_str!`; the logo is
+   served from `assets/logo.svg`. `web/dist` is checked in and hash-free by
+   Vite config, so the embedded paths stay stable across rebuilds.
 4. The analysis engine, adapters, and joins are untouched.
 
 ## Command surface
@@ -112,11 +130,13 @@ leadline stats [PATH] [--port [N]] [--host ADDR] [--open]
 
 | Method | Path | Response |
 | --- | --- | --- |
-| GET | `/` | the embedded page |
-| GET | `/stats.css`, `/stats.js`, `/logo.svg` | embedded assets (`/logo.svg` is the shipped `assets/logo.svg`, included at build time) |
-| GET | `/api/project` | canonical `Project` JSON, byte-identical to `project --json` |
+| GET | `/` | the embedded page (`web/dist/index.html`) |
+| GET | `/assets/app.js`, `/assets/index.css` | the embedded bundle and stylesheet |
+| GET | `/logo.svg` | the shipped `assets/logo.svg`, included at build time |
+| GET | `/api/project` | canonical `Project` JSON, byte-identical to `project --json`; `schema_version` is at `meta.schema_version` |
+| GET | `/api/telemetry` | the opt-in store: `ok`, `disabled`, or `error` over 1 MiB, plus a `series` array and per-operation p90 summaries |
 | POST | `/api/refresh` | `200` with fresh `meta` once the re-analysis finishes on that connection; `409` when one is already running |
-| GET | `/health` | `{"status":"ok","analyzed_at":…,"head_commit":…,"analyzer_version":…}` |
+| GET | `/health` | `{"status":"ok","analyzed_at":…,"duration_ms":…,"head_commit":…,"analyzer_version":…}` |
 
 Rules:
 
@@ -138,45 +158,53 @@ Rules:
 
 ## The page
 
-Sections, in order, with the `Project` field each one reads:
+One route renders at a time behind a hash URL (`#/overview` … `#/policy`), so
+every view is deep-linkable and the browser's back and forward work.
 
-| Section | Source | Unavailable when |
+| Route | Reads | Unavailable when |
 | --- | --- | --- |
-| Header: path, HEAD commit and timestamp, analyzer version, analyzed-at, duration, Refresh, Download JSON | `meta` | never |
-| KPI strip: files, functions, parse errors, dependency edges, cycles, duplication groups and lines, coverage percent, mutation score, policy violations, risk model | `summary` | individual tiles show `—` |
-| Complexity distribution: cyclomatic and cognitive histograms, plus a CRAP distribution when coverage exists | `files`, `functions` | CRAP needs `coverage` |
-| Hotspots: ranked rows with the `change-risk` score and its components | `risk` | `git_activity` absent → "no Git history: churn, ownership and impact weighting unavailable" |
-| Explorer: files table (language, functions, LOC, max cognitive, max cyclomatic, max CRAP, coverage, parse errors) with sort and filter, drilling into a file's functions | `files`, `functions` | never |
-| Dependencies: fan-in and fan-out leaders, the edge list, unresolved references, cycles | `dependencies`, `cycles` | never |
+| Overview: quality gate verdict, KPI measures, coverage and mutation mix, top risk, language mix | `summary`, `coverage`, `mutation`, `architecture_violations`, `risk`, `files` | individual tiles show `—` |
+| Measures: files, functions, coverage, mutation score, duplication, dependency edges and cycles, policy count, risk model, plus a files table | `summary`, `files` | never |
+| Complexity: cyclomatic/cognitive distributions and a complexity-vs-coverage scatter | `functions[]` | CRAP needs `coverage` |
+| Hotspots: risk treemap, churn-vs-complexity scatter, risk-component bars | `risk` | `git_activity` absent → "no Git history: churn, ownership and impact weighting unavailable" |
 | Coupling: related-file pairs with directional and Jaccard values | `temporal_coupling` | absent section → "no Git history" |
-| Ownership: concentration per module, contributor counts (never named rankings) | `ownership` | absent, or all-anonymous |
-| Coverage: per-file coverage and CRAP | `coverage` | no coverage input → "no coverage input: pass --lcov, --jacoco, or --coverage" |
-| Mutation: per-file mutation score and mutant counts, plus test relationships | `mutation`, `test_relationships` | no reports → "no mutation report: pass --pit or --stryker" |
-| Duplication: clone groups with their occurrences | `duplication` | never |
-| Architecture violations: rule, source, target, severity | `architecture_violations` | never (empty means clean) |
-| Trends: snapshot points when supplied | `snapshots` | absent → section hidden |
+| Trends: snapshot points when supplied | `snapshots` | absent → current-position baseline card |
+| Telemetry: invocation counts, latency percentiles, live CPU/RSS, per-operation p90 | the `LEADLINE_METRICS_DIR` store | telemetry off → stated when `LEADLINE_METRICS_DIR` is unset |
+| Policy: violations grouped by rule with worst severity and count | `architecture_violations` | never (empty means clean) |
+
+Not rendered as sections of their own: `dependencies`, `ownership`, and
+`duplication` reach the page only through the summary measures. Adding them is
+future work with its own scope.
 
 Rendering rules:
 
 - A missing section states its reason in one line; it never renders zero, and
   never hides silently.
-- Tables render a windowed slice of the sorted rows — 200 rows per page with
-  paging controls — so a large repository does not build a million DOM nodes.
-  Sorting and filtering happen client-side over the fetched array.
-- Charts are inline SVG drawn by hand: histograms for distributions, and
-  proportional bars for rankings. No canvas physics, no dependency graph
-  simulation; dependencies render as ranked lists plus cycle groups.
-- Palette comes from the shipped logo: ground `#0e1626`, text `#e8eef6`,
-  accent `#38bdf8`, muted `#64748b`. Status is conveyed by text as well as
+- The two full-length tables — the files table on Measures and the
+  risk-component list on Hotspots — render a windowed slice of the sorted rows,
+  **200 rows per page with paging controls**, so a large repository does not
+  build a million DOM nodes. Sorting and filtering happen client-side over the
+  fetched array. The summary cards that say "top N" are deliberately windowed
+  rankings and are labelled as such.
+- Charts are drawn from Recharts: histograms for distributions, proportional
+  bars for rankings, a treemap for risk concentration, a sankey for co-change
+  pairs. No canvas physics, no dependency-graph simulation.
+- Palette: light ground `#f3f3f3`, card `#ffffff`, ink `#333333`, muted
+  `#777777`, accent `#4b9fd5` with `#1d75b3` deep, `#00a94f` positive,
+  `#d4333f` negative, `#ed7d20` warning. Status is conveyed by text as well as
   color. Rows are keyboard-focusable; the page is usable at 1280 px and above,
   and remains readable when narrowed.
 - The page works with no network beyond the server: no external fonts, no CDN.
 
 ## Honesty and security rules
 
-- The page never computes a metric, score, or ranking; it formats, sorts, and
-  filters canonical values only. Every number shown is traceable to a `Project`
-  field.
+- The page never computes a metric, a score, or a ranking **over `Project`**:
+  it formats, sorts, and filters canonical values only, and every `Project`
+  number shown is traceable to a `Project` field. It may derive chart geometry
+  from canonical values — binning a histogram, a donut segment remainder, an
+  interpolated percentile over telemetry buckets — because those are
+  presentation shapes, not new measurements. Numbers sourced from the
+  telemetry store are traceable to a store field.
 - `stats` never writes to the analyzed repository, and it never shells out to
   anything but the existing Git adapter inside the analysis path.
 - Loopback by default; `--host` is the only way to widen the bind, and the
@@ -188,21 +216,21 @@ Rendering rules:
 ## Testing
 
 - `tests/stats.rs`, starting a real server on port 0 exactly as `tests/mcp.rs`
-  does for HTTP: `GET /` returns the page with the expected marker;
-  `/api/project` parses and carries `schema_version` 1; `POST /api/refresh`
-  advances `analyzed_at` and records a duration; a concurrent refresh gets
-  `409`; an analysis failure during refresh keeps the previous snapshot and
-  answers `500`; unknown paths `404`; wrong methods `405`; a foreign `Origin`
-  `403`; a non-loopback `Host` `400`.
+  does for HTTP: the endpoint matrix above, the `Origin`/`Host` guards, and
+  build-time asset integrity (`include_str!` of the three embedded assets,
+  non-empty with their markers, so a build that loses an asset fails loudly).
 - Unit tests in `src/stats.rs` for option parsing (port default, bare `--port`,
   `--host` without `--port`, `--open` accepted, unknown flag rejected) and for
-  the refresh guard.
-- Asset tests: the embedded page, CSS, and JS are non-empty and contain their
-  expected markers, so a build that loses an asset fails loudly.
+  the refresh guard, including the 409 and the 500-that-keeps-the-snapshot.
+- `web/test/pure.test.mjs` via `node --test` (zero dependencies) for the pure
+  helpers the page shares with its tests: cumulative-bucket quantiles with
+  explicit expected values, histogram merging, and hash-slug resolution.
 - Regression: `analyze --json` and `project --json` byte-identical before and
-  after, proving the transport extraction and the new command change nothing,
-  and the existing `tests/mcp.rs` HTTP cases pass unmodified, proving MCP's
-  transport behavior is unchanged by the extraction.
+  after for a fixed fixture, proving the transport extraction and the new
+  command change nothing, and the existing `tests/mcp.rs` HTTP cases pass
+  unmodified apart from the `mcp::DEFAULT_HTTP_PORT` → `http::DEFAULT_PORT` and
+  `bind_http` → `bind` renames, proving MCP's transport behavior is unchanged
+  by the extraction.
 - Payload measurement on this repository and a large corpus, recorded in the
   pull request discussion; `?section=` filtering is added only if the numbers
   demand it.
@@ -212,25 +240,26 @@ Rendering rules:
 ## Files touched
 
 `src/http.rs` (new, extracted from `src/mcp.rs`), `src/mcp.rs` (uses it),
-`src/stats.rs` (new), `src/stats/index.html`, `src/stats/stats.css`,
-`src/stats/stats.js` (new assets; the logo is served from the existing
-`assets/logo.svg` through `include_str!`), `src/main.rs`
-(operation list, dispatch, usage), `tests/stats.rs` (new),
-`docs/cli-reference.md`, `docs/architecture.md`, `docs/security-model.md`,
-`docs/analytics-roadmap.md`, `docs/telemetry.md` (operation label),
-`README.md`, `CHANGELOG.md`.
+`src/stats.rs` (new), `src/telemetry.rs` (store summaries and live gauges for
+`/api/telemetry`), `web/**` (the dashboard and its checked-in `web/dist`),
+`assets/stats-*.png` (README screenshots), `src/main.rs` (operation list,
+dispatch, usage), `tests/stats.rs` (new), `docs/cli-reference.md`,
+`docs/architecture.md`, `docs/security-model.md`, `docs/analytics-roadmap.md`,
+`docs/telemetry.md` (operation label and the stats page), `README.md`,
+`CHANGELOG.md`.
 
 ## Acceptance criteria
 
 1. `leadline stats --port 0` prints a loopback URL and serves page, assets,
-   JSON, refresh, and health on it.
-2. The page shows every section of `Project` for a repository with Git,
-   coverage, and duplication data, and states the exact reason for each section
-   it cannot compute on a repository without them.
+   JSON, telemetry, refresh, and health on it.
+2. The page shows each of its routes for a repository with Git, coverage, and
+   duplication data, and states the exact reason for each section it cannot
+   compute on a repository without them.
 3. Refresh re-analyzes and the page shows the new `analyzed_at`; a second
    concurrent refresh is rejected with `409`.
 4. `cargo fmt --check`, `cargo clippy --offline --all-targets --locked --
-   -D warnings`, and `cargo test --offline --locked` pass.
+   -D warnings`, and `cargo test --offline --locked` pass, as do
+   `npm test` and `npm run build` in `web/`.
 5. `analyze --json` and `project --json` are byte-identical to the previous
    release for the same inputs.
 6. Documentation lists the command, the endpoints, the security posture, and
@@ -241,10 +270,11 @@ Rendering rules:
 - **Transport extraction.** Moving the HTTP layer out of `src/mcp.rs` touches
   security-sensitive code; MCP's existing HTTP tests, plus a byte-identical
   MCP behavior check, guard it.
+  file for one dashboard. The runtime is unaffected, but a fresh checkout needs
+  `npm install` before `web/dist` can be regenerated.
 - **Payload size.** A very large `Project` on a huge repository may be slow to
   fetch or render. Measured first; `?section=` filtering is the escape hatch.
-- **DOM cost.** A framework-free page must stay windowed or large repositories
-  will lock the browser.
+- **DOM cost.** Even windowed, large repositories cost render time.
 - **Scope creep into Milestone F.** Static export, partitioning, and the
   single-file mode stay out; they are cheap later because the page already
   depends only on canonical JSON.
@@ -254,6 +284,8 @@ Rendering rules:
 - Whether to extend `Project` with Halstead and maintainability-index fields so
   the explorer can show them, or to leave that detail to `analyze --json`. A
   schema change with its own review; deferred.
+- Whether `dependencies`, `ownership`, and `duplication` deserve routes of
+  their own. Deferred: the summary measures cover the triage case.
 - Whether the page should offer per-section JSON downloads in addition to the
   full document. Deferred: the full download plus browser dev tools covers it.
 - Whether `/health` should expose the refresh state (`idle`/`running`) or stay

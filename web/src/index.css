@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+@source "./index.html";
+@source "./src/main.tsx";
+@source "./src/App.tsx";
+@source "./src/components/**/*.tsx";
+@source "./src/lib/**/*.ts";
+
+@theme {
+  --color-page: #f3f3f3;
+  --color-card: #ffffff;
+  --color-rule: #e6e6e6;
+  --color-rulestrong: #d4d4d4;
+  --color-ink: #333333;
+  --color-muted: #777777;
+  --color-sonar: #2673b8;
+  --color-sky: #4b9fd5;
+  --color-deep: #1d75b3;
+  --color-leaf: #00a94f;
+  --color-leafbg: #e9f7ef;
+  --color-blood: #d4333f;
+  --color-bloodbg: #fdecea;
+  --color-ember: #ed7d20;
+  --color-emberbg: #fdf1e7;
+
+  --font-sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html {
+  color-scheme: light;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-sky);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(75, 159, 213, 0.3);
+}
+
+/* Sidebar scroll area: a thin thumb in the palette's own rule color instead
+   of the browser default. */
+aside::-webkit-scrollbar {
+  width: 10px;
+}
+aside::-webkit-scrollbar-thumb {
+  background: var(--color-rulestrong);
+  border-radius: 8px;
+  border: 3px solid var(--color-card);
+}
+aside::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* One authored moment: the quality verdict settles in when it is (re-)read.
+   The banner remounts on every load and refresh, so this replays exactly
+   when a new verdict arrives — never on scroll or hover. */
+@keyframes verdict-settle {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.verdict-enter {
+  animation: verdict-settle 320ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .verdict-enter {
+    animation: none;
+  }
+}
+
+/* Live pulse: the only repeating motion on the page. Still under
+   reduced-motion, where the dot renders static. */
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.live-dot {
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot {
+    animation: none;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--color-page);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
