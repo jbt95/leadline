@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.18.0 - 2026-09-22
+
 ### Added
 
 - `leadline stats [PATH]` serves the canonical `Project` model over loopback with an embedded React + TypeScript dashboard (Tailwind, shadcn-style components, Lucide icons, shadcn/Recharts charts) — quality gate, measures, complexity distributions, hotspots, trends, telemetry, and policy violations — that renders canonical values only and states the reason for every section it cannot compute. The bundle is built from `web/` (`npm run build`, checked in under `web/dist`) and embedded at compile time, so runtime stays offline with no CDN loads. `GET /api/project` is byte-identical to `project --json`, `POST /api/refresh` re-analyzes with a single-flight `409` while one runs, `GET /health` reports the analyzer version, and `--open` launches the browser. `--port` defaults to 3000 (a taken port falls back to a free one with a note on stderr), `--host` to `127.0.0.1`, and the URL line goes to stderr.

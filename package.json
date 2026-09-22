@@ -1,6 +1,6 @@
 {
   "name": "leadline",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "private": true,
   "description": "Deterministic function-level complexity analysis for Go, Java, JavaScript, TypeScript, TSX, and Rust.",
   "keywords": ["pi-package", "pi-extension", "complexity", "static-analysis"],
