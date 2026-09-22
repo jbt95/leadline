@@ -5,7 +5,7 @@
   "description": "Local project-metrics dashboard served by the leadline binary. Built bundle is checked in under web/dist and embedded at compile time; runtime stays offline.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build && tailwindcss -i src/index.css -o dist/assets/index.css",
+    "build": "tsc --noEmit && vite build && tailwindcss -i src/index.css -o dist/assets/index.css && node scripts/fingerprint.mjs",
     "test": "node --test test/",
     "preview": "vite preview"
   },

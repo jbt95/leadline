@@ -667,7 +667,10 @@ pub struct OpCost {
 /// and peak RSS interpolated Prometheus-style from merged histogram rows.
 /// Capped at 12 operations so one series sample stays small.
 pub fn op_costs(directory: &Path, limit: usize) -> Vec<OpCost> {
-    let state = read_state(directory);
+    op_costs_on(&read_state(directory), limit)
+}
+
+fn op_costs_on(state: &MetricState, limit: usize) -> Vec<OpCost> {
     let mut calls: BTreeMap<&str, u64> = BTreeMap::new();
     for row in state
         .counters
@@ -690,19 +693,19 @@ pub fn op_costs(directory: &Path, limit: usize) -> Vec<OpCost> {
         .map(|(operation, _)| OpCost {
             operation: operation.to_owned(),
             latency_p90: merged_quantile(
-                &state,
+                state,
                 "leadline_invocation_duration_seconds",
                 operation,
                 0.9,
             ),
-            cpu_p90: merged_quantile(&state, "leadline_invocation_cpu_ratio", operation, 0.9),
+            cpu_p90: merged_quantile(state, "leadline_invocation_cpu_ratio", operation, 0.9),
             cpu_seconds_p90: merged_quantile(
-                &state,
+                state,
                 "leadline_invocation_cpu_seconds",
                 operation,
                 0.9,
             ),
-            rss_p90: merged_quantile(&state, "leadline_invocation_max_rss_bytes", operation, 0.9),
+            rss_p90: merged_quantile(state, "leadline_invocation_max_rss_bytes", operation, 0.9),
         })
         .collect()
 }
@@ -980,7 +983,10 @@ fn update_store(directory: &Path, update: impl FnOnce(&mut MetricState)) -> std:
 /// Latest sampled CPU (millicores) and RSS (bytes) across all live gauge
 /// rows, for the stats sampler. Missing rows read as `None`.
 pub fn live_cost(directory: &Path) -> (Option<u64>, Option<u64>) {
-    let state = read_state(directory);
+    live_cost_on(&read_state(directory))
+}
+
+fn live_cost_on(state: &MetricState) -> (Option<u64>, Option<u64>) {
     let max = |metric: &str| {
         state
             .gauges
@@ -998,7 +1004,10 @@ pub fn live_cost(directory: &Path) -> (Option<u64>, Option<u64>) {
 /// findings across every surface and operation. A missing or unreadable
 /// store reads as zero, so a fresh directory still yields a series.
 pub fn store_totals(directory: &Path) -> (u64, u64) {
-    let state = read_state(directory);
+    store_totals_on(&read_state(directory))
+}
+
+fn store_totals_on(state: &MetricState) -> (u64, u64) {
     let sum = |metric: &str| {
         state
             .counters
@@ -1010,6 +1019,32 @@ pub fn store_totals(directory: &Path) -> (u64, u64) {
         sum("leadline_invocations_total"),
         sum("leadline_findings_total"),
     )
+}
+
+/// One telemetry-store read for the stats sampler: live gauges, store-wide
+/// totals, and top-operation p90 costs. A missing store reads as defaults.
+#[derive(Default)]
+pub struct StoreSample {
+    pub cpu_mc: Option<u64>,
+    pub rss_bytes: Option<u64>,
+    pub invocations: u64,
+    pub findings: u64,
+    pub ops: Vec<OpCost>,
+}
+
+/// Reads the store once for the stats sampler; prefer this over the
+/// single-purpose readers when more than one figure is needed per tick.
+pub fn sample_store(directory: &Path, limit: usize) -> StoreSample {
+    let state = read_state(directory);
+    let (cpu_mc, rss_bytes) = live_cost_on(&state);
+    let (invocations, findings) = store_totals_on(&state);
+    StoreSample {
+        cpu_mc,
+        rss_bytes,
+        invocations,
+        findings,
+        ops: op_costs_on(&state, limit),
+    }
 }
 
 /// Reads the store, tolerating missing, unreadable, corrupt, and
@@ -1054,12 +1089,7 @@ fn snapshot_json_for(directory: &Path) -> serde_json::Value {
         }
         _ => {}
     }
-    let empty = MetricState::default();
-    let state = std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<MetricState>(&bytes).ok())
-        .filter(|state| state.schema_version == STATE_SCHEMA_VERSION)
-        .unwrap_or(empty);
+    let state = read_state(directory);
     // Histogram rows carry their family's bucket bounds so readers can
     // compute quantiles the same way Prometheus' histogram_quantile does;
     // the endpoint itself aggregates nothing.
@@ -1849,4 +1879,97 @@ mod tests {
         std::fs::remove_dir_all(&directory).unwrap();
     }
 
+    /// Twelve duration bounds: 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
+    /// 1.0, 2.5, 5.0, 10.0, 30.0.
+    fn duration_row(operation: &str, outcome: &str, count: u64, buckets: Vec<u64>) -> SummaryRow {
+        SummaryRow {
+            metric: "leadline_invocation_duration_seconds".to_owned(),
+            labels: labels_map(&[
+                ("surface", "cli"),
+                ("operation", operation),
+                ("outcome", outcome),
+            ]),
+            count,
+            sum: 0.0,
+            buckets,
+        }
+    }
+
+    /// `merged_quantile` merges outcome rows and interpolates inside the
+    /// bucket holding the rank: one success sample in (0.025, 0.05] plus
+    /// three failure samples in (0.1, 0.25] puts rank 3.6 in the 0.25
+    /// bucket, giving 0.1 + (3.6 - 1) / 3 * (0.25 - 0.1) = 0.23.
+    #[test]
+    fn merged_quantile_merges_outcomes_and_interpolates() {
+        let mut state = MetricState::default();
+        state.summaries.push(duration_row(
+            "check",
+            "success",
+            1,
+            vec![0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        ));
+        state.summaries.push(duration_row(
+            "check",
+            "error",
+            3,
+            vec![0, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3],
+        ));
+        let quantile =
+            merged_quantile(&state, "leadline_invocation_duration_seconds", "check", 0.9)
+                .expect("merged rows hold rank 3.6");
+        assert!((quantile - 0.23).abs() < 1e-9, "{quantile}");
+
+        assert_eq!(
+            merged_quantile(&state, "leadline_invocation_duration_seconds", "other", 0.9),
+            None,
+        );
+        assert_eq!(
+            merged_quantile(&state, "no_such_metric", "check", 0.9),
+            None,
+        );
+    }
+
+    /// Rows whose bucket counts do not match the family are ignored, so a
+    /// tampered row cannot shift the quantile.
+    #[test]
+    fn merged_quantile_ignores_mismatched_buckets() {
+        let mut state = MetricState::default();
+        state
+            .summaries
+            .push(duration_row("check", "success", 9, vec![9]));
+        assert_eq!(
+            merged_quantile(&state, "leadline_invocation_duration_seconds", "check", 0.9),
+            None,
+        );
+    }
+
+    /// `op_costs` ranks by invocations and reports `None` p90s for an
+    /// operation with counters but no histogram rows.
+    #[test]
+    fn op_costs_ranks_by_invocations_and_quantiles() {
+        let mut state = MetricState::default();
+        for (operation, calls) in [("check", 3), ("analyze", 5), ("idle", 1)] {
+            state.increment(
+                "leadline_invocations_total",
+                &[
+                    ("surface", "cli"),
+                    ("operation", operation),
+                    ("outcome", "success"),
+                ],
+                calls,
+            );
+        }
+        state.summaries.push(duration_row(
+            "analyze",
+            "success",
+            5,
+            vec![0, 0, 0, 0, 0, 5, 5, 5, 5, 5, 5, 5],
+        ));
+        let costs = op_costs_on(&state, 12);
+        assert_eq!(costs.len(), 3);
+        assert_eq!(costs[0].operation, "analyze");
+        assert!(costs[0].latency_p90.is_some());
+        let idle = costs.iter().find(|cost| cost.operation == "idle").unwrap();
+        assert_eq!(idle.latency_p90, None);
+    }
 }

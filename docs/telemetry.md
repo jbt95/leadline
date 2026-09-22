@@ -237,6 +237,9 @@ server also records its own traffic: `leadline_mcp_sessions_total` and
 ended (`transport` is `stdio` here; an HTTP server runs until its host kills
 it, so it records no session row),
 `leadline_mcp_requests_total` counts every JSON-RPC request by method,
+`leadline_mcp_errors_total` counts protocol and transport failures by reason —
+the shared HTTP transport records here for both servers, so a `stats` 400,
+403, or 503 lands in the same family with `transport="http"` —
 `leadline_mcp_inflight_calls` shows concurrency, and
 `leadline_mcp_request_bytes`/`leadline_mcp_response_bytes` size the payloads.
 The server keeps its read-only guarantee for the analyzed repository: when

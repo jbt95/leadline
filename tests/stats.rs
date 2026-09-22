@@ -135,6 +135,24 @@ fn stats_serves_canonical_json() {
     let project: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(project["meta"]["schema_version"], 1);
 
+    // `/api/project` is byte-identical to `project --json` on the same tree.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_leadline"))
+        .args(["project", "--json"])
+        .arg(&server.root)
+        .env_remove("LEADLINE_METRICS_DIR")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        body.as_bytes(),
+        output.stdout.as_slice(),
+        "byte-identical to project --json"
+    );
+
     let (status, content_type, body) =
         exchange(port, "GET /api/telemetry HTTP/1.1\r\nHost: localhost");
     assert_eq!(status, 200);
@@ -216,4 +234,57 @@ fn embedded_dashboard_assets_are_complete() {
     assert!(index.contains("id=\"root\""));
     assert!(app.len() > 10_000);
     assert!(css.len() > 1_000);
+}
+
+/// `web/dist` is rebuilt from `web/src` on every dashboard change: the build
+/// writes a FNV-1a fingerprint (`node web/scripts/fingerprint.mjs`) that this
+/// test recomputes with no node involved, so a stale bundle fails offline.
+#[test]
+fn web_dist_matches_web_src_fingerprint() {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, found: &mut Vec<String>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, found);
+            } else {
+                found.push(
+                    path.strip_prefix(root)
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .replace('\\', "/"),
+                );
+            }
+        }
+    }
+    let web = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web");
+    let mut files = Vec::new();
+    walk(&web.join("src"), &web, &mut files);
+    files.sort();
+    // FNV-1a 64, matching web/scripts/fingerprint.mjs.
+    let mut digest: u64 = 14_695_981_039_346_656_037;
+    let mut feed = |bytes: &[u8]| {
+        for byte in bytes {
+            digest ^= u64::from(*byte);
+            digest = digest.wrapping_mul(1_099_511_628_211);
+        }
+    };
+    for file in &files {
+        feed(file.as_bytes());
+        feed(&[0]);
+        feed(&std::fs::read(web.join(file)).unwrap());
+    }
+    let stored = std::fs::read_to_string(web.join("dist").join(".src-hash")).expect(
+        "web/dist/.src-hash is missing: run `npm run build` in web/ to regenerate the bundle",
+    );
+    assert_eq!(
+        format!("{digest:016x}"),
+        stored.trim(),
+        "web/dist is stale: run `npm run build` in web/ after changing web/src"
+    );
 }

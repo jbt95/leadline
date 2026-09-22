@@ -272,7 +272,7 @@ export function Coupling({ coupling }: { coupling: CouplingSection | null }) {
     .filter((e) => e.source != null && e.target != null && (e.co_changes ?? 0) > 0)
     .sort((a, b) => (b.co_changes ?? 0) - (a.co_changes ?? 0))
     .slice(0, 15)
-    .map((e) => ({ source: e.source as string, target: e.target as string, value: e.co_changes ?? 0 }));
+    .map((e) => ({ source: e.source as string, target: e.target as string, value: e.co_changes ?? 0, directional: e.directional, reverse: e.reverse_directional, jaccard: e.jaccard }));
   return (
     <div className="flex flex-col gap-4">
       <Card>
@@ -286,7 +286,7 @@ export function Coupling({ coupling }: { coupling: CouplingSection | null }) {
           <table className="w-full border-separate border-spacing-0 text-[13px] tabular-nums">
             <thead>
               <tr>
-                {["source", "target", "shared commits"].map((h) => (
+                {["source", "target", "shared commits", "directional", "reverse", "jaccard"].map((h) => (
                   <th key={h} className="border-b border-rulestrong bg-[#fafafa] px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted">
                     {h}
                   </th>
@@ -299,6 +299,9 @@ export function Coupling({ coupling }: { coupling: CouplingSection | null }) {
                   <td className="max-w-[280px] truncate border-b border-rule px-3 py-[7px] font-mono text-xs" title={l.source}>{l.source}</td>
                   <td className="max-w-[280px] truncate border-b border-rule px-3 py-[7px] font-mono text-xs" title={l.target}>{l.target}</td>
                   <td className="border-b border-rule px-3 py-[7px] text-right">{fmtInt(l.value)}</td>
+                  <td className="border-b border-rule px-3 py-[7px] text-right">{l.directional == null ? "—" : fmtPct(l.directional * 100)}</td>
+                  <td className="border-b border-rule px-3 py-[7px] text-right">{l.reverse == null ? "—" : fmtPct(l.reverse * 100)}</td>
+                  <td className="border-b border-rule px-3 py-[7px] text-right">{l.jaccard == null ? "—" : fmtPct(l.jaccard * 100)}</td>
                 </tr>
               ))}
             </tbody>

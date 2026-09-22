@@ -8,7 +8,7 @@
 //! [`crate::http`]; routing and the embedded page live here.
 
 use crate::analytics::ProjectRequest;
-use crate::http::{DEFAULT_HOST, DEFAULT_PORT, JSON_CONTENT_TYPE, Request, Response};
+use crate::http::{DEFAULT_HOST, DEFAULT_PORT, JSON_CONTENT_TYPE, Request, Response, parse_port};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -74,19 +74,11 @@ pub fn parse_serve_flags(args: &[String]) -> Result<(Vec<String>, ServeOptions),
                     .ok_or_else(|| "--host requires an address".to_owned())?;
             }
             "--open" => open = true,
-            // `--serve` names the command, not a flag: reject it here instead
-            // of forwarding a flag no parser accepts.
-            "--serve" => return Err("unknown stats option '--serve'".to_owned()),
             other => rest.push(other.to_owned()),
         }
         index += 1;
     }
     Ok((rest, ServeOptions { host, port, open }))
-}
-
-fn parse_port(raw: &str) -> Result<u16, String> {
-    raw.parse::<u16>()
-        .map_err(|_| format!("invalid --port '{raw}': expected 0-65535"))
 }
 
 /// Analysis failure before the server starts. `main` maps it to the CLI's
@@ -190,24 +182,21 @@ fn spawn_sampler(samples: Arc<std::sync::Mutex<std::collections::VecDeque<Sample
             let directory = std::env::var_os(crate::telemetry::METRICS_DIR_VAR)
                 .filter(|value| !value.is_empty())
                 .map(std::path::PathBuf::from);
-            let (cpu_mc, rss_bytes) = directory
+            // One store read per tick: the sampler needs gauges, totals,
+            // and p90 costs together.
+            let sample = directory
                 .as_deref()
-                .map_or((None, None), crate::telemetry::live_cost);
-            let (invocations, findings) = directory
-                .as_deref()
-                .map_or((0, 0), crate::telemetry::store_totals);
-            let ops = directory
-                .as_deref()
-                .map_or(Vec::new(), |dir| crate::telemetry::op_costs(dir, 12));
+                .map(|dir| crate::telemetry::sample_store(dir, 12))
+                .unwrap_or_default();
             push_sample(
                 &samples,
                 Sample {
                     t_ms: unix_millis(),
-                    cpu_mc,
-                    rss_bytes,
-                    invocations,
-                    findings,
-                    ops,
+                    cpu_mc: sample.cpu_mc,
+                    rss_bytes: sample.rss_bytes,
+                    invocations: sample.invocations,
+                    findings: sample.findings,
+                    ops: sample.ops,
                 },
             );
             std::thread::sleep(SAMPLE_EVERY);
@@ -251,8 +240,12 @@ impl Server {
     fn analyze(request: &ProjectRequest) -> crate::Result<Snapshot> {
         let started = std::time::Instant::now();
         let project = crate::analytics::build(request)?;
+        // Pretty JSON plus a trailing newline: byte-identical to
+        // `project --json`, which prints through the same encoding.
+        let mut bytes = serde_json::to_vec_pretty(&project)?;
+        bytes.push(b'\n');
         let snapshot = Snapshot {
-            bytes: serde_json::to_vec(&project)?,
+            bytes,
             analyzed_at: unix_millis() / 1000,
             duration_ms: started.elapsed().as_millis(),
             head_commit: project.meta.head_commit,
@@ -404,8 +397,11 @@ mod tests {
     }
 
     #[test]
-    fn unknown_serve_flag_is_rejected() {
-        assert!(parse_serve_flags(&["--serve".to_owned()]).is_err());
+    fn serve_flag_falls_through_to_the_analysis_parser() {
+        // `--serve` is not a serve flag; it stays in `rest` for the shared
+        // analysis parser, which rejects it as an unknown stats option.
+        let (rest, _) = parse_serve_flags(&["--serve".to_owned()]).unwrap();
+        assert_eq!(rest, vec!["--serve".to_owned()]);
     }
 
     #[test]
@@ -429,6 +425,26 @@ mod tests {
                 "lcov.info".to_owned()
             ]
         );
+    }
+
+    /// The route table and `KNOWN_PATHS` cannot drift: every known path
+    /// answers a method status instead of 404, and unknown paths stay 404.
+    #[test]
+    fn known_paths_match_the_route_table() {
+        let server = test_server();
+        let request = |method: &str, path: &str| Request {
+            method: method.to_owned(),
+            path: path.to_owned(),
+            body: Vec::new(),
+        };
+        for path in KNOWN_PATHS {
+            let (status, _, _) = server.route(&request("GET", path));
+            assert_ne!(status, 404, "{path}");
+        }
+        let (status, _, _) = server.route(&request("POST", "/api/project"));
+        assert_eq!(status, 405);
+        let (status, _, _) = server.route(&request("GET", "/nope"));
+        assert_eq!(status, 404);
     }
 
     /// A refresh whose analysis fails answers 500 and leaves the previous

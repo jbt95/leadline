@@ -82,6 +82,9 @@ export interface CouplingEdge {
   source: string | null;
   target: string | null;
   co_changes: number | null;
+  directional: number | null;
+  reverse_directional: number | null;
+  jaccard: number | null;
 }
 
 export interface CouplingSection {

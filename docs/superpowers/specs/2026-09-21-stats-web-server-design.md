@@ -195,6 +195,10 @@ Rendering rules:
   color. Rows are keyboard-focusable; the page is usable at 1280 px and above,
   and remains readable when narrowed.
 - The page works with no network beyond the server: no external fonts, no CDN.
+- Page chrome beyond the routes: a command palette for jumping between routes,
+  a collapsible sidebar whose state persists in `localStorage`, and a mobile
+  drawer under narrow widths. These are navigation aids only; they read no
+  data and change no numbers.
 
 ## Honesty and security rules
 
@@ -270,6 +274,13 @@ dispatch, usage), `tests/stats.rs` (new), `docs/cli-reference.md`,
 - **Transport extraction.** Moving the HTTP layer out of `src/mcp.rs` touches
   security-sensitive code; MCP's existing HTTP tests, plus a byte-identical
   MCP behavior check, guard it.
+- **Checked-in bundle drift.** `web/dist` is committed and embedded. A source
+  fingerprint (`web/dist/.src-hash`, written by `npm run build` and checked by
+  `tests/stats.rs` with no node involved) fails the offline suite when `web/src`
+  changes without a rebuild; `npm run build && git diff --exit-code web/dist`
+  remains the escape hatch for build nondeterminism. It needs registry access,
+  so it does not live in the offline test path.
+- **Build-time dependency tree.** Six direct npm dependencies and a full lock
   file for one dashboard. The runtime is unaffected, but a fresh checkout needs
   `npm install` before `web/dist` can be regenerated.
 - **Payload size.** A very large `Project` on a huge repository may be slow to

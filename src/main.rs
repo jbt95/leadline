@@ -524,14 +524,7 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
             }
             "--format" => {
                 index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
-                if value != "agent-json" {
-                    return Err(CliError::usage(format!(
-                        "unknown --format '{value}': expected 'agent-json'"
-                    )));
-                }
+                parse_agent_json(args.get(index))?;
                 agent_json = true;
             }
             "--base" => {
@@ -578,11 +571,7 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
         }
         index += 1;
     }
-    if json && agent_json {
-        return Err(CliError::usage(
-            "--json and --format agent-json are exclusive",
-        ));
-    }
+    check_output_format(json, agent_json, false, None)?;
     if has_budget && !agent_json {
         return Err(CliError::usage(
             "budget flags (--top, --sort-by, --min-crap, --min-delta) require --format agent-json",
@@ -629,8 +618,18 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
     Ok(ExitCode::SUCCESS)
 }
 
-/// Ranked complexity-x-churn hotspots with the underlying dimensions exposed.
-fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
+/// Shared `--limit`/`--since`/coverage/output flags for `hotspots` and `risk`.
+struct RankedArgs {
+    path: PathBuf,
+    limit: usize,
+    window: HistoryWindow,
+    json: bool,
+    agent_json: bool,
+    coverage: Option<CoverageMap>,
+}
+
+/// Parse the ranked-command flags; the first positional argument is the path.
+fn parse_ranked_args(args: &[String], command: &str) -> Result<RankedArgs, CliError> {
     let mut path = PathBuf::from(".");
     let mut has_path = false;
     let mut limit = 10_usize;
@@ -645,14 +644,7 @@ fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
             "--json" => json = true,
             "--format" => {
                 index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
-                if value != "agent-json" {
-                    return Err(CliError::usage(format!(
-                        "unknown --format '{value}': expected 'agent-json'"
-                    )));
-                }
+                parse_agent_json(args.get(index))?;
                 agent_json = true;
             }
             "--limit" => {
@@ -670,29 +662,8 @@ fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
                     ))
                 })?;
             }
-            "--lcov" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--lcov requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Lcov)?);
-                has_coverage = true;
-            }
-            "--jacoco" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--jacoco requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Jacoco)?);
-                has_coverage = true;
-            }
-            "--coverage" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--coverage requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Auto)?);
-                has_coverage = true;
+            flag @ ("--lcov" | "--jacoco" | "--coverage") => {
+                has_coverage = parse_coverage_flag(flag, args, &mut index, &mut coverage)?;
             }
             value if !value.starts_with('-') && !has_path => {
                 path = PathBuf::from(value);
@@ -700,26 +671,33 @@ fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
             }
             value => {
                 return Err(CliError::usage(format!(
-                    "unknown hotspots option '{value}'"
+                    "unknown {command} option '{value}'"
                 )));
             }
         }
         index += 1;
     }
-    if json && agent_json {
-        return Err(CliError::usage(
-            "--json and --format agent-json are exclusive",
-        ));
-    }
-    let config = load_config_for(&path)?;
-    let excludes: &[String] = config
-        .as_ref()
-        .map(|selected| selected.analysis_excludes.as_slice())
-        .unwrap_or(&[]);
-    let coverage = has_coverage.then_some(coverage);
+    check_output_format(json, agent_json, false, None)?;
+    Ok(RankedArgs {
+        path,
+        limit,
+        window,
+        json,
+        agent_json,
+        coverage: has_coverage.then_some(coverage),
+    })
+}
+
+/// Analyze a file or tree for a ranked command; returns the report plus its
+/// analysis scope (the file's config dir, or the tree root itself).
+fn analyze_ranked(
+    path: &Path,
+    coverage: Option<&CoverageMap>,
+    excludes: &[String],
+) -> Result<(AnalysisReport, PathBuf), CliError> {
     let (analysis, scope) = if path.is_file() {
-        let scope = config_dir(&path);
-        let analyzed = leadline::analyze_file(&path, &scope, coverage.as_ref())
+        let scope = config_dir(path);
+        let analyzed = leadline::analyze_file(path, &scope, coverage)
             .map_err(|error| CliError::incomplete(error.to_string()))?;
         (
             AnalysisReport {
@@ -733,8 +711,10 @@ fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
         )
     } else {
         // The warm path is scoped to analyze and check in this phase.
-        let analyzed = analyze_with_index(&path, coverage.as_ref(), excludes, None)?;
-        (analyzed, path.clone())
+        (
+            analyze_with_index(path, coverage, excludes, None)?,
+            path.to_path_buf(),
+        )
     };
     if analysis.files.is_empty() {
         return Err(CliError::incomplete(format!(
@@ -742,16 +722,32 @@ fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
             path.display()
         )));
     }
+    Ok((analysis, scope))
+}
+
+/// Config plus its analysis excludes for the ranked commands.
+fn ranked_excludes(config: Option<&Config>) -> &[String] {
+    config
+        .map(|selected| selected.analysis_excludes.as_slice())
+        .unwrap_or(&[])
+}
+
+/// Ranked complexity-x-churn hotspots with the underlying dimensions exposed.
+fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let parsed = parse_ranked_args(args, "hotspots")?;
+    let config = load_config_for(&parsed.path)?;
+    let excludes = ranked_excludes(config.as_ref());
+    let (analysis, scope) = analyze_ranked(&parsed.path, parsed.coverage.as_ref(), excludes)?;
     let history = leadline::history::analyze_history(&scope)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
-    let report = leadline::hotspots::build(&analysis, &history, window, limit);
-    if agent_json {
+    let report = leadline::hotspots::build(&analysis, &history, parsed.window, parsed.limit);
+    if parsed.agent_json {
         println!(
             "{}",
             serde_json::to_string(&leadline::agent::hotspots_agent_json(&report))
                 .map_err(|error| CliError::internal(error.to_string()))?
         );
-    } else if json {
+    } else if parsed.json {
         print_json(&report, true)?;
     } else {
         print!("{}", leadline::report::terminal_hotspots(&report));
@@ -761,125 +757,25 @@ fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
 
 /// Explainable change-risk ranking with exposed components.
 fn risk_command(args: &[String]) -> Result<ExitCode, CliError> {
-    let mut path = PathBuf::from(".");
-    let mut has_path = false;
-    let mut limit = 10_usize;
-    let mut window = HistoryWindow::Days90;
-    let mut json = false;
-    let mut agent_json = false;
-    let mut coverage = CoverageMap::default();
-    let mut has_coverage = false;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--json" => json = true,
-            "--format" => {
-                index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
-                if value != "agent-json" {
-                    return Err(CliError::usage(format!(
-                        "unknown --format '{value}': expected 'agent-json'"
-                    )));
-                }
-                agent_json = true;
-            }
-            "--limit" => {
-                index += 1;
-                limit = parse_top(args.get(index), "--limit")?;
-            }
-            "--since" => {
-                index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--since requires a window"))?;
-                window = HistoryWindow::parse(value).ok_or_else(|| {
-                    CliError::usage(format!(
-                        "unknown --since '{value}': expected '30d', '90d', or '365d'"
-                    ))
-                })?;
-            }
-            "--lcov" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--lcov requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Lcov)?);
-                has_coverage = true;
-            }
-            "--jacoco" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--jacoco requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Jacoco)?);
-                has_coverage = true;
-            }
-            "--coverage" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--coverage requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Auto)?);
-                has_coverage = true;
-            }
-            value if !value.starts_with('-') && !has_path => {
-                path = PathBuf::from(value);
-                has_path = true;
-            }
-            value => {
-                return Err(CliError::usage(format!("unknown risk option '{value}'")));
-            }
-        }
-        index += 1;
-    }
-    if json && agent_json {
-        return Err(CliError::usage(
-            "--json and --format agent-json are exclusive",
-        ));
-    }
-    let config = load_config_for(&path)?;
-    let excludes: &[String] = config
-        .as_ref()
-        .map(|selected| selected.analysis_excludes.as_slice())
-        .unwrap_or(&[]);
-    let coverage = has_coverage.then_some(coverage);
-    let analysis = if path.is_file() {
-        let scope = config_dir(&path);
-        let analyzed = leadline::analyze_file(&path, &scope, coverage.as_ref())
+    let parsed = parse_ranked_args(args, "risk")?;
+    let config = load_config_for(&parsed.path)?;
+    let excludes = ranked_excludes(config.as_ref());
+    let (analysis, _) = analyze_ranked(&parsed.path, parsed.coverage.as_ref(), excludes)?;
+    let mut report =
+        leadline::analytics::analyze_risk(&analysis, &parsed.path, excludes, parsed.window)
             .map_err(|error| CliError::incomplete(error.to_string()))?;
-        AnalysisReport {
-            schema_version: OUTPUT_SCHEMA_VERSION,
-            metric_profile: METRIC_PROFILE,
-            analyzer_version: env!("CARGO_PKG_VERSION"),
-            metric_specs: MetricSpecs::default(),
-            files: vec![analyzed],
-        }
-    } else {
-        // The warm path is scoped to analyze and check in this phase.
-        analyze_with_index(&path, coverage.as_ref(), excludes, None)?
-    };
-    if analysis.files.is_empty() {
-        return Err(CliError::incomplete(format!(
-            "no supported files found under {}",
-            path.display()
-        )));
-    }
-    let mut report = leadline::analytics::analyze_risk(&analysis, &path, excludes, window)
-        .map_err(|error| CliError::incomplete(error.to_string()))?;
-    if agent_json {
-        report.risks.truncate(limit);
+    if parsed.agent_json {
+        report.risks.truncate(parsed.limit);
         println!(
             "{}",
             serde_json::to_string(&leadline::agent::risk_agent_json(&report))
                 .map_err(|error| CliError::internal(error.to_string()))?
         );
-    } else if json {
+    } else if parsed.json {
         print_json(&report, true)?;
     } else {
         let total = report.risks.len();
-        report.risks.truncate(limit);
+        report.risks.truncate(parsed.limit);
         print!("{}", leadline::report::terminal_risk(&report));
         if report.risks.len() < total {
             println!(
@@ -1115,14 +1011,7 @@ fn debt_command(args: &[String]) -> Result<ExitCode, CliError> {
             "--json" => json = true,
             "--format" => {
                 index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
-                if value != "agent-json" {
-                    return Err(CliError::usage(format!(
-                        "unknown --format '{value}': expected 'agent-json'"
-                    )));
-                }
+                parse_agent_json(args.get(index))?;
                 agent_json = true;
             }
             "--base" => {
@@ -1176,11 +1065,7 @@ fn debt_command(args: &[String]) -> Result<ExitCode, CliError> {
         }
         index += 1;
     }
-    if json && agent_json {
-        return Err(CliError::usage(
-            "--json and --format agent-json are exclusive",
-        ));
-    }
+    check_output_format(json, agent_json, false, None)?;
     let request = leadline::analytics::DebtRequest {
         path,
         base,
@@ -1812,6 +1697,39 @@ fn parse_scan_format(
     Ok(())
 }
 
+/// Parse a coverage file flag (`--lcov`, `--jacoco`, `--coverage`), merging the
+/// file into `coverage`. Returns false when `flag` is not a coverage flag.
+fn parse_coverage_flag(
+    flag: &str,
+    args: &[String],
+    index: &mut usize,
+    coverage: &mut CoverageMap,
+) -> Result<bool, CliError> {
+    let format = match flag {
+        "--lcov" => CoverageFormat::Lcov,
+        "--jacoco" => CoverageFormat::Jacoco,
+        "--coverage" => CoverageFormat::Auto,
+        _ => return Ok(false),
+    };
+    *index += 1;
+    let file = args
+        .get(*index)
+        .ok_or_else(|| CliError::usage(format!("{flag} requires a file")))?;
+    coverage.merge(load_coverage(file, format)?);
+    Ok(true)
+}
+
+/// Parse `--format agent-json`; it is the only accepted value.
+fn parse_agent_json(raw: Option<&String>) -> Result<(), CliError> {
+    let value = raw.ok_or_else(|| CliError::usage("--format requires a value"))?;
+    if value != "agent-json" {
+        return Err(CliError::usage(format!(
+            "unknown --format '{value}': expected 'agent-json'"
+        )));
+    }
+    Ok(())
+}
+
 /// Repeated scanner artifact flags shared by `vulnerabilities` and `check`.
 #[derive(Default)]
 struct VulnerabilityArtifactArgs {
@@ -2107,14 +2025,7 @@ fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
             "--json" => json = true,
             "--format" => {
                 index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
-                if value != "agent-json" {
-                    return Err(CliError::usage(format!(
-                        "unknown --format '{value}': expected 'agent-json'"
-                    )));
-                }
+                parse_agent_json(args.get(index))?;
                 agent_json = true;
             }
             "--top" => {
@@ -2152,11 +2063,7 @@ fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
         }
         index += 1;
     }
-    if json && agent_json {
-        return Err(CliError::usage(
-            "--json and --format agent-json are exclusive",
-        ));
-    }
+    check_output_format(json, agent_json, false, None)?;
     let Some(target) = target else {
         return Err(CliError::usage("coupling requires a TARGET file"));
     };
@@ -2207,14 +2114,7 @@ fn unused_command(args: &[String]) -> Result<ExitCode, CliError> {
             "--json" => json = true,
             "--format" => {
                 index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
-                if value != "agent-json" {
-                    return Err(CliError::usage(format!(
-                        "unknown --format '{value}': expected 'agent-json'"
-                    )));
-                }
+                parse_agent_json(args.get(index))?;
                 agent_json = true;
             }
             "--include-tests" => include_tests = true,
@@ -2236,11 +2136,7 @@ fn unused_command(args: &[String]) -> Result<ExitCode, CliError> {
         }
         index += 1;
     }
-    if json && agent_json {
-        return Err(CliError::usage(
-            "--json and --format agent-json are exclusive",
-        ));
-    }
+    check_output_format(json, agent_json, false, None)?;
     let config = load_config_for(&path)?;
     let excludes: &[String] = config
         .as_ref()
@@ -2354,14 +2250,7 @@ fn dependencies_command(args: &[String]) -> Result<ExitCode, CliError> {
             "--json" => json = true,
             "--format" => {
                 index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
-                if value != "agent-json" {
-                    return Err(CliError::usage(format!(
-                        "unknown --format '{value}': expected 'agent-json'"
-                    )));
-                }
+                parse_agent_json(args.get(index))?;
                 agent_json = true;
             }
             value if !value.starts_with('-') && !has_path => {
@@ -2376,11 +2265,7 @@ fn dependencies_command(args: &[String]) -> Result<ExitCode, CliError> {
         }
         index += 1;
     }
-    if json && agent_json {
-        return Err(CliError::usage(
-            "--json and --format agent-json are exclusive",
-        ));
-    }
+    check_output_format(json, agent_json, false, None)?;
     let config = load_config_for(&path)?;
     let excludes: &[String] = config
         .as_ref()
@@ -2421,14 +2306,7 @@ fn impact_command(args: &[String]) -> Result<ExitCode, CliError> {
             "--json" => json = true,
             "--format" => {
                 index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
-                if value != "agent-json" {
-                    return Err(CliError::usage(format!(
-                        "unknown --format '{value}': expected 'agent-json'"
-                    )));
-                }
+                parse_agent_json(args.get(index))?;
                 agent_json = true;
             }
             "--top" => {
@@ -2451,11 +2329,7 @@ fn impact_command(args: &[String]) -> Result<ExitCode, CliError> {
         }
         index += 1;
     }
-    if json && agent_json {
-        return Err(CliError::usage(
-            "--json and --format agent-json are exclusive",
-        ));
-    }
+    check_output_format(json, agent_json, false, None)?;
     let Some(target) = target else {
         return Err(CliError::usage("impact requires a TARGET file"));
     };
@@ -2610,203 +2484,294 @@ fn apply_config(thresholds: &mut Thresholds, config: &Config) {
     }
 }
 
-fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
-    let mut thresholds = Thresholds::default();
-    let mut base: Option<String> = None;
-    let mut baseline: Option<String> = None;
-    let mut regressions = false;
-    let mut sarifs: Vec<PathBuf> = Vec::new();
-    let mut baseline_sarifs: Vec<PathBuf> = Vec::new();
-    let mut fail_on_severity = None;
-    let mut new_only = false;
-    let mut changed_only = false;
-    let mut sql_flag = false;
-    let mut sql_fail_on_severity = None;
-    let mut common = Vec::new();
-    let mut index = 0;
-    let mut artifacts = VulnerabilityArtifactArgs::default();
-    while index < args.len() {
-        let mut artifact_index = index;
-        if parse_vulnerability_artifact(&args[index], args, &mut artifact_index, &mut artifacts)? {
-            index = artifact_index + 1;
-            continue;
-        }
-        if args[index] == "--base" {
-            index += 1;
-            base = Some(
-                args.get(index)
+/// Everything `check` parses off its own flags; anything else stays in `common`.
+#[derive(Default)]
+struct CheckArgs {
+    thresholds: Thresholds,
+    base: Option<String>,
+    baseline: Option<String>,
+    regressions: bool,
+    sarifs: Vec<PathBuf>,
+    baseline_sarifs: Vec<PathBuf>,
+    fail_on_severity: Option<leadline::security::SecuritySeverity>,
+    new_only: bool,
+    changed_only: bool,
+    sql: bool,
+    sql_fail_on_severity: Option<leadline::security::SecuritySeverity>,
+    common: Vec<String>,
+    artifacts: VulnerabilityArtifactArgs,
+}
+
+/// Presence flags `check` stores as booleans; false when `arg` is not one.
+fn parse_check_bool_flag(arg: &str, args: &mut CheckArgs) -> bool {
+    match arg {
+        "--regressions" => args.regressions = true,
+        "--new-only" => args.new_only = true,
+        "--changed-only" => args.changed_only = true,
+        "--sql" => args.sql = true,
+        _ => return false,
+    }
+    true
+}
+
+/// Value flags `check` stores as a revision, path, or severity; false otherwise.
+/// Leaves `index` on the value token, as [`parse_check_bool_flag`] leaves it on
+/// the flag, so the caller advances past both.
+fn parse_check_value_flag(
+    tokens: &[String],
+    index: &mut usize,
+    args: &mut CheckArgs,
+) -> Result<bool, CliError> {
+    match tokens[*index].as_str() {
+        "--base" => {
+            *index += 1;
+            args.base = Some(
+                tokens
+                    .get(*index)
                     .ok_or_else(|| CliError::usage("--base requires a revision"))?
                     .clone(),
             );
-            index += 1;
-            continue;
         }
-        if args[index] == "--baseline" {
-            index += 1;
-            baseline = Some(
-                args.get(index)
+        "--baseline" => {
+            *index += 1;
+            args.baseline = Some(
+                tokens
+                    .get(*index)
                     .ok_or_else(|| CliError::usage("--baseline requires a file"))?
                     .clone(),
             );
-            index += 1;
-            continue;
         }
-        if args[index] == "--regressions" {
-            regressions = true;
-            index += 1;
-            continue;
-        }
-        if args[index] == "--sarif" {
-            index += 1;
-            sarifs.push(PathBuf::from(
-                args.get(index)
+        "--sarif" => {
+            *index += 1;
+            args.sarifs.push(PathBuf::from(
+                tokens
+                    .get(*index)
                     .ok_or_else(|| CliError::usage("--sarif requires a file"))?,
             ));
-            index += 1;
-            continue;
         }
-        if args[index] == "--baseline-sarif" {
-            index += 1;
-            baseline_sarifs
-                .push(PathBuf::from(args.get(index).ok_or_else(|| {
-                    CliError::usage("--baseline-sarif requires a file")
-                })?));
-            index += 1;
-            continue;
+        "--baseline-sarif" => {
+            *index += 1;
+            args.baseline_sarifs.push(PathBuf::from(
+                tokens
+                    .get(*index)
+                    .ok_or_else(|| CliError::usage("--baseline-sarif requires a file"))?,
+            ));
         }
-        if args[index] == "--fail-on-severity" {
-            index += 1;
-            fail_on_severity = Some(parse_severity_flag(args.get(index), "--fail-on-severity")?);
-            index += 1;
-            continue;
+        "--fail-on-severity" => {
+            *index += 1;
+            args.fail_on_severity = Some(parse_severity_flag(
+                tokens.get(*index),
+                "--fail-on-severity",
+            )?);
         }
-        if args[index] == "--new-only" {
-            new_only = true;
-            index += 1;
-            continue;
-        }
-        if args[index] == "--changed-only" {
-            changed_only = true;
-            index += 1;
-            continue;
-        }
-        if args[index] == "--sql" {
-            sql_flag = true;
-            index += 1;
-            continue;
-        }
-        if args[index] == "--sql-fail-on-severity" {
-            index += 1;
-            sql_fail_on_severity = Some(parse_severity_flag(
-                args.get(index),
+        "--sql-fail-on-severity" => {
+            *index += 1;
+            args.sql_fail_on_severity = Some(parse_severity_flag(
+                tokens.get(*index),
                 "--sql-fail-on-severity",
             )?);
-            index += 1;
-            continue;
         }
-        let target = match args[index].as_str() {
-            "--cognitive" => Some(&mut thresholds.cognitive),
-            "--cyclomatic" => Some(&mut thresholds.cyclomatic),
-            "--max-nesting" => Some(&mut thresholds.max_nesting),
-            "--crap" => {
-                index += 1;
-                let raw = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--crap requires a limit"))?;
-                let value: f64 = raw
-                    .parse()
-                    .map_err(|_| CliError::usage("--crap requires a numeric limit"))?;
-                if !value.is_finite() || value < 0.0 {
-                    return Err(CliError::usage(
-                        "--crap requires a finite, non-negative limit",
-                    ));
-                }
-                thresholds.crap = Some(value);
-                None
-            }
-            _ => {
-                common.push(args[index].clone());
-                None
-            }
-        };
-        if let Some(target) = target {
-            index += 1;
-            let raw = args
-                .get(index)
-                .ok_or_else(|| CliError::usage("metric threshold requires a limit"))?;
-            *target = Some(
-                raw.parse()
-                    .map_err(|_| CliError::usage("metric threshold requires a numeric limit"))?,
-            );
-        }
-        index += 1;
+        _ => return Ok(false),
     }
-    if regressions && base.is_none() && baseline.is_none() {
+    Ok(true)
+}
+
+/// Metric threshold flags; false when `tokens[*index]` is not one.
+fn parse_check_threshold(
+    tokens: &[String],
+    index: &mut usize,
+    args: &mut CheckArgs,
+) -> Result<bool, CliError> {
+    let target = match tokens[*index].as_str() {
+        "--cognitive" => Some(&mut args.thresholds.cognitive),
+        "--cyclomatic" => Some(&mut args.thresholds.cyclomatic),
+        "--max-nesting" => Some(&mut args.thresholds.max_nesting),
+        "--crap" => {
+            *index += 1;
+            let raw = tokens
+                .get(*index)
+                .ok_or_else(|| CliError::usage("--crap requires a limit"))?;
+            let value: f64 = raw
+                .parse()
+                .map_err(|_| CliError::usage("--crap requires a numeric limit"))?;
+            if !value.is_finite() || value < 0.0 {
+                return Err(CliError::usage(
+                    "--crap requires a finite, non-negative limit",
+                ));
+            }
+            args.thresholds.crap = Some(value);
+            return Ok(true);
+        }
+        _ => return Ok(false),
+    };
+    if let Some(target) = target {
+        *index += 1;
+        let raw = tokens
+            .get(*index)
+            .ok_or_else(|| CliError::usage("metric threshold requires a limit"))?;
+        *target = Some(
+            raw.parse()
+                .map_err(|_| CliError::usage("metric threshold requires a numeric limit"))?,
+        );
+    }
+    Ok(true)
+}
+
+/// Cross-flag usage rules for `check`.
+fn validate_check_args(args: &CheckArgs) -> Result<(), CliError> {
+    if args.regressions && args.base.is_none() && args.baseline.is_none() {
         return Err(CliError::usage(
             "--regressions requires --base REV or --baseline FILE",
         ));
     }
-    if base.is_some() && baseline.is_some() {
+    if args.base.is_some() && args.baseline.is_some() {
         return Err(CliError::usage("--base and --baseline are exclusive"));
     }
-    if changed_only && base.is_none() {
+    if args.changed_only && args.base.is_none() {
         return Err(CliError::usage("--changed-only requires --base REV"));
     }
-    let has_vuln_input = !artifacts.osv.is_empty() || !artifacts.trivy.is_empty();
-    let options = CommonOptions::parse(&common, "check")?;
+    Ok(())
+}
+
+/// `true` when `--osv`/`--trivy` input was supplied.
+fn has_vuln_input(artifacts: &VulnerabilityArtifactArgs) -> bool {
+    !artifacts.osv.is_empty() || !artifacts.trivy.is_empty()
+}
+
+/// A gate needs a metric threshold, a regression comparison, or scanner input.
+fn has_gate_input(args: &CheckArgs) -> bool {
+    !args.thresholds.is_empty()
+        || args.regressions
+        || !args.sarifs.is_empty()
+        || has_vuln_input(&args.artifacts)
+        || args.sql
+}
+
+/// Parse every `check` flag, then validate the flag combinations.
+fn parse_check_args(args: &[String]) -> Result<CheckArgs, CliError> {
+    let mut parsed = CheckArgs::default();
+    let mut index = 0;
+    while index < args.len() {
+        let mut artifact_index = index;
+        if parse_vulnerability_artifact(
+            &args[index],
+            args,
+            &mut artifact_index,
+            &mut parsed.artifacts,
+        )? {
+            index = artifact_index + 1;
+            continue;
+        }
+        let handled = parse_check_bool_flag(&args[index], &mut parsed)
+            || parse_check_value_flag(args, &mut index, &mut parsed)?
+            || parse_check_threshold(args, &mut index, &mut parsed)?;
+        if handled {
+            index += 1;
+            continue;
+        }
+        parsed.common.push(args[index].clone());
+        index += 1;
+    }
+    validate_check_args(&parsed)?;
+    Ok(parsed)
+}
+
+fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut parsed = parse_check_args(args)?;
+    let options = CommonOptions::parse(&parsed.common, "check")?;
     let config = load_config_for(&options.path)?;
     if let Some(config) = &config {
-        apply_config(&mut thresholds, config);
+        apply_config(&mut parsed.thresholds, config);
     }
-    if thresholds.is_empty() && !regressions && sarifs.is_empty() && !has_vuln_input && !sql_flag {
+    if !has_gate_input(&parsed) {
         return Err(CliError::usage(
             "check requires at least one metric threshold (e.g. --cognitive 15 --cyclomatic 10 --crap 30 --max-nesting 5), a [thresholds.function] section in leadline.toml, --regressions with --base/--baseline, --sarif FILE, --osv/--trivy FILE, or --sql",
         ));
     }
-
     let regression_limits = config
         .as_ref()
         .map(|selected| selected.regressions.clone())
         .unwrap_or_default();
-    let security = if sarifs.is_empty() {
+    let scanners = assemble_scanners(&parsed, &options, config.as_ref())?;
+    if let Some(base) = &parsed.base {
+        return check_changed(
+            &options,
+            base,
+            &parsed.thresholds,
+            parsed.regressions.then_some(&regression_limits),
+            scanners.security.as_ref(),
+            scanners.vulnerabilities.as_ref(),
+            scanners.sql.as_ref(),
+        );
+    }
+    if let Some(baseline) = &parsed.baseline {
+        return check_baseline(
+            &options,
+            baseline,
+            &parsed.thresholds,
+            parsed.regressions.then_some(&regression_limits),
+            scanners.security.as_ref(),
+            scanners.vulnerabilities.as_ref(),
+            scanners.sql.as_ref(),
+        );
+    }
+    check_report(&options, &parsed.thresholds, config.as_ref(), &scanners)
+}
+
+/// Outcomes of the scanner inputs `check` was asked to run.
+struct CheckScanners {
+    security: Option<leadline::security::SecurityOutcome>,
+    vulnerabilities: Option<leadline::vulnerabilities::VulnerabilityOutcome>,
+    sql: Option<leadline::sql::SqlOutcome>,
+}
+
+/// Run the requested `--sarif`, `--osv`/`--trivy`, and `--sql` inputs, in that
+/// order so the first failing input still reports first.
+fn assemble_scanners(
+    args: &CheckArgs,
+    options: &CommonOptions,
+    config: Option<&Config>,
+) -> Result<CheckScanners, CliError> {
+    let security = if args.sarifs.is_empty() {
         None
     } else {
-        let gate = fail_on_severity.map(|minimum| leadline::security::SecurityGate {
-            minimum,
-            new_only,
-            changed_only,
-        });
-        let comparison = base
+        let gate = args
+            .fail_on_severity
+            .map(|minimum| leadline::security::SecurityGate {
+                minimum,
+                new_only: args.new_only,
+                changed_only: args.changed_only,
+            });
+        let comparison = args
+            .base
             .as_ref()
             .map(|revision| leadline::security::ChangeComparison::Base(revision.clone()));
         Some(
             leadline::security::assemble(&leadline::security::SecurityRequest {
                 path: options.path.clone(),
-                sarif: sarifs,
-                baseline_sarif: baseline_sarifs,
+                sarif: args.sarifs.clone(),
+                baseline_sarif: args.baseline_sarifs.clone(),
                 comparison,
                 gate,
             })
             .map_err(|error| CliError::input(error.message().to_owned()))?,
         )
     };
-    let security_failed = security
-        .as_ref()
-        .is_some_and(|outcome| !outcome.violations.is_empty());
-    let vulnerabilities = if has_vuln_input {
-        let minimum = fail_on_severity.or(config
-            .as_ref()
-            .and_then(|selected| selected.vulnerabilities.minimum_severity));
-        let comparison = base
+    let vulnerabilities = if has_vuln_input(&args.artifacts) {
+        let minimum = args
+            .fail_on_severity
+            .or(config.and_then(|selected| selected.vulnerabilities.minimum_severity));
+        let comparison = args
+            .base
             .as_ref()
             .map(|revision| leadline::security::ChangeComparison::Base(revision.clone()));
         Some(
             leadline::vulnerabilities::assemble(&leadline::vulnerabilities::VulnerabilityRequest {
                 path: options.path.clone(),
-                osv: artifacts.osv,
-                trivy: artifacts.trivy,
-                baseline_osv: artifacts.baseline_osv,
-                baseline_trivy: artifacts.baseline_trivy,
+                osv: args.artifacts.osv.clone(),
+                trivy: args.artifacts.trivy.clone(),
+                baseline_osv: args.artifacts.baseline_osv.clone(),
+                baseline_trivy: args.artifacts.baseline_trivy.clone(),
                 comparison,
                 gate: minimum,
             })
@@ -2815,54 +2780,40 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
     } else {
         None
     };
-    let vulnerabilities_failed = vulnerabilities
-        .as_ref()
-        .is_some_and(|outcome| !outcome.violations.is_empty());
-    let sql = if sql_flag {
+    let sql = if args.sql {
         let sql_config = config
-            .as_ref()
             .map(|selected| selected.sql.clone())
             .unwrap_or_default();
         let excludes: &[String] = config
-            .as_ref()
             .map(|selected| selected.analysis_excludes.as_slice())
             .unwrap_or(&[]);
         let report = leadline::sql::analyze_sql_path(&options.path, &sql_config, excludes)
             .map_err(|error| CliError::input(error.to_string()))?;
-        Some(leadline::sql::outcome(report, sql_fail_on_severity))
+        Some(leadline::sql::outcome(report, args.sql_fail_on_severity))
     } else {
         None
     };
-    let sql_failed = sql
-        .as_ref()
-        .is_some_and(|outcome| !outcome.violations.is_empty());
-    if let Some(base) = base {
-        return check_changed(
-            &options,
-            &base,
-            &thresholds,
-            regressions.then_some(&regression_limits),
-            security.as_ref(),
-            vulnerabilities.as_ref(),
-            sql.as_ref(),
-        );
-    }
-    if let Some(baseline) = baseline {
-        return check_baseline(
-            &options,
-            &baseline,
-            &thresholds,
-            regressions.then_some(&regression_limits),
-            security.as_ref(),
-            vulnerabilities.as_ref(),
-            sql.as_ref(),
-        );
-    }
-    let excludes: &[String] = config
-        .as_ref()
-        .map(|selected| selected.analysis_excludes.as_slice())
-        .unwrap_or(&[]);
-    let index_dir = resolve_index_dir(&options.path, options.index_dir.as_deref(), config.as_ref());
+    Ok(CheckScanners {
+        security,
+        vulnerabilities,
+        sql,
+    })
+}
+
+/// A scanner gate failed when its outcome carries violations.
+fn outcome_failed<T>(violations: Option<&Vec<T>>) -> bool {
+    violations.is_some_and(|violations| !violations.is_empty())
+}
+
+/// Gate a fresh full-path analysis: print the report and pick the exit code.
+fn check_report(
+    options: &CommonOptions,
+    thresholds: &Thresholds,
+    config: Option<&Config>,
+    scanners: &CheckScanners,
+) -> Result<ExitCode, CliError> {
+    let excludes = ranked_excludes(config);
+    let index_dir = resolve_index_dir(&options.path, options.index_dir.as_deref(), config);
     let mut report = analyze_with_index(
         &options.path,
         options.coverage.as_ref(),
@@ -2884,18 +2835,30 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
     options.print_report_or_with_security(
         &report,
         ScannerReports {
-            security: security.as_ref(),
-            vulnerabilities: vulnerabilities.as_ref(),
-            sql: sql.as_ref(),
+            security: scanners.security.as_ref(),
+            vulnerabilities: scanners.vulnerabilities.as_ref(),
+            sql: scanners.sql.as_ref(),
         },
         has_findings,
         "No violations.",
         MetricGate {
-            thresholds: &thresholds,
+            thresholds,
             regressions: &[],
         },
     )?;
-    if has_findings || security_failed || vulnerabilities_failed || sql_failed {
+    let scanner_failed =
+        outcome_failed(
+            scanners
+                .security
+                .as_ref()
+                .map(|outcome| &outcome.violations),
+        ) || outcome_failed(
+            scanners
+                .vulnerabilities
+                .as_ref()
+                .map(|outcome| &outcome.violations),
+        ) || outcome_failed(scanners.sql.as_ref().map(|outcome| &outcome.violations));
+    if has_findings || scanner_failed {
         return Ok(ExitCode::from(1));
     }
     Ok(ExitCode::SUCCESS)
@@ -3125,29 +3088,8 @@ fn baseline_command(args: &[String]) -> Result<ExitCode, CliError> {
                         .clone(),
                 );
             }
-            "--lcov" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--lcov requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Lcov)?);
-                has_coverage = true;
-            }
-            "--jacoco" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--jacoco requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Jacoco)?);
-                has_coverage = true;
-            }
-            "--coverage" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--coverage requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Auto)?);
-                has_coverage = true;
+            flag @ ("--lcov" | "--jacoco" | "--coverage") => {
+                has_coverage = parse_coverage_flag(flag, args, &mut index, &mut coverage)?;
             }
             value if !value.starts_with('-') && !seen_path => {
                 path = PathBuf::from(value);
@@ -3208,43 +3150,15 @@ fn test_targets_command(args: &[String]) -> Result<ExitCode, CliError> {
         match args[index].as_str() {
             "--format" => {
                 index += 1;
-                match args.get(index).map(String::as_str) {
-                    Some("agent-json") => agent_json = true,
-                    Some(value) => {
-                        return Err(CliError::usage(format!(
-                            "unknown --format '{value}': expected 'agent-json'"
-                        )));
-                    }
-                    None => return Err(CliError::usage("--format requires a value")),
-                }
+                parse_agent_json(args.get(index))?;
+                agent_json = true;
             }
             "--top" => {
                 index += 1;
                 top = Some(parse_top(args.get(index), "--top")?);
             }
-            "--lcov" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--lcov requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Lcov)?);
-                has_coverage = true;
-            }
-            "--jacoco" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--jacoco requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Jacoco)?);
-                has_coverage = true;
-            }
-            "--coverage" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--coverage requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Auto)?);
-                has_coverage = true;
+            flag @ ("--lcov" | "--jacoco" | "--coverage") => {
+                has_coverage = parse_coverage_flag(flag, args, &mut index, &mut coverage)?;
             }
             value if !value.starts_with('-') && !seen_path => {
                 path = PathBuf::from(value);
@@ -3696,29 +3610,8 @@ impl CommonOptions {
                             CliError::usage("--index requires a directory")
                         })?));
                 }
-                "--lcov" => {
-                    index += 1;
-                    let file = args
-                        .get(index)
-                        .ok_or_else(|| CliError::usage("--lcov requires a file"))?;
-                    coverage.merge(load_coverage(file, CoverageFormat::Lcov)?);
-                    has_coverage = true;
-                }
-                "--jacoco" => {
-                    index += 1;
-                    let file = args
-                        .get(index)
-                        .ok_or_else(|| CliError::usage("--jacoco requires a file"))?;
-                    coverage.merge(load_coverage(file, CoverageFormat::Jacoco)?);
-                    has_coverage = true;
-                }
-                "--coverage" => {
-                    index += 1;
-                    let file = args
-                        .get(index)
-                        .ok_or_else(|| CliError::usage("--coverage requires a file"))?;
-                    coverage.merge(load_coverage(file, CoverageFormat::Auto)?);
-                    has_coverage = true;
+                flag @ ("--lcov" | "--jacoco" | "--coverage") => {
+                    has_coverage = parse_coverage_flag(flag, args, &mut index, &mut coverage)?;
                 }
                 value if !value.starts_with('-') && !has_path => {
                     path = PathBuf::from(value);
@@ -3732,19 +3625,7 @@ impl CommonOptions {
             }
             index += 1;
         }
-        if json && agent_json {
-            return Err(CliError::usage(
-                "--json and --format agent-json are exclusive",
-            ));
-        }
-        if json && sarif {
-            return Err(CliError::usage("--json and --format sarif are exclusive"));
-        }
-        if agent_json && sarif {
-            return Err(CliError::usage(
-                "--format agent-json and --format sarif are exclusive",
-            ));
-        }
+        check_output_format(json, agent_json, sarif, None)?;
         if sarif && command != "analyze" && command != "check" {
             return Err(CliError::usage(format!(
                 "--format sarif is only supported on analyze and check, not {command}"

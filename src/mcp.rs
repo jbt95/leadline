@@ -19,7 +19,7 @@ use crate::core::{
 };
 use crate::http::{
     DEFAULT_HOST, DEFAULT_PORT, JSON_CONTENT_TYPE, MAX_HTTP_BODY, Request, bad_request, bind,
-    http_error,
+    http_error, parse_port,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::io::BufRead as _;
@@ -178,11 +178,6 @@ pub fn parse_mcp_args(args: &[String]) -> Result<Option<HttpOptions>, String> {
         None if host.is_some() => Err("--host requires --port".to_owned()),
         None => Ok(None),
     }
-}
-
-fn parse_port(raw: &str) -> Result<u16, String> {
-    raw.parse::<u16>()
-        .map_err(|_| format!("invalid --port '{raw}': expected 0-65535"))
 }
 
 /// Serve the same JSON-RPC API over HTTP: `POST /mcp` takes a request
@@ -1117,6 +1112,128 @@ fn tool_analyze_function(params: &serde_json::Value) -> Result<serde_json::Value
     envelope(fields)
 }
 
+/// Violation rows, index reuse, and per-language parse-error counts for `check`.
+struct CheckRows {
+    rows: Vec<serde_json::Value>,
+    reuse: Option<crate::index::Reuse>,
+    parse_languages: Vec<(&'static str, u64)>,
+}
+
+/// Accumulate per-language parse-error counts; zero counts are dropped.
+fn note_parse_errors(counts: &mut Vec<(&'static str, u64)>, language: &'static str, count: u64) {
+    if count == 0 {
+        return;
+    }
+    match counts.iter_mut().find(|(known, _)| *known == language) {
+        Some(slot) => slot.1 += count,
+        None => counts.push((language, count)),
+    }
+}
+
+/// Apply coverage data to both sides of each changed-function pair.
+fn apply_changed_coverage(
+    report: &mut crate::diff::ChangedReport,
+    coverage: &crate::coverage::CoverageMap,
+) {
+    for change in &mut report.functions {
+        if let Some(before) = change.before.as_mut() {
+            coverage.apply_function(&change.path, before);
+        }
+        if let Some(after) = change.after.as_mut() {
+            coverage.apply_function(&change.path, after);
+        }
+    }
+}
+
+/// Violation rows and parse-error counts for `check --base`; regressions come
+/// from each before/after pair, not from a baseline file.
+fn check_changed_rows(
+    path: &str,
+    base: &str,
+    thresholds: &Thresholds,
+    regression_limits: Option<&RegressionLimits>,
+    coverage: Option<&crate::coverage::CoverageMap>,
+) -> Result<CheckRows, (i64, String)> {
+    let mut report = crate::diff::analyze_changed(Path::new(path), base)
+        .map_err(|error| (-32602, error.to_string()))?;
+    if let Some(coverage) = coverage {
+        apply_changed_coverage(&mut report, coverage);
+    }
+    let mut rows = Vec::new();
+    // Parse-error counts per language for metrics; paths never leave.
+    let mut parse_languages: Vec<(&'static str, u64)> = Vec::new();
+    for change in &report.functions {
+        let Some(after) = change.after.as_ref() else {
+            continue;
+        };
+        let mut reasons = thresholds.violation_reasons(&after.metrics);
+        if regression_limits.is_some_and(|limits| {
+            change
+                .before
+                .as_ref()
+                .is_some_and(|before| crate::diff::regression_violates(before, after, limits))
+        }) {
+            reasons.push("regression");
+        }
+        if !reasons.is_empty() {
+            rows.push(checked_function(&change.path, after, reasons));
+        }
+    }
+    for diagnostics in &report.parse_errors {
+        if let Some(language) = crate::telemetry::language_label(&diagnostics.path) {
+            note_parse_errors(
+                &mut parse_languages,
+                language,
+                diagnostics.after.len() as u64,
+            );
+        }
+    }
+    Ok(CheckRows {
+        rows,
+        reuse: None,
+        parse_languages,
+    })
+}
+
+/// Violation rows and parse-error counts for a full-path `check`; `regressed`
+/// holds `(path, id)` keys that gain the `regression` reason (empty for plain
+/// checks, so plain paths behave exactly as before).
+fn check_path_rows(
+    report: &crate::core::AnalysisReport,
+    thresholds: &Thresholds,
+    regressed: &BTreeSet<(String, String)>,
+    reuse: Option<crate::index::Reuse>,
+) -> CheckRows {
+    let mut rows = Vec::new();
+    // Parse-error counts per language for metrics; paths never leave.
+    let mut parse_languages: Vec<(&'static str, u64)> = Vec::new();
+    for file in &report.files {
+        for function in &file.functions {
+            let mut reasons = thresholds.violation_reasons(&function.metrics);
+            if !regressed.is_empty()
+                && regressed.contains(&(file.path.clone(), function.id.clone()))
+            {
+                reasons.push("regression");
+            }
+            if !reasons.is_empty() {
+                rows.push(checked_function(&file.path, function, reasons));
+            }
+        }
+    }
+    for file in &report.files {
+        note_parse_errors(
+            &mut parse_languages,
+            file.language.as_str(),
+            file.parse_errors.len() as u64,
+        );
+    }
+    CheckRows {
+        rows,
+        reuse,
+        parse_languages,
+    }
+}
+
 fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     reject_unknown(
         params,
@@ -1154,103 +1271,39 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
         .transpose()
         .map_err(|message| (-32602, message))?;
     let excludes = config_excludes(config.as_ref());
-    let mut rows = Vec::new();
-    let mut reuse = None;
-    // Parse-error counts per language for metrics; paths never leave.
-    let mut parse_languages: Vec<(&'static str, u64)> = Vec::new();
-    let mut note_parse_errors = |language: &'static str, count: u64| {
-        if count == 0 {
-            return;
-        }
-        match parse_languages
-            .iter_mut()
-            .find(|(known, _)| *known == language)
-        {
-            Some(slot) => slot.1 += count,
-            None => parse_languages.push((language, count)),
-        }
-    };
-    if let Some(base) = base {
-        let mut report = crate::diff::analyze_changed(Path::new(path), base)
-            .map_err(|error| (-32602, error.to_string()))?;
-        if let Some(coverage) = coverage.as_ref() {
-            for change in &mut report.functions {
-                if let Some(before) = change.before.as_mut() {
-                    coverage.apply_function(&change.path, before);
-                }
-                if let Some(after) = change.after.as_mut() {
-                    coverage.apply_function(&change.path, after);
-                }
-            }
-        }
-        for change in &report.functions {
-            let Some(after) = change.after.as_ref() else {
-                continue;
-            };
-            let mut reasons = thresholds.violation_reasons(&after.metrics);
-            if regression_limits.as_ref().is_some_and(|limits| {
-                change
-                    .before
-                    .as_ref()
-                    .is_some_and(|before| crate::diff::regression_violates(before, after, limits))
-            }) {
-                reasons.push("regression");
-            }
-            if !reasons.is_empty() {
-                rows.push(checked_function(&change.path, after, reasons));
-            }
-        }
-        for diagnostics in &report.parse_errors {
-            if let Some(language) = crate::telemetry::language_label(&diagnostics.path) {
-                note_parse_errors(language, diagnostics.after.len() as u64);
-            }
-        }
-    } else if let Some(baseline_path) = baseline_path {
-        let baseline = crate::baseline::Baseline::read(Path::new(baseline_path))
-            .map_err(|error| (-32602, error.to_string()))?;
-        let (report, warm) =
-            analyze_read_only(params, config.as_ref(), path, coverage.as_ref(), &excludes)?;
-        reuse = warm;
-        let regressed: BTreeSet<(String, String)> = match &regression_limits {
-            Some(limits) => baseline
-                .compare(&report, limits)
-                .iter()
-                .map(|finding| (finding.path.clone(), finding.id.clone()))
-                .collect(),
-            None => BTreeSet::new(),
-        };
-        for file in &report.files {
-            for function in &file.functions {
-                let mut reasons = thresholds.violation_reasons(&function.metrics);
-                if regression_limits.is_some()
-                    && regressed.contains(&(file.path.clone(), function.id.clone()))
-                {
-                    reasons.push("regression");
-                }
-                if !reasons.is_empty() {
-                    rows.push(checked_function(&file.path, function, reasons));
-                }
-            }
-        }
-        for file in &report.files {
-            note_parse_errors(file.language.as_str(), file.parse_errors.len() as u64);
-        }
+    let CheckRows {
+        mut rows,
+        reuse,
+        parse_languages,
+    } = if let Some(base) = base {
+        check_changed_rows(
+            path,
+            base,
+            &thresholds,
+            regression_limits.as_ref(),
+            coverage.as_ref(),
+        )?
     } else {
-        let (report, warm) =
+        let baseline = match baseline_path {
+            Some(file) => Some(
+                crate::baseline::Baseline::read(Path::new(file))
+                    .map_err(|error| (-32602, error.to_string()))?,
+            ),
+            None => None,
+        };
+        let (report, reuse) =
             analyze_read_only(params, config.as_ref(), path, coverage.as_ref(), &excludes)?;
-        reuse = warm;
-        for file in &report.files {
-            for function in &file.functions {
-                let reasons = thresholds.violation_reasons(&function.metrics);
-                if !reasons.is_empty() {
-                    rows.push(checked_function(&file.path, function, reasons));
-                }
-            }
-        }
-        for file in &report.files {
-            note_parse_errors(file.language.as_str(), file.parse_errors.len() as u64);
-        }
-    }
+        let regressed: BTreeSet<(String, String)> =
+            match (baseline.as_ref(), regression_limits.as_ref()) {
+                (Some(baseline), Some(limits)) => baseline
+                    .compare(&report, limits)
+                    .iter()
+                    .map(|finding| (finding.path.clone(), finding.id.clone()))
+                    .collect(),
+                _ => BTreeSet::new(),
+            };
+        check_path_rows(&report, &thresholds, &regressed, reuse)
+    };
     let passed = rows.is_empty();
     let (violations, truncated, total) = cap_with_limit(&mut rows, MAX_ENTRIES);
     // MCP check runs no scanner gates, so only function and parse-error

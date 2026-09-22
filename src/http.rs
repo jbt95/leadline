@@ -12,6 +12,14 @@ pub const DEFAULT_PORT: u16 = 3000;
 /// Bind address used when no host is given (loopback only).
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 
+/// Parse a `--port` value; shared by the MCP and `stats` servers so the
+/// error reads the same on both. A bare `--port` means [`DEFAULT_PORT`],
+/// and `--port 0` asks the OS for a free port.
+pub(crate) fn parse_port(raw: &str) -> Result<u16, String> {
+    raw.parse::<u16>()
+        .map_err(|_| format!("invalid --port '{raw}': expected 0-65535"))
+}
+
 /// Largest request body accepted (32 MiB); larger reads fail with 413
 /// instead of growing a buffer without bound.
 pub(crate) const MAX_HTTP_BODY: usize = 32 * 1024 * 1024;
