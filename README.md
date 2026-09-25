@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/MSRV-1.90-orange" alt="MSRV 1.90" />
 </p>
 
-Deterministic function-level complexity analysis for Go, Java, JavaScript, C, C++, TypeScript, TSX, Rust, and Python — a fast feedback loop for humans, CI, and AI coding agents.
+Deterministic function-level complexity analysis for Go, Java, JavaScript, C, C++, TypeScript, TSX, Rust, Python, and Zig — a fast feedback loop for humans, CI, and AI coding agents.
 
 `leadline` reports physical and logical LOC, parameters, nesting, cyclomatic and cognitive complexity, Halstead metrics, maintainability, coverage, and CRAP. It parses code with Tree-sitter and never executes it: no build runtime, no network, no project scripts.
 
@@ -34,7 +34,7 @@ Operating: [troubleshooting](docs/troubleshooting.md), [smoke tests](docs/smoke.
 
 ```mermaid
 flowchart LR
-    Sources["Source files: Go, Java, JavaScript, C, C++, TypeScript, TSX, Rust, Python"] --> Discovery["Discovery: gitignore-aware, skips generated and vendor dirs"]
+    Sources["Source files: Go, Java, JavaScript, C, C++, TypeScript, TSX, Rust, Python, Zig"] --> Discovery["Discovery: gitignore-aware, skips generated and vendor dirs"]
     Discovery --> Workers["Rayon workers: one file per worker"]
     Workers --> Parser["Tree-sitter parsing: ParserBackend::analyze"]
     Parser --> Engine["Metric engine: cyclomatic, cognitive, Halstead, maintainability"]

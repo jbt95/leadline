@@ -4,6 +4,10 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Added
+
+- Zig language support: grammar-backed analysis handles `.zig` functions and tests, including changed and duplication workflows. Local string `@import` references feed the dependency graph; `unused` treats `build.zig` and `src/{main,lib,root}.zig` as convention entries. SQL host analysis recognizes Zig query/execute calls, and the direct `tree-sitter-zig` grammar is pinned to `1.1.2`.
+
 ## 0.18.0 - 2026-09-22
 
 ### Added

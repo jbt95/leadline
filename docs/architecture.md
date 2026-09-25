@@ -19,9 +19,9 @@ source files -> graph -> dependency edges -> impact -> dependents
    function results + history + graph/impact ────┴─> risk -> ranked
 ```
 
-The parser seam is `ParserBackend::analyze`. The Tree-sitter adapter owns grammar selection, syntax names, and tree walking. The core engine receives only normalized events and source byte spans. It does not import Tree-sitter. A future Oxc adapter can implement the same interface without changing metrics.
+The parser seam is `ParserBackend::analyze`, currently implemented by `TreeSitterBackend`. It selects a Tree-sitter grammar from the source extension, walks the syntax tree, and returns `FileAnalysis`. The bundle path derives dependency and token products from that same tree; the core metric engine consumes normalized events and source byte spans, not Tree-sitter nodes.
 
-Git history intelligence is a second, independent adapter. `history` never imports the parser, the metric engine, or coverage; it turns one streamed `git log` walk into per-file facts keyed by normalized scope-relative paths. `coupling` indexes co-changes from the same walk (the `history::walk_commits` seam) and answers "what changes with this file?". `hotspots` is a join layer: it imports both `core` results and `history` facts and owns the path join and ranking. `graph` extracts the static file-level dependency graph (relative JS/TS imports, exact Java type imports, file-relative Rust `mod` declarations, quoted C/C++ includes, and Python relative imports, resolved against discovery) and `impact` answers "what depends on this file?" by reverse-BFS over those edges; `risk` is a join layer over `core`, `history`, `ownership`, `graph`/`impact`, and `policy` facts, scoring each file with the versioned `change-risk` model and weight-renormalized components. Ownership and policy layers follow the same pattern. See `analytics-roadmap.md` for the target architecture and normalized analytics model.
+Git history intelligence is a second, independent adapter. `history` never imports the parser, the metric engine, or coverage; it turns one streamed `git log` walk into per-file facts keyed by normalized scope-relative paths. `coupling` indexes co-changes from the same walk (the `history::walk_commits` seam) and answers "what changes with this file?". `hotspots` is a join layer: it imports both `core` results and `history` facts and owns the path join and ranking. `graph` extracts the static file-level dependency graph (relative JS/TS imports, exact Java type imports, file-relative Rust `mod` declarations, quoted C/C++ includes, Python relative imports, and local Zig `@import` strings, resolved against discovery) and `impact` answers "what depends on this file?" by reverse-BFS over those edges; `risk` is a join layer over `core`, `history`, `ownership`, `graph`/`impact`, and `policy` facts, scoring each file with the versioned `change-risk` model and weight-renormalized components. Ownership and policy layers follow the same pattern. See `analytics-roadmap.md` for the target architecture and normalized analytics model.
 
 Zig dependency edges are deliberately local-only: string `@import` arguments
 resolve only when they name an exact relative discovered `.zig` file. Bare
@@ -45,7 +45,7 @@ Each repository file is read, parsed, and walked by one Rayon worker. The worker
 - Recency windows are relative to the HEAD commit time, never the wall clock, so the same snapshot produces the same report. Merge commits are excluded. Renames resolve newest to oldest; the 30% threshold keeps small moves but can pair unrelated boilerplate-heavy files.
 - `hotspots` ranks by `max cognitive x changes in window` (`complexity-x-churn`) and keeps every dimension in the JSON. A missing repository degrades to complexity ranking with `git_available: false`; it is never an error.
 - `coupling` indexes co-changes from the same walk and reports directional and Jaccard values. Commits wider than 50 files contribute to file totals but never to pairs; co-change is process evidence, not dependency.
-- `graph` resolves only relative JS/TS imports, exact Java type imports, file-relative Rust `mod` declarations, quoted C/C++ includes, and Python relative imports against discovered files; bare package imports are ignored, ambiguity stays unresolved, and every edge carries `confidence: "high"`. Fan-in counts direct importers, fan-out counts resolved targets, and cycles are strongly connected components of at least two files (a self-import is an edge, not a cycle).
+- `graph` resolves only relative JS/TS imports, exact Java type imports, file-relative Rust `mod` declarations, quoted C/C++ includes, Python relative imports, and local Zig `@import` strings against discovered files; bare package imports are ignored, ambiguity stays unresolved, and every edge carries `confidence: "high"`. Fan-in counts direct importers, fan-out counts resolved targets, and cycles are strongly connected components of at least two files (a self-import is an edge, not a cycle).
 - `unused` adds Zig convention entries only for `build.zig` at any directory
   depth and exact `src/main.zig`, `src/lib.zig`, and `src/root.zig` paths at
   the analysis root or under an exact `/src/...` suffix. Arbitrary `.zig` files
@@ -68,7 +68,7 @@ Direct dependency licenses were checked from Cargo metadata:
 
 | Dependency | License |
 | --- | --- |
-| Tree-sitter and all eight grammar packages | MIT |
+| Tree-sitter and all nine grammar packages | MIT |
 | `ignore` | Unlicense OR MIT |
 | `quick-xml` | MIT |
 | `rayon`, `serde`, `serde_json`, `criterion` | MIT OR Apache-2.0 |

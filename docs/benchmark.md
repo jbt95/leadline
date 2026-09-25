@@ -9,7 +9,7 @@ cargo bench --bench analyzer
 The suite measures four distinct costs:
 
 - TypeScript source scaling at 10K, 100K, and 1M physical lines.
-- Equivalent C, C++, Java, JavaScript, Python, Rust, TypeScript, and TSX workloads to catch grammar-specific regressions (Go is not in this group).
+- Equivalent C, C++, Java, JavaScript, Python, Rust, TypeScript, TSX, and Zig workloads to catch grammar-specific regressions (Go is not in this group).
 - Recovery from a deterministic malformed TypeScript corpus.
 - Repository discovery and analysis at a fixed 10K total lines split across 1, 100, and 1,000 files, plus JSON serialization.
 
