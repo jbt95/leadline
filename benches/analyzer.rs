@@ -83,6 +83,14 @@ fn language_fixture(language: &str, functions: usize) -> (&'static str, Vec<u8>)
             }
             ("fixture.rs", source.into_bytes())
         }
+        "zig" => {
+            for index in 0..functions {
+                source.push_str(&format!(
+                    "pub fn f{index}(x: i32) i32 {{ if (x > 1) {{ return x + 1; }} return x; }}\n"
+                ));
+            }
+            ("fixture.zig", source.into_bytes())
+        }
         _ => unreachable!("known benchmark language"),
     }
 }
@@ -126,6 +134,7 @@ fn language_coverage(c: &mut Criterion) {
         "rust",
         "typescript",
         "tsx",
+        "zig",
     ] {
         let (path, source) = language_fixture(language, 2_000);
         assert_valid_fixture(path, &source, 2_000);
