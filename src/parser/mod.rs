@@ -800,7 +800,6 @@ fn is_labeled_jump(node: Node<'_>, language: Language) -> bool {
         "break_expression" | "continue_expression" => {
             has_named_child(node, "label") || has_named_child(node, "break_label")
         }
-        "block_label" if language == Language::Zig => true,
         "labeled_statement"
             if language == Language::Zig && has_named_child(node, "block_label") =>
         {

@@ -141,7 +141,7 @@ fn tiny_fixtures_define_default_v1() {
     assert_complexity("zig/decisions.zig", "choose", 3, 3, 1, 1);
     assert_complexity("zig/decisions.zig", "loops", 4, 4, 2, 1);
     assert_complexity("zig/decisions.zig", "classify", 4, 1, 1, 1);
-    assert_complexity("zig/decisions.zig", "labeled", 3, 6, 2, 1);
+    assert_complexity("zig/decisions.zig", "labeled", 3, 5, 2, 1);
     assert_complexity("zig/logic.zig", "logic", 5, 4, 1, 3);
     assert_complexity("zig/logic.zig", "tryValue", 2, 1, 1, 1);
     assert_complexity("zig/recursion.zig", "fact", 2, 2, 1, 1);
