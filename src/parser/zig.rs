@@ -24,7 +24,10 @@ fn import_reference(node: Node<'_>, source: &[u8]) -> Option<RawDependency> {
         return None;
     }
     let arguments = child_of_kind(node, "arguments")?;
-    let value = arguments.named_child(0)?;
+    let mut cursor = arguments.walk();
+    let value = arguments
+        .named_children(&mut cursor)
+        .find(|child| !child.is_extra())?;
     if value.kind() != "string" {
         return None;
     }

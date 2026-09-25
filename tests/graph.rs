@@ -240,6 +240,54 @@ fn zig_imports_resolve_local_files() {
 }
 
 #[test]
+fn zig_import_skips_comments_before_argument() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "src/main.zig",
+        "const helper = @import(// path comment\n\"helper.zig\");\n",
+    );
+    write(&root, "src/helper.zig", "pub fn run() void {}\n");
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+
+    assert_eq!(edge_pairs(&report), [("src/main.zig", "src/helper.zig")]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn zig_imports_reject_absolute_paths() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "src/main.zig",
+        r#"const root_absolute = @import("/helper.zig");
+const drive_absolute = @import("C:/helper.zig");
+const unc = @import("\\server\\share\\helper.zig");
+"#,
+    );
+    write(&root, "src/helper.zig", "pub fn run() void {}\n");
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+
+    assert!(edge_pairs(&report).is_empty());
+    let unresolved: Vec<(&str, &str)> = report
+        .unresolved
+        .iter()
+        .map(|entry| (entry.specifier.as_str(), entry.reason))
+        .collect();
+    assert_eq!(
+        unresolved,
+        [
+            ("/helper.zig", "outside_scope"),
+            ("C:/helper.zig", "outside_scope"),
+            (r"\\server\\share\\helper.zig", "outside_scope")
+        ]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn c_local_includes_resolve_relative_paths_and_report_only_missing_quotes() {
     let root = temporary_directory();
     write(

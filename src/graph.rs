@@ -436,6 +436,9 @@ fn resolve_zig_import(specifier: &str, source: &str, paths: &BTreeSet<String>) -
     if !is_zig && !is_local_zig_specifier(specifier) {
         return Resolution::Ignored;
     }
+    if is_zig && is_absolute_zig_specifier(specifier) {
+        return Resolution::Unresolved("outside_scope");
+    }
     let Some(target) = relative_target(source, specifier) else {
         return Resolution::Unresolved("outside_scope");
     };
@@ -451,6 +454,13 @@ fn resolve_zig_import(specifier: &str, source: &str, paths: &BTreeSet<String>) -
 
 fn is_local_zig_specifier(specifier: &str) -> bool {
     specifier.starts_with('.') || specifier.contains('/')
+}
+
+fn is_absolute_zig_specifier(specifier: &str) -> bool {
+    let bytes = specifier.as_bytes();
+    specifier.starts_with('/')
+        || specifier.starts_with('\\')
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
 }
 
 /// Resolves one Python relative-import specifier to `<base>.py` or
