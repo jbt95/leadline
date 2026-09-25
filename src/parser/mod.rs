@@ -232,7 +232,10 @@ fn tokenize_tree(language: Language, source: &[u8], root: Node<'_>) -> Tokenized
             parse_errors += 1;
         }
         if language == Language::Zig
-            && matches!(node.kind(), "builtin_type" | "character" | "multiline_string")
+            && matches!(
+                node.kind(),
+                "builtin_type" | "character" | "multiline_string"
+            )
         {
             if let Some(text) = normalize_leaf(node, source) {
                 tokens.push(NormalizedToken {
@@ -1657,9 +1660,7 @@ fn is_operand_leaf(node: Node<'_>, language: Language) -> bool {
     if language == Language::Python && node.kind() == "string_content" {
         return node.is_named();
     }
-    if !is_operand(node.kind())
-        && !(language == Language::Zig && is_zig_operand(node.kind()))
-    {
+    if !is_operand(node.kind()) && !(language == Language::Zig && is_zig_operand(node.kind())) {
         return false;
     }
     node.is_named()
