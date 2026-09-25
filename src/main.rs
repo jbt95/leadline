@@ -3293,6 +3293,11 @@ fn doctor_command(args: &[String]) -> Result<ExitCode, CliError> {
             "doctor.rs",
             "fn check(x: bool) -> i32 { if x { 1 } else { 0 } }",
         ),
+        (
+            "zig",
+            "doctor.zig",
+            "pub fn check(value: bool) bool { if (value) { return true; } return false; }\n",
+        ),
     ] {
         let outcome = match leadline::analyze_source(file, snippet.as_bytes()) {
             Ok(report) if !report.functions.is_empty() => {

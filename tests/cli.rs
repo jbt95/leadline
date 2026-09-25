@@ -368,6 +368,7 @@ fn doctor_reports_sections_successfully() {
         "parser: javascript OK",
         "parser: typescript OK",
         "parser: tsx OK",
+        "parser: zig OK",
         "coverage: lcov OK",
         "coverage: jacoco OK",
         "git: OK",

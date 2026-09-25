@@ -491,6 +491,7 @@ const LABEL_VALUES: &[(&str, &[&str])] = &[
             "rust",
             "typescript",
             "tsx",
+            "zig",
         ],
     ),
 ];
@@ -1661,6 +1662,28 @@ mod tests {
 
         state.prune();
         assert!(state.counters.is_empty());
+    }
+
+    #[test]
+    fn zig_language_label_is_mapped_and_closed() {
+        assert_eq!(language_label("src/doctor.zig"), Some("zig"));
+
+        let mut state = MetricState::default();
+        state.increment(
+            "leadline_parse_errors_total",
+            &[
+                ("surface", "cli"),
+                ("operation", "check"),
+                ("language", "zig"),
+            ],
+            1,
+        );
+        assert!(render(&state).contains(
+            "leadline_parse_errors_total{language=\"zig\",operation=\"check\",surface=\"cli\"} 1"
+        ));
+
+        state.prune();
+        assert_eq!(state.counters.len(), 1);
     }
 
     #[test]
