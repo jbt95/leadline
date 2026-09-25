@@ -1561,7 +1561,13 @@ fn is_operator(kind: &str) -> bool {
             | "delete"
             | "await"
             | "yield"
-            | "and"
+    )
+}
+
+fn is_zig_operator(kind: &str) -> bool {
+    matches!(
+        kind,
+        "and"
             | "or"
             | "orelse"
             | "try"
@@ -1605,6 +1611,7 @@ fn is_operator_leaf(kind: &str, language: Language) -> bool {
         return false;
     }
     is_operator(kind)
+        || (language == Language::Zig && is_zig_operator(kind))
         || (language == Language::Python
             && matches!(
                 kind,
@@ -1650,7 +1657,9 @@ fn is_operand_leaf(node: Node<'_>, language: Language) -> bool {
     if language == Language::Python && node.kind() == "string_content" {
         return node.is_named();
     }
-    if !is_operand(node.kind()) {
+    if !is_operand(node.kind())
+        && !(language == Language::Zig && is_zig_operand(node.kind()))
+    {
         return false;
     }
     node.is_named()
@@ -1668,7 +1677,7 @@ fn is_operand_leaf(node: Node<'_>, language: Language) -> bool {
 }
 
 fn is_operand(kind: &str) -> bool {
-    kind.ends_with("identifier")
+    (kind.ends_with("identifier") && kind != "builtin_identifier")
         || matches!(
             kind,
             "identifier"
@@ -1700,18 +1709,24 @@ fn is_operand(kind: &str) -> bool {
                 | "integer"
                 | "float"
                 | "none"
-                | "boolean"
-                | "builtin_type"
-                | "builtin_identifier"
-                | "character"
-                | "multiline_string"
-                | "undefined"
-                | "unreachable"
-                | "anyframe"
-                | "noreturn"
-                | "comptime_int"
-                | "comptime_float"
         )
+}
+
+fn is_zig_operand(kind: &str) -> bool {
+    matches!(
+        kind,
+        "boolean"
+            | "builtin_type"
+            | "builtin_identifier"
+            | "character"
+            | "multiline_string"
+            | "undefined"
+            | "unreachable"
+            | "anyframe"
+            | "noreturn"
+            | "comptime_int"
+            | "comptime_float"
+    )
 }
 
 pub(super) fn node_text<'a>(node: Node<'_>, source: &'a [u8]) -> &'a str {
@@ -2194,6 +2209,22 @@ class Dao {
         assert!(!texts.contains(&"void"), "{texts:?}");
         assert!(!texts.contains(&"u8"), "{texts:?}");
         assert!(!texts.contains(&"'"), "{texts:?}");
+    }
+
+    #[test]
+    fn zig_token_classifications_stay_language_scoped() {
+        assert!(is_operator_leaf("and", Language::Python));
+        assert!(is_operator_leaf("or", Language::Python));
+        assert!(is_operator_leaf("orelse", Language::Zig));
+        assert!(!is_operator("orelse"));
+        assert!(!is_operator_leaf("orelse", Language::Rust));
+        assert!(!is_operator_leaf("fn", Language::JavaScript));
+        assert!(is_zig_operator("undefined"));
+        assert!(!is_operator_leaf("undefined", Language::Zig));
+        assert!(is_zig_operand("builtin_identifier"));
+        assert!(!is_operand("builtin_identifier"));
+        assert!(is_operand("field_identifier"));
+        assert!(!is_operand("comptime_int"));
     }
 
     #[test]
