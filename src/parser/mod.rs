@@ -231,7 +231,9 @@ fn tokenize_tree(language: Language, source: &[u8], root: Node<'_>) -> Tokenized
         if node.is_error() || node.is_missing() {
             parse_errors += 1;
         }
-        if language == Language::Zig && matches!(node.kind(), "builtin_type" | "character") {
+        if language == Language::Zig
+            && matches!(node.kind(), "builtin_type" | "character" | "multiline_string")
+        {
             if let Some(text) = normalize_leaf(node, source) {
                 tokens.push(NormalizedToken {
                     text,
@@ -661,7 +663,7 @@ fn walk_function(
         if language == Language::Zig
             && matches!(
                 node.kind(),
-                "boolean" | "builtin_type" | "string" | "character"
+                "boolean" | "builtin_type" | "string" | "character" | "multiline_string"
             )
         {
             events.push(Event::Operand(Span {

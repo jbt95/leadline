@@ -159,6 +159,9 @@ fn zig_expression_else_try_literals_and_test_names_are_scored() {
 pub fn literals() void {
     const text = "hello";
     const ch = 'x';
+    const multiline =
+        \\line
+    ;
     const missing = undefined;
     const dead = unreachable;
 }
@@ -235,7 +238,7 @@ test {
             literals.metrics.halstead_n2,
             literals.metrics.halstead_total_operands,
         ),
-        (10, 10)
+        (12, 12)
     );
 
     let tests = fixture("zig/test.zig");
