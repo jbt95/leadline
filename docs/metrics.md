@@ -94,7 +94,7 @@ recognized operator or operand. The legacy `try!(...)` macro is a parse
 error for this grammar (`try` is a reserved keyword), so those call sites
 are reported as parse errors and score nothing; the modern `?` operator
 scores as above. Rust files are therefore not score-comparable with
-files of any other language: Go, Java, JS/TS, C, C++, and Python each
+files of any other language: Go, Java, JS/TS, C, C++, Python, and Zig each
 carry their own policy above.
 
 ### C counting policy
@@ -202,8 +202,8 @@ not. `try`, `catch`, `orelse`, and each `and`/`or` add 1 cyclomatic point.
 For cognitive complexity, `if`, loops, and `switch` add `1 + current nesting`;
 switch cases add 0. `catch` and `orelse` add `1 + current nesting` and raise
 nesting, while `try` adds 0. The first `and`/`or` in a logical sequence adds
-1 and each operator change adds 1. Only explicit labels and labeled
-`break`/`continue` jumps add 1; unlabeled wrappers and jumps add 0.
+1 and each operator change adds 1. Only explicit labeled statements and
+labeled `break`/`continue` jumps add 1; unlabeled wrappers and jumps add 0.
 
 Parameter count includes every direct `parameter`, including `_` and
 `anytype`. Halstead counts each named `boolean`, `builtin_type`,
@@ -213,10 +213,12 @@ once as an operand. `comptime_int`, `comptime_float`, `anyframe`,
 keyword tokens are operators.
 
 Pinned `tree-sitter-zig` 1.1.2 exposes function bodies as an optional field
-and tests as a named `block`; else-if/final-else are sibling `if_expression`
-nodes, loops may be wrapped in `labeled_statement`, and labeled jumps use
-`break_label`. Leadline follows these syntax-only shapes and does not infer a
-body or other semantics the grammar does not expose.
+and tests as a named `block`. An `if_expression` represents its alternative
+as an anonymous `else` token followed by an alternative expression, which is
+another `if_expression` for else-if. Loops may be wrapped in
+`labeled_statement`, and labeled jumps use `break_label`. Leadline follows
+these syntax-only shapes and does not infer a body or other semantics the
+grammar does not expose.
 
 ## Cognitive complexity
 
