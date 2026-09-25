@@ -631,30 +631,64 @@ fn host_sql_matrix_across_languages() {
         "{findings:?}"
     );
 
-    let zig_findings = {
-        let functions = host_functions("src/db.zig", zig.as_bytes());
-        analyze_host_sql("src/db.zig", zig.as_bytes(), &functions).unwrap()
-    };
-    assert_eq!(
-        zig_findings
-            .iter()
-            .filter(|finding| finding.rule_id == "sql/dynamic-concatenation")
-            .map(|finding| finding.start_line)
-            .collect::<Vec<_>>(),
-        [2]
+    let zig_analysis = leadline::analyze_source("src/db.zig", zig.as_bytes()).unwrap();
+    assert!(
+        zig_analysis.parse_errors.is_empty(),
+        "Zig SQL fixture must parse: {:?}",
+        zig_analysis.parse_errors
     );
-    assert_eq!(
-        zig_findings
+    let id_for = |name: &str| {
+        zig_analysis
+            .functions
             .iter()
-            .filter(|finding| finding.rule_id == "sql/query-in-loop")
-            .map(|finding| finding.start_line)
-            .collect::<Vec<_>>(),
-        [15]
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("missing Zig function {name}"))
+            .id
+            .clone()
+    };
+    let find_id = id_for("find");
+    let get_id = id_for("get");
+    let arithmetic_id = id_for("arithmetic");
+    let all_id = id_for("all");
+    let zig_findings =
+        analyze_host_sql("src/db.zig", zig.as_bytes(), &zig_analysis.functions).unwrap();
+
+    let dynamic_findings = zig_findings
+        .iter()
+        .filter(|finding| finding.rule_id == "sql/dynamic-concatenation")
+        .collect::<Vec<_>>();
+    assert_eq!(dynamic_findings.len(), 1, "{zig_findings:?}");
+    assert_eq!(
+        dynamic_findings[0].function_id.as_deref(),
+        Some(find_id.as_str()),
+        "commented dynamic query must be the one dynamic Zig call"
+    );
+
+    let arithmetic_dynamic = zig_findings
+        .iter()
+        .filter(|finding| {
+            finding.function_id.as_deref() == Some(arithmetic_id.as_str())
+                && finding.rule_id == "sql/dynamic-concatenation"
+        })
+        .count();
+    assert_eq!(
+        arithmetic_dynamic, 0,
+        "arithmetic + must stay quiet: {zig_findings:?}"
     );
     assert!(
-        zig_findings.iter().all(|finding| finding.start_line != 6),
+        zig_findings
+            .iter()
+            .all(|finding| finding.function_id.as_deref() != Some(get_id.as_str())),
         "parameterized Zig query must stay quiet: {zig_findings:?}"
     );
+    let loop_findings = zig_findings
+        .iter()
+        .filter(|finding| {
+            finding.function_id.as_deref() == Some(all_id.as_str())
+                && finding.rule_id == "sql/query-in-loop"
+        })
+        .count();
+    assert_eq!(loop_findings, 1, "{zig_findings:?}");
     assert!(
         !serde_json::to_string(&zig_findings)
             .unwrap()
