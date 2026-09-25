@@ -191,6 +191,33 @@ The shared tables apply with these Python-specific rules:
   `integer`, `float`, or `none` literal and the `string_content` leaf of a
   string literal count as operands.
 
+### Zig counting policy
+
+Zig discovery reports only body-bearing `function_declaration` nodes and
+block-bearing `test_declaration` nodes; prototypes and other bodyless
+declarations are not functions. Each `switch_case` adds 1 cyclomatic point,
+including the `else` arm, while the switch header and a plain `if` `else` do
+not. `try`, `catch`, `orelse`, and each `and`/`or` add 1 cyclomatic point.
+
+For cognitive complexity, `if`, loops, and `switch` add `1 + current nesting`;
+switch cases add 0. `catch` and `orelse` add `1 + current nesting` and raise
+nesting, while `try` adds 0. The first `and`/`or` in a logical sequence adds
+1 and each operator change adds 1. Only explicit labels and labeled
+`break`/`continue` jumps add 1; unlabeled wrappers and jumps add 0.
+
+Parameter count includes every direct `parameter`, including `_` and
+`anytype`. Halstead counts each named `boolean`, `builtin_type`,
+`builtin_identifier`, `string`, `character`, and `multiline_string` wrapper
+once as an operand. `comptime_int`, `comptime_float`, `anyframe`,
+`noreturn`, `undefined`, and `unreachable` are operands, while Zig-only
+keyword tokens are operators.
+
+Pinned `tree-sitter-zig` 1.1.2 exposes function bodies as an optional field
+and tests as a named `block`; else-if/final-else are sibling `if_expression`
+nodes, loops may be wrapped in `labeled_statement`, and labeled jumps use
+`break_label`. Leadline follows these syntax-only shapes and does not infer a
+body or other semantics the grammar does not expose.
+
 ## Cognitive complexity
 
 Add `1 + current nesting` for `if`, loops, `catch`, `switch`, and ternary expressions. An `else if` adds 1 and continues the original chain. A final `else` adds 1. A labeled `break` or `continue` adds 1. Structural constructs increase nesting for structural descendants.

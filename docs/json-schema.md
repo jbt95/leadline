@@ -63,7 +63,7 @@ Reports are UTF-8 JSON. Paths use `/` separators. Floats use stable decimal form
 - `metric_profile`: always `default`; see `metrics.md` for rules.
 - `metric_specs`: per-family rule versions, each `default` in 1.0.
 - `language` is one of `c`, `cpp`, `go`, `java`, `javascript`, `python`,
-  `rust`, `typescript`, `tsx` — one value per supported grammar, not one per
+  `rust`, `typescript`, `tsx`, `zig` — one value per supported grammar, not one per
   extension: `.jsx`, `.mjs`, and `.cjs` report `javascript`, `.mts` and
   `.cts` report `typescript`, and `.h`, `.cc`, `.cxx`, `.hpp`, `.hh`, and
   `.hxx` report `cpp`.

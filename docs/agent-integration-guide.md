@@ -18,7 +18,7 @@
 }
 ```
 
-Only the fields an agent gates on are included. Full detail remains in `--json`. `coverage`/`crap` are `null` when unknown. `parse_errors` carries the syntax-error spans per file (empty when the file parsed), and `changed --format agent-json` reports `parse_errors` per file with `before`/`after` spans; consumers must surface them instead of reporting an empty function list as clean.
+Only the fields an agent gates on are included. Full detail remains in `--json`. `coverage`/`crap` are `null` when unknown. `parse_errors` carries the syntax-error spans per file (empty when the file parsed), and `changed --format agent-json` reports `parse_errors` per file with `before`/`after` spans; consumers must surface them instead of reporting an empty function list as clean. Leadline supports C, C++, Go, Java, JavaScript, Python, Rust, TypeScript, TSX, and Zig sources.
 
 `leadline hotspots --format agent-json` returns the ranked-file shape instead, so an agent can pick what to inspect before editing:
 
@@ -80,10 +80,13 @@ relative JS/TS imports, exact Java type imports, Rust `mod` declarations
 resolved against the declaring module's directory, quoted C/C++ `#include`
 lines resolved relative to the including file (angle includes are ignored),
 and Python relative imports (absolute dotted imports are recorded
-`unresolved` with reason `unsupported`); Go imports produce no edge. No
-aliases, package graph, reflection, or runtime-built specifiers — inspect the
-listed dependents, but do not treat an empty list as proof that nothing else
-loads the file.
+`unresolved` with reason `unsupported`); Go imports produce no edge. Zig
+quoted `@import("...")` specifiers resolve only when an exact local `.zig` path
+relative to the importing file matches a discovered file. Package resolution,
+build graphs/options, generated-file provenance, and runtime-computed
+specifiers are not interpreted. No aliases, package graph, reflection, or
+runtime-built specifiers — inspect the listed dependents, but do not treat an
+empty list as proof that nothing else loads the file.
 
 `leadline risk --format agent-json` returns the ranked change-risk list so
 an agent can pick the riskiest files to inspect before editing:

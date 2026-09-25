@@ -41,13 +41,14 @@ variable says.
 | `leadline_mcp_response_bytes` | histogram | `method` | Response bytes, same bounds as requests. |
 | `leadline_findings_total` | counter | `surface`, `operation`, `kind`, `state` | What the gates report. `check`: one `kind` per family (`function`, `parse_error`, `security`, `vulnerability`, `sql`) with `state="violation"` (zero counts never create a row). `debt`: `kind="function"` with `state="new"`/`"resolved"`, and `kind="risk"` with `state="increased"`/`"added"`. Recorded on both surfaces. |
 | `leadline_security_findings_total` | counter | `surface`, `operation`, `kind` (`security`/`vulnerability`/`sql`), `severity` (`unknown`/`low`/`medium`/`high`/`critical`) | Scanner violations by family and severity, from `check` on either surface. |
-| `leadline_parse_errors_total` | counter | `surface`, `operation`, `language` (`c`/`cpp`/`go`/`java`/`javascript`/`python`/`rust`/`typescript`/`tsx`) | Parse errors by language, from `check` on either surface. |
+| `leadline_parse_errors_total` | counter | `surface`, `operation`, `language` (`c`/`cpp`/`go`/`java`/`javascript`/`python`/`rust`/`typescript`/`tsx`/`zig`) | Parse errors by language, from `check` on either surface. |
 | `leadline_debt_functions` | gauge | `surface`, `state` | Standing function debt (`state="existing"`) from the most recent `debt` run. |
 | `leadline_build_info` | gauge | `version`, `metrics_schema` | Constant `1`; identifies the analyzer version that rendered the file. |
 
 Labels are closed sets, and the store enforces them: rows whose keys or
 values do not match the tables above are dropped on every write and never
-rendered. It therefore never contains a repository name, path, file or
+rendered. Label keys and values are deterministic and bounded, so repository
+content and run size cannot increase their cardinality. It therefore never contains a repository name, path, file or
 function name, command argument, finding, commit, machine identifier, or
 person — only counters, durations, process cost readings, and the fixed
 labels above.
