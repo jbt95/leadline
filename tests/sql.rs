@@ -584,12 +584,14 @@ fn host_sql_matrix_across_languages() {
 }
 "#;
     let rust = "fn find(db: &PgPool, name: &str) {\n    sqlx::query_as::<_, User>(&format!(\"UPDATE users SET n = '{name}'\")).execute(db);\n}\n";
+    let zig = include_str!("fixtures/zig/sql.zig");
     let cases = [
         ("src/a.ts", ts),
         ("src/b.js", js),
         ("src/c.tsx", tsx),
         ("src/Dao.java", java),
         ("src/db.rs", rust),
+        ("src/db.zig", zig),
     ];
     for (path, source) in cases {
         let functions = host_functions(path, source.as_bytes());
@@ -627,6 +629,35 @@ fn host_sql_matrix_across_languages() {
             .iter()
             .any(|finding| finding.rule_id == "sql/query-in-loop"),
         "{findings:?}"
+    );
+
+    let zig_findings = {
+        let functions = host_functions("src/db.zig", zig.as_bytes());
+        analyze_host_sql("src/db.zig", zig.as_bytes(), &functions).unwrap()
+    };
+    assert_eq!(
+        zig_findings
+            .iter()
+            .filter(|finding| finding.rule_id == "sql/dynamic-concatenation")
+            .map(|finding| finding.start_line)
+            .collect::<Vec<_>>(),
+        [2]
+    );
+    assert_eq!(
+        zig_findings
+            .iter()
+            .filter(|finding| finding.rule_id == "sql/query-in-loop")
+            .map(|finding| finding.start_line)
+            .collect::<Vec<_>>(),
+        [15]
+    );
+    assert!(
+        zig_findings.iter().all(|finding| finding.start_line != 6),
+        "parameterized Zig query must stay quiet: {zig_findings:?}"
+    );
+    assert!(
+        !serde_json::to_string(&zig_findings).unwrap().contains("SELECT"),
+        "Zig SQL text must not leak"
     );
 }
 

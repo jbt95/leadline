@@ -1850,7 +1850,20 @@ fn sql_call_target<'a>(
     source: &'a [u8],
 ) -> Option<(String, Option<Node<'a>>)> {
     let (name_node, arguments) = match language {
-        Language::C | Language::Zig => return None,
+        Language::Zig => {
+            if node.kind() != "call_expression" {
+                return None;
+            }
+            let function = node.child_by_field_name("function")?;
+            let name_node = match function.kind() {
+                "identifier" => function,
+                "field_expression" => function.child_by_field_name("member")?,
+                _ => return None,
+            };
+            let first_argument = first_named_child_after(node, function);
+            return Some((node_text(name_node, source).to_owned(), first_argument));
+        }
+        Language::C => return None,
         Language::Java => {
             if node.kind() != "method_invocation" {
                 return None;
@@ -1927,6 +1940,12 @@ fn first_named_child<'a>(node: Node<'a>) -> Option<Node<'a>> {
     node.named_children(&mut cursor).next()
 }
 
+fn first_named_child_after<'a>(node: Node<'a>, function: Node<'a>) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .find(|child| !child.is_extra() && child.start_byte() >= function.end_byte())
+}
+
 /// True when the subtree holds a `+` concatenation or template substitution.
 ///
 /// Nested functions are not entered: a callback argument computing `a + b`
@@ -1940,7 +1959,13 @@ fn subtree_is_dynamic(root: Node<'_>, language: Language) -> bool {
         if node.kind() == "template_substitution" {
             return true;
         }
-        if node.kind() == "binary_expression" && has_plus_operator(node) {
+        if node.kind() == "binary_expression"
+            && (if language == Language::Zig {
+                has_zig_concatenation_operator(node)
+            } else {
+                has_plus_operator(node)
+            })
+        {
             return true;
         }
         push_children_reversed(node, &mut stack);
@@ -2043,6 +2068,12 @@ fn has_plus_operator(node: Node<'_>) -> bool {
     let mut cursor = node.walk();
     node.children(&mut cursor)
         .any(|child| !child.is_named() && child.kind() == "+")
+}
+
+fn has_zig_concatenation_operator(node: Node<'_>) -> bool {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| !child.is_named() && child.kind() == "++")
 }
 
 /// True when a loop ancestor precedes any function boundary.
