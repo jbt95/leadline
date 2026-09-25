@@ -1,10 +1,13 @@
 # Dependencies and impact
 
-Static file-level dependency intelligence for Go, JavaScript, TypeScript, Java, Rust, C, C++, and Python.
+Static file-level dependency intelligence for Go, JavaScript, TypeScript, Java, Rust, C, C++, Python, and Zig.
 Go imports are module-qualified paths, so `GoImport` references are `Ignored` and never produce edges.
 Python absolute imports are module-qualified paths on `sys.path`, so
 `PythonAbsoluteImport` references are recorded as `unresolved` with reason
 `unsupported` and never produce edges.
+Zig graph support is local-only: string `@import` arguments that name exact
+relative `.zig` files resolve against the importing file. Bare package names
+are ignored; package graphs and Zig builds are not executed.
 The analyzer parses code with Tree-sitter and never executes it: no build
 runtime, no network, no project scripts.
 
@@ -154,6 +157,21 @@ Python (`.py`):
 - `import_statement` and `import_from_statement` nested inside a function,
   class, or `if` block are references too: the whole file is walked, not
   just its top level.
+
+Zig (`.zig`):
+
+- A string argument to `@import` resolves only when it names one exact
+  discovered `.zig` file relative to the importing file. A missing local
+  target is `unresolved` with reason `not_found`; a local-looking non-`.zig`
+  path is `unsupported`, and a path escaping the analysis root is
+  `outside_scope`.
+- Bare package names are ignored: the analyzer does not resolve Zig package
+  names, `build.zig` dependency declarations, or any package graph, and it does
+  not execute a Zig build.
+- `unused` treats `build.zig` at any directory depth, plus exact
+  `src/main.zig`, `src/lib.zig`, and `src/root.zig` paths at the analysis root
+  or under an exact `/src/...` suffix, as convention entry points. Arbitrary
+  `.zig` files are not convention entries and need a resolved import edge.
 
 Every edge carries `"confidence": "high"` by construction; the agent-json
 projection drops it but keeps every `unresolved` reference, so agents never

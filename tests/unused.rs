@@ -195,6 +195,38 @@ fn rust_crate_roots_are_entry_points() {
 }
 
 #[test]
+fn zig_convention_entries_are_reachable() {
+    let root = temporary_directory();
+    for relative in [
+        "build.zig",
+        "src/main.zig",
+        "src/lib.zig",
+        "src/root.zig",
+        "src/orphan.zig",
+        "packages/app/src/root.zig",
+    ] {
+        write(&root, relative, "pub fn placeholder() void {}\n");
+    }
+
+    let report = analyze_unused(&root, &[], &[], &UnusedConfig::default()).unwrap();
+
+    assert_eq!(
+        entry_rows(&report),
+        [
+            ("build.zig", "convention"),
+            ("packages/app/src/root.zig", "convention"),
+            ("src/lib.zig", "convention"),
+            ("src/main.zig", "convention"),
+            ("src/root.zig", "convention"),
+        ]
+    );
+    assert_eq!(unused_file_paths(&report), ["src/orphan.zig"]);
+    assert!(report.complete, "{:?}", report.reason);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn fixture_reports_exact_lists_and_identical_bytes_across_runs() {
     let root = fixture();
     let report = analyze_unused(&root, &[], &[], &UnusedConfig::default()).unwrap();

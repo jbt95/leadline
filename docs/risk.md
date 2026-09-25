@@ -122,9 +122,15 @@ an empty scope exits `3`, and unreadable coverage exits `4`.
   inspect it separately before editing.
 - **Static graph limits apply.** Edges come from relative JS/TS/TSX imports,
   exact Java type imports, Rust `mod` declarations, quoted C/C++ `#include`
-  directives, and relative Python imports; Go imports, Rust `use` paths,
-  angle-bracket C/C++ includes, absolute or dotted Python imports, aliases,
-  package graphs, reflection, and runtime-built specifiers are invisible to
-  `impact` (see `dependencies.md`).
+  directives, relative Python imports, and exact local Zig `@import` `.zig`
+  paths; Go imports, Rust `use` paths, angle-bracket C/C++ includes, absolute
+  or dotted Python imports, Zig package imports, aliases, package graphs,
+  reflection, and runtime-built specifiers are invisible to `impact` (see
+  `dependencies.md`). Zig build execution is not part of the analysis.
+- **Zig entry points are convention-only.** `build.zig` is an entry at any
+  directory depth, and exact `src/main.zig`, `src/lib.zig`, and `src/root.zig`
+  paths are entries at the analysis root or under an exact `/src/...` suffix.
+  Arbitrary `.zig` files are not convention entries and need a resolved local
+  `@import` edge.
 - **Contributor identity is approximate.** Shared emails, bots, and mailmap
   drift distort `ownership`, as with `hotspots`.

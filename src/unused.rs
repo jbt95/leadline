@@ -567,6 +567,16 @@ fn convention_entries(
             });
         }
     }
+    // Zig builds run `build.zig` and project roots by convention; arbitrary
+    // `.zig` modules still need an import edge to be reachable.
+    for path in files {
+        if crate::parser::zig::is_conventional_entry(path) {
+            entries.push(EntryPoint {
+                path: path.clone(),
+                source: SOURCE_CONVENTION,
+            });
+        }
+    }
     // Tooling loads `*.config.*` by name rather than by import, so those files
     // are entry points too; without them every config file reads as unused.
     for path in files {

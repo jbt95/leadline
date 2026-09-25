@@ -3,6 +3,24 @@ use super::{
 };
 use tree_sitter::Node;
 
+/// True for Zig files a build or project convention runs without an import edge.
+///
+/// `build.zig` is a convention basename at any depth. The three source roots
+/// are recognized only at the analysis root or at an exact `/src/...` suffix;
+/// arbitrary Zig modules remain subject to graph reachability.
+pub(crate) fn is_conventional_entry(path: &str) -> bool {
+    let path = path.replace('\\', "/");
+    if path.rsplit('/').next() == Some("build.zig") {
+        return true;
+    }
+    ["src/main.zig", "src/lib.zig", "src/root.zig"]
+        .iter()
+        .any(|entry| {
+            path.strip_suffix(entry)
+                .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with('/'))
+        })
+}
+
 /// Records string arguments passed to Zig's `@import` builtin.
 pub(super) fn extract_imports(root: Node<'_>, source: &[u8]) -> ParsedDependencies {
     let mut parsed = ParsedDependencies::default();

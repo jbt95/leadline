@@ -15,7 +15,7 @@ mod java;
 mod js;
 pub(crate) mod python;
 pub(crate) mod rust;
-mod zig;
+pub(crate) mod zig;
 
 thread_local! {
     static THREAD_PARSER: RefCell<Parser> = RefCell::new(Parser::new());
