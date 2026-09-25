@@ -203,6 +203,43 @@ fn go_imports_are_ignored_in_the_graph() {
 }
 
 #[test]
+fn zig_imports_resolve_local_files() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "src/main.zig",
+        include_str!("fixtures/zig/imports.zig"),
+    );
+    write(&root, "src/helper.zig", "pub fn run() void {}\n");
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+
+    assert_eq!(edge_pairs(&report), [("src/main.zig", "src/helper.zig")]);
+    let unresolved: Vec<(&str, &str, u32, &str)> = report
+        .unresolved
+        .iter()
+        .map(|entry| {
+            (
+                entry.source.as_str(),
+                entry.specifier.as_str(),
+                entry.line,
+                entry.reason,
+            )
+        })
+        .collect();
+    assert_eq!(
+        unresolved,
+        [
+            ("src/main.zig", "../../outside.zig", 4, "outside_scope"),
+            ("src/main.zig", "./styles.css", 5, "unsupported"),
+            ("src/main.zig", "missing.zig", 3, "not_found"),
+        ]
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn c_local_includes_resolve_relative_paths_and_report_only_missing_quotes() {
     let root = temporary_directory();
     write(

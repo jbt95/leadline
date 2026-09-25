@@ -309,6 +309,7 @@ fn resolve(
         // beside the declaring file. `use` paths are module-qualified and
         // never reach this resolver.
         RawDependencyKind::RustModule => resolve_rust_module(&reference.specifier, source, paths),
+        RawDependencyKind::ZigImport => resolve_zig_import(&reference.specifier, source, paths),
         // Python relative imports name a module beside the declaring file, so
         // `from .mod import y` is resolvable: level 1 is the file's own
         // directory, deeper levels climb one directory each.
@@ -423,6 +424,33 @@ fn resolve_rust_module(specifier: &str, source: &str, paths: &BTreeSet<String>) 
         [format!("{base}.rs"), format!("{base}/mod.rs")].into_iter(),
     ))
     .unwrap_or(Resolution::Unresolved("not_found"))
+}
+
+/// Resolves a local Zig import without guessing package or build graphs.
+///
+/// Bare package names are outside this resolver's scope. A path that looks
+/// local but is not a `.zig` file is reported as unsupported, while a `.zig`
+/// path must match one discovered file exactly.
+fn resolve_zig_import(specifier: &str, source: &str, paths: &BTreeSet<String>) -> Resolution {
+    let is_zig = specifier.ends_with(".zig");
+    if !is_zig && !is_local_zig_specifier(specifier) {
+        return Resolution::Ignored;
+    }
+    let Some(target) = relative_target(source, specifier) else {
+        return Resolution::Unresolved("outside_scope");
+    };
+    if !is_zig {
+        return Resolution::Unresolved("unsupported");
+    }
+    if paths.contains(&target) {
+        Resolution::Resolved(target)
+    } else {
+        Resolution::Unresolved("not_found")
+    }
+}
+
+fn is_local_zig_specifier(specifier: &str) -> bool {
+    specifier.starts_with('.') || specifier.contains('/')
 }
 
 /// Resolves one Python relative-import specifier to `<base>.py` or

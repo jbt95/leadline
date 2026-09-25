@@ -15,6 +15,7 @@ mod java;
 mod js;
 pub(crate) mod python;
 pub(crate) mod rust;
+mod zig;
 
 thread_local! {
     static THREAD_PARSER: RefCell<Parser> = RefCell::new(Parser::new());
@@ -33,6 +34,7 @@ pub(crate) enum RawDependencyKind {
     PythonImport,
     PythonAbsoluteImport,
     RustModule,
+    ZigImport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -331,7 +333,7 @@ pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDe
         Language::JavaScript | Language::TypeScript | Language::Tsx => {
             js::extract_javascript_dependencies(root, source)
         }
-        Language::Zig => ParsedDependencies::default(),
+        Language::Zig => zig::extract_imports(root, source),
     })
 }
 
@@ -359,7 +361,7 @@ pub(crate) fn parse_bundle(path: &str, source: &[u8]) -> Result<ParsedBundle> {
             Language::JavaScript | Language::TypeScript | Language::Tsx => {
                 js::extract_javascript_dependencies(root, source)
             }
-            Language::Zig => ParsedDependencies::default(),
+            Language::Zig => zig::extract_imports(root, source),
         },
         tokens: tokenize_tree(language, source, root),
     })
