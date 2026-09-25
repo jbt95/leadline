@@ -656,7 +656,9 @@ fn host_sql_matrix_across_languages() {
         "parameterized Zig query must stay quiet: {zig_findings:?}"
     );
     assert!(
-        !serde_json::to_string(&zig_findings).unwrap().contains("SELECT"),
+        !serde_json::to_string(&zig_findings)
+            .unwrap()
+            .contains("SELECT"),
         "Zig SQL text must not leak"
     );
 }

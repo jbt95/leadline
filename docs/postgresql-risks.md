@@ -2,7 +2,7 @@
 
 `leadline sql [PATH]` flags high-signal PostgreSQL query risks in `.sql`
 files and obvious query call sites in Go, Java, JavaScript, TypeScript,
-TSX, Python, and Rust — without executing SQL, connecting to a database, or
+TSX, Python, Rust, and Zig — without executing SQL, connecting to a database, or
 adding a parser dependency. Findings are review prompts, not proof of
 runtime behavior or index usage: estimates reflect the planner's view, and
 every rule is a syntactic heuristic with documented boundaries.
@@ -69,6 +69,20 @@ configurable via `[sql]` (`minimum_severity` gates, it never rescores).
   argument holds a `format!` or `concat!` macro invocation or a `+`
   concatenation. Loop attribution is unchanged: a call inside a loop, before
   any enclosing function boundary, is flagged `inside_loop`.
+- Zig call sites are recognized only for direct `call_expression` nodes whose
+  `function` is a bare `identifier` or a `field_expression` with a terminal
+  `member` name in the existing host-call set, including `query` and `execute`.
+  The first argument is the first substantive named child after `function`;
+  tree-sitter extras and comments are skipped because the published Zig
+  grammar has no `arguments` field. A first argument containing a
+  `binary_expression` with the `++` operator is dynamic; arithmetic `+` and
+  parameterized or static string literals stay quiet. A Zig `for_statement`
+  or expression-loop ancestor attributes `sql/query-in-loop` until the nearest
+  function boundary, so nested functions are not blamed for an outer loop.
+  Findings retain no SQL text: only the rule, path/span, and optional function
+  metadata are serialized. Package, build-script, and runtime SQL wrappers that
+  hide the direct call remain out of scope; package, build, and runtime code is
+  not executed.
 - One finding per statement per rule (host sites: one per rule per site).
 
 ## Limits and inputs
