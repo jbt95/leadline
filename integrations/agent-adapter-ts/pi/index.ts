@@ -24,7 +24,7 @@ export function registerLeadlineExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "leadline_changed",
     label: "Leadline Changed",
-    description: "Call after editing C/C++/Go/Java/JS/TS/TSX/Rust/Python, fixing bugs, refactoring, or before committing to spot complexity regressions vs a git base.",
+    description: "Call after editing C/C++/Go/Java/JS/TS/TSX/Zig/Rust/Python, fixing bugs, refactoring, or before committing to spot complexity regressions vs a git base.",
     parameters: Type.Object({
       base: Type.Optional(Type.String({ description: "Git revision to compare against (default HEAD~1)" })),
       path: Type.Optional(Type.String({ description: "Only analyze this path" })),
