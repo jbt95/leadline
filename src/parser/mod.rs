@@ -1660,7 +1660,7 @@ fn is_operand_leaf(node: Node<'_>, language: Language) -> bool {
     if language == Language::Python && node.kind() == "string_content" {
         return node.is_named();
     }
-    if !is_operand(node.kind()) && !(language == Language::Zig && is_zig_operand(node.kind())) {
+    if !(is_operand(node.kind()) || (language == Language::Zig && is_zig_operand(node.kind()))) {
         return false;
     }
     node.is_named()
