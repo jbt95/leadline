@@ -88,6 +88,10 @@ const SOURCE_SEEDS: &[(&str, &str)] = &[
         "seed.py",
         "class Counter:\n    def __init__(self, start):\n        self.value = start\n\n    def bump(self, by):\n        try:\n            if by > 0:\n                self.value += by\n            return [item for item in range(by) if item]\n        except ValueError:\n            raise RuntimeError(f\"bad step {by}\")\n        else:\n            return self.value\n        finally:\n            pass\n\ndef script(limit):\n    if __name__ == \"__main__\":\n        pass\n    match limit:\n        case 0:\n            return lambda value: value\n        case _:\n            return limit and limit or 1\n",
     ),
+    (
+        "seed.zig",
+        "pub fn logic(a: bool, b: bool, c: bool) bool {\n    if (a and b or c) {\n        return tryValue(a);\n    }\n    return a catch false;\n}\n\nfn tryValue(value: bool) bool {\n    return value orelse false;\n}\n",
+    ),
 ];
 
 const LCOV_SEED: &str = "TN:\nSF:seed.ts\nDA:1,1\nDA:2,1\nDA:3,0\nDA:5,2\nend_of_record\nSF:Seed.java\nDA:2,3\nDA:5,0\nend_of_record\n";
@@ -273,6 +277,18 @@ fn mutate_coverage(rng: &mut XorShift64, seed: &str, op: usize) -> String {
 
 #[test]
 fn seeded_mutation_corpus_never_panics_and_stays_partial() {
+    let (_, zig_seed) = SOURCE_SEEDS
+        .iter()
+        .find(|(path, _)| *path == "seed.zig")
+        .expect("Zig robustness seed");
+    let baseline =
+        leadline::analyze_source("seed.zig", zig_seed.as_bytes()).expect("valid Zig seed analyzes");
+    assert!(
+        baseline.parse_errors.is_empty(),
+        "{:?}",
+        baseline.parse_errors
+    );
+
     let mut rng = XorShift64::new(CORPUS_SEED);
 
     // Parser corpus: every input must yield Ok; breakage is inline

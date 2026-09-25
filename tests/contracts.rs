@@ -27,6 +27,8 @@ fn public_language_detection_contract_covers_every_extension() {
         ("example.test.tsx", Some(Language::Tsx)),
         ("example.c", Some(Language::C)),
         ("example.rs", Some(Language::Rust)),
+        ("example.zig", Some(Language::Zig)),
+        ("Example.ZIG", Some(Language::Zig)),
         ("example.py", Some(Language::Python)),
         ("example.PY", Some(Language::Python)),
         // Type stubs declare signatures with no bodies, so they are not

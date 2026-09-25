@@ -19,6 +19,7 @@ pub enum Language {
     Cpp,
     Python,
     Rust,
+    Zig,
     TypeScript,
     Tsx,
 }
@@ -34,6 +35,7 @@ impl Language {
             Language::Cpp => "cpp",
             Language::Python => "python",
             Language::Rust => "rust",
+            Language::Zig => "zig",
             Language::TypeScript => "typescript",
             Language::Tsx => "tsx",
         }

@@ -231,6 +231,15 @@ fn tokenize_tree(language: Language, source: &[u8], root: Node<'_>) -> Tokenized
         if node.is_error() || node.is_missing() {
             parse_errors += 1;
         }
+        if language == Language::Zig && matches!(node.kind(), "builtin_type" | "character") {
+            if let Some(text) = normalize_leaf(node, source) {
+                tokens.push(NormalizedToken {
+                    text,
+                    line: node.start_position().row as u32 + 1,
+                });
+            }
+            continue;
+        }
         if node.child_count() == 0 {
             if let Some(text) = normalize_leaf(node, source) {
                 tokens.push(NormalizedToken {
@@ -270,10 +279,16 @@ fn normalize_leaf(node: Node<'_>, source: &[u8]) -> Option<String> {
             | "shorthand_property_identifier"
             | "shorthand_property_identifier_pattern"
             | "statement_identifier"
+            | "builtin_type"
     ) {
         return Some("<id>".to_owned());
     }
-    if kind.contains("string") || kind == "template_chars" || kind == "string_fragment" {
+    if kind.contains("string")
+        || matches!(
+            kind,
+            "template_chars" | "string_fragment" | "character" | "character_content"
+        )
+    {
         return Some("<str>".to_owned());
     }
     if kind.contains("number")
@@ -311,6 +326,7 @@ pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDe
         Language::JavaScript | Language::TypeScript | Language::Tsx => {
             js::extract_javascript_dependencies(root, source)
         }
+        Language::Zig => ParsedDependencies::default(),
     })
 }
 
@@ -338,6 +354,7 @@ pub(crate) fn parse_bundle(path: &str, source: &[u8]) -> Result<ParsedBundle> {
             Language::JavaScript | Language::TypeScript | Language::Tsx => {
                 js::extract_javascript_dependencies(root, source)
             }
+            Language::Zig => ParsedDependencies::default(),
         },
         tokens: tokenize_tree(language, source, root),
     })
@@ -392,6 +409,7 @@ pub fn detect_language(path: &str) -> Option<Language> {
         "go" => Some(Language::Go),
         "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Some(Language::Cpp),
         "rs" => Some(Language::Rust),
+        "zig" => Some(Language::Zig),
         "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
         "py" => Some(Language::Python),
         "ts" | "mts" | "cts" => Some(Language::TypeScript),
@@ -408,10 +426,17 @@ fn grammar(language: Language) -> TsLanguage {
         Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
         Language::C => tree_sitter_c::LANGUAGE.into(),
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
+        Language::Zig => tree_sitter_zig::LANGUAGE.into(),
         Language::Python => tree_sitter_python::LANGUAGE.into(),
         Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
     }
+}
+
+fn has_named_child(node: Node<'_>, kind: &str) -> bool {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| child.kind() == kind)
 }
 
 fn discover_tree<'tree>(
@@ -477,6 +502,11 @@ fn is_function(node: Node<'_>, language: Language) -> bool {
         ),
         Language::C | Language::Cpp => matches!(kind, "function_definition" | "lambda_expression"),
         Language::Rust => matches!(kind, "function_item" | "closure_expression"),
+        Language::Zig => match kind {
+            "function_declaration" => node.child_by_field_name("body").is_some(),
+            "test_declaration" => has_named_child(node, "block"),
+            _ => false,
+        },
         Language::Python => matches!(kind, "function_definition" | "lambda"),
     }
 }
@@ -527,6 +557,9 @@ fn function_kind(node: Node<'_>, language: Language) -> FunctionKind {
     if language == Language::Cpp && node.kind() == "function_definition" && cpp_is_method(node) {
         return FunctionKind::Method;
     }
+    if language == Language::Zig && node.kind() == "test_declaration" {
+        return FunctionKind::Function;
+    }
     // Python has no method node: a `def` inside a class body is still a
     // `function_definition`, so the method verdict walks the enclosing chain.
     if language == Language::Python {
@@ -572,11 +605,11 @@ fn walk_function(
             continue;
         }
 
-        if is_logical_loc(node.kind(), language) {
+        if is_logical_loc(node, language) {
             *logical_loc += 1;
         }
 
-        let else_if = is_else_if(node);
+        let else_if = is_else_if(node, language);
         let decision = decision_kind(node, language, source);
         if let Some(kind) = decision {
             events.push(Event::Decision {
@@ -602,7 +635,11 @@ fn walk_function(
                     nesting,
                 });
             }
-        } else if node.kind() == "else_clause" && !has_if_child(node) {
+        } else if (language == Language::Zig
+            && node.kind() == "if_expression"
+            && zig_if_expression_has_non_if_else(node))
+            || (node.kind() == "else_clause" && !has_if_child(node))
+        {
             events.push(Event::Else {
                 line: node.start_position().row as u32 + 1,
                 nesting,
@@ -619,6 +656,19 @@ fn walk_function(
         if this_logical && !inside_logical {
             collect_logical(node, language, next_sequence, nesting, events);
             next_sequence += 1;
+        }
+
+        if language == Language::Zig
+            && matches!(
+                node.kind(),
+                "boolean" | "builtin_type" | "string" | "character"
+            )
+        {
+            events.push(Event::Operand(Span {
+                start: node.start_byte(),
+                end: node.end_byte(),
+            }));
+            continue;
         }
 
         if node.child_count() == 0 {
@@ -692,7 +742,7 @@ fn decision_kind(node: Node<'_>, language: Language, source: &[u8]) -> Option<De
         | "for_expression"
         | "do_statement"
         | "for_range_loop" => Some(DecisionKind::Loop),
-        "catch_clause" => Some(DecisionKind::Catch),
+        "catch_clause" | "catch_expression" => Some(DecisionKind::Catch),
         "switch_statement"
         | "switch_expression"
         | "expression_switch_statement"
@@ -703,6 +753,14 @@ fn decision_kind(node: Node<'_>, language: Language, source: &[u8]) -> Option<De
         | "match_arm" | "case_statement" => Some(DecisionKind::Case),
         "switch_label" if node_text(node, source).trim_start().starts_with("case") => {
             Some(DecisionKind::Case)
+        }
+        "binary_expression"
+            if language == Language::Zig
+                && node
+                    .child_by_field_name("operator")
+                    .is_some_and(|operator| node_text(operator, source) == "orelse") =>
+        {
+            Some(DecisionKind::Ternary)
         }
         "ternary_expression" | "conditional_expression" => Some(DecisionKind::Ternary),
         "try_expression" => Some(DecisionKind::Try),
@@ -740,9 +798,13 @@ fn is_labeled_jump(node: Node<'_>, language: Language) -> bool {
         // jump rather than a labeled one.
         "break_statement" | "continue_statement" => node.named_child_count() > 0,
         "break_expression" | "continue_expression" => {
-            let mut cursor = node.walk();
-            node.named_children(&mut cursor)
-                .any(|child| child.kind() == "label")
+            has_named_child(node, "label") || has_named_child(node, "break_label")
+        }
+        "block_label" if language == Language::Zig => true,
+        "labeled_statement"
+            if language == Language::Zig && has_named_child(node, "block_label") =>
+        {
+            true
         }
         "goto_statement" | "labeled_statement"
             if matches!(language, Language::C | Language::Cpp) =>
@@ -753,7 +815,26 @@ fn is_labeled_jump(node: Node<'_>, language: Language) -> bool {
     }
 }
 
-fn is_else_if(node: Node<'_>) -> bool {
+fn zig_if_expression_has_non_if_else(node: Node<'_>) -> bool {
+    let mut saw_else = false;
+    let mut alternative = None;
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "else" {
+            saw_else = true;
+        } else if saw_else && child.is_named() {
+            alternative = Some(child);
+        }
+    }
+    alternative.is_some_and(|child| child.kind() != "if_expression")
+}
+
+fn is_else_if(node: Node<'_>, language: Language) -> bool {
+    if language == Language::Zig && node.kind() == "if_expression" {
+        return node
+            .prev_sibling()
+            .is_some_and(|previous| previous.kind() == "else");
+    }
     if node.kind() == "elif_clause" {
         return true;
     }
@@ -792,8 +873,12 @@ fn logical_operator(node: Node<'_>, language: Language, source: &[u8]) -> Option
         .find_map(|child| match node_text(child, source) {
             "&&" => Some(LogicalOperator::And),
             "||" => Some(LogicalOperator::Or),
-            "and" if language == Language::Python => Some(LogicalOperator::And),
-            "or" if language == Language::Python => Some(LogicalOperator::Or),
+            "and" if matches!(language, Language::Python | Language::Zig) => {
+                Some(LogicalOperator::And)
+            }
+            "or" if matches!(language, Language::Python | Language::Zig) => {
+                Some(LogicalOperator::Or)
+            }
             _ => None,
         })
 }
@@ -818,8 +903,12 @@ fn collect_logical(
             let operator = match current.kind() {
                 "&&" => Some(LogicalOperator::And),
                 "||" => Some(LogicalOperator::Or),
-                "and" if language == Language::Python => Some(LogicalOperator::And),
-                "or" if language == Language::Python => Some(LogicalOperator::Or),
+                "and" if matches!(language, Language::Python | Language::Zig) => {
+                    Some(LogicalOperator::And)
+                }
+                "or" if matches!(language, Language::Python | Language::Zig) => {
+                    Some(LogicalOperator::Or)
+                }
                 _ => None,
             };
             if let Some(operator) = operator {
@@ -969,6 +1058,20 @@ fn function_name(node: Node<'_>, language: Language, source: &[u8]) -> String {
     {
         return node_text(binding, source).to_owned();
     }
+    if language == Language::Zig && node.kind() == "test_declaration" {
+        let mut cursor = node.walk();
+        if let Some(name) = node
+            .named_children(&mut cursor)
+            .find(|child| matches!(child.kind(), "string" | "identifier"))
+        {
+            let name = node_text(name, source);
+            return if name.starts_with('"') && name.ends_with('"') {
+                name.trim_matches('"').to_owned()
+            } else {
+                name.to_owned()
+            };
+        }
+    }
     if let Some(name) = node.child_by_field_name("name") {
         return node_text(name, source).to_owned();
     }
@@ -1075,6 +1178,14 @@ fn calls_self(root: Node<'_>, language: Language, name: &str, source: &[u8]) -> 
                             _ => None,
                         }
                     })
+                } else {
+                    None
+                }
+            }
+            Language::Zig => {
+                if node.kind() == "call_expression" {
+                    node.child_by_field_name("function")
+                        .filter(|function| function.kind() == "identifier")
                 } else {
                     None
                 }
@@ -1200,6 +1311,17 @@ fn parameter_count(node: Node<'_>, language: Language, source: &[u8]) -> u32 {
         }
         return if lone_void { 0 } else { count };
     }
+    if language == Language::Zig
+        && let Some(parameters) = node
+            .named_children(&mut node.walk())
+            .find(|child| child.kind() == "parameters")
+    {
+        let mut cursor = parameters.walk();
+        return parameters
+            .named_children(&mut cursor)
+            .filter(|child| child.kind() == "parameter")
+            .count() as u32;
+    }
     if let Some(parameters) = node.child_by_field_name("parameters") {
         // Go groups names (`func f(a, b, c bool)` is one
         // parameter_declaration with three `name` fields); only
@@ -1289,7 +1411,8 @@ fn python_is_method(node: Node<'_>) -> bool {
     false
 }
 
-fn is_logical_loc(kind: &str, language: Language) -> bool {
+fn is_logical_loc(node: Node<'_>, language: Language) -> bool {
+    let kind = node.kind();
     matches!(
         kind,
         "expression_statement"
@@ -1337,19 +1460,27 @@ fn is_logical_loc(kind: &str, language: Language) -> bool {
             | "match_arm"
             | "break_expression"
             | "continue_expression"
-    ) || (matches!(language, Language::C | Language::Cpp)
-        && matches!(
+    ) || (language == Language::Zig
+        && (matches!(
             kind,
-            "declaration"
-                | "goto_statement"
-                | "labeled_statement"
-                | "case_statement"
-                | "for_range_loop"
-                | "preproc_if"
-                | "preproc_ifdef"
-                | "preproc_elif"
-                | "preproc_else"
-        ))
+            "errdefer_statement"
+                | "suspend_statement"
+                | "nosuspend_statement"
+                | "comptime_statement"
+        ) || (kind == "labeled_statement" && has_named_child(node, "block_label"))))
+        || (matches!(language, Language::C | Language::Cpp)
+            && matches!(
+                kind,
+                "declaration"
+                    | "goto_statement"
+                    | "labeled_statement"
+                    | "case_statement"
+                    | "for_range_loop"
+                    | "preproc_if"
+                    | "preproc_ifdef"
+                    | "preproc_elif"
+                    | "preproc_else"
+            ))
         || (language == Language::Python
             && matches!(
                 kind,
@@ -1429,6 +1560,33 @@ fn is_operator(kind: &str) -> bool {
             | "delete"
             | "await"
             | "yield"
+            | "and"
+            | "or"
+            | "orelse"
+            | "try"
+            | "defer"
+            | "errdefer"
+            | "suspend"
+            | "resume"
+            | "nosuspend"
+            | "comptime"
+            | "inline"
+            | "noinline"
+            | "test"
+            | "fn"
+            | "pub"
+            | "usingnamespace"
+            | "unreachable"
+            | "undefined"
+            | "align"
+            | "addrspace"
+            | "linksection"
+            | "callconv"
+            | "noalias"
+            | "allowzero"
+            | "threadlocal"
+            | "packed"
+            | "opaque"
     )
 }
 
@@ -1442,6 +1600,9 @@ fn is_operator(kind: &str) -> bool {
 /// `match` is absent: the shared table already counts it as an operator for
 /// every language, so a Python entry would be inert.
 fn is_operator_leaf(kind: &str, language: Language) -> bool {
+    if language == Language::Zig && matches!(kind, "undefined" | "unreachable") {
+        return false;
+    }
     is_operator(kind)
         || (language == Language::Python
             && matches!(
@@ -1491,7 +1652,18 @@ fn is_operand_leaf(node: Node<'_>, language: Language) -> bool {
     if !is_operand(node.kind()) {
         return false;
     }
-    node.is_named() || (language == Language::Rust && matches!(node.kind(), "true" | "false"))
+    node.is_named()
+        || (language == Language::Rust && matches!(node.kind(), "true" | "false"))
+        || (language == Language::Zig
+            && matches!(
+                node.kind(),
+                "undefined"
+                    | "unreachable"
+                    | "anyframe"
+                    | "noreturn"
+                    | "comptime_int"
+                    | "comptime_float"
+            ))
 }
 
 fn is_operand(kind: &str) -> bool {
@@ -1527,6 +1699,17 @@ fn is_operand(kind: &str) -> bool {
                 | "integer"
                 | "float"
                 | "none"
+                | "boolean"
+                | "builtin_type"
+                | "builtin_identifier"
+                | "character"
+                | "multiline_string"
+                | "undefined"
+                | "unreachable"
+                | "anyframe"
+                | "noreturn"
+                | "comptime_int"
+                | "comptime_float"
         )
 }
 
@@ -1648,7 +1831,7 @@ fn sql_call_target<'a>(
     source: &'a [u8],
 ) -> Option<(String, Option<Node<'a>>)> {
     let (name_node, arguments) = match language {
-        Language::C => return None,
+        Language::C | Language::Zig => return None,
         Language::Java => {
             if node.kind() != "method_invocation" {
                 return None;
@@ -1992,6 +2175,24 @@ class Dao {
                 .any(|text| text.contains("3.14") || text.contains("0xFF")),
             "{texts:?}"
         );
+    }
+
+    #[test]
+    fn zig_literals_normalize_once_at_named_wrappers() {
+        let tokens = normalized_tokens(
+            "literal.zig",
+            b"pub fn f(value: []const u8) void { const ch = 'x'; _ = value; }\n",
+        )
+        .unwrap();
+        let texts = tokens
+            .tokens
+            .iter()
+            .map(|token| token.text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(texts.iter().filter(|text| **text == "<str>").count(), 1);
+        assert!(!texts.contains(&"void"), "{texts:?}");
+        assert!(!texts.contains(&"u8"), "{texts:?}");
+        assert!(!texts.contains(&"'"), "{texts:?}");
     }
 
     #[test]

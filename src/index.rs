@@ -20,7 +20,8 @@ pub const DEFAULT_INDEX_DIR: &str = ".leadline";
 
 /// Parser backend versions baked into the index key.
 /// Bump when tree-sitter or any grammar crate changes.
-pub const PARSER_VERSIONS: &str = "tree-sitter-0.27:java-0.23.5:javascript-0.25:typescript-0.23.2";
+pub const PARSER_VERSIONS: &str =
+    "tree-sitter-0.27:java-0.23.5:javascript-0.25:typescript-0.23.2:zig-1.1.2";
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IndexedFile {

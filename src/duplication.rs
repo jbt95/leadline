@@ -401,6 +401,7 @@ fn run_hash(language: Language, run: &[u32]) -> u64 {
         Language::Cpp => 0x51ed_270b_9a3c_6f85,
         Language::Python => 0x6a09_e667_f3bc_c909,
         Language::Rust => 0xd1b5_4a32_d192_ed03,
+        Language::Zig => 0x5f37_59df_0000_0001,
         Language::TypeScript => 0x1656_67b1_9e37_79f9,
         Language::Tsx => 0x27d4_eb2f_1656_67b1,
     };

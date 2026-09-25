@@ -136,6 +136,118 @@ fn tiny_fixtures_define_default_v1() {
     assert_complexity("py/parameters.py", "parameters", 1, 0, 0, 4);
     assert_complexity("py/parameters.py", "keyword_only", 1, 0, 0, 3);
     assert_complexity("py/parameters.py", "positional_only", 1, 0, 0, 2);
+
+    assert_complexity("zig/empty.zig", "empty", 1, 0, 0, 0);
+    assert_complexity("zig/decisions.zig", "choose", 3, 3, 1, 1);
+    assert_complexity("zig/decisions.zig", "loops", 4, 4, 2, 1);
+    assert_complexity("zig/decisions.zig", "classify", 4, 1, 1, 1);
+    assert_complexity("zig/decisions.zig", "labeled", 3, 6, 2, 1);
+    assert_complexity("zig/logic.zig", "logic", 5, 4, 1, 3);
+    assert_complexity("zig/logic.zig", "tryValue", 2, 1, 1, 1);
+    assert_complexity("zig/recursion.zig", "fact", 2, 2, 1, 1);
+    assert_complexity("zig/recursion.zig", "two", 1, 0, 0, 2);
+    assert_complexity("zig/parameters.zig", "parameters", 1, 0, 0, 3);
+    assert_complexity("zig/test.zig", "named", 2, 1, 1, 0);
+    assert_complexity("zig/test.zig", "<anonymous@7:1>", 2, 1, 1, 0);
+}
+
+#[test]
+fn zig_expression_else_try_literals_and_test_names_are_scored() {
+    let source = br#"pub fn expression(a: bool, b: bool, c: bool) bool {
+    return if (a) true else if (b) false else if (c) true else false;
+}
+pub fn literals() void {
+    const text = "hello";
+    const ch = 'x';
+    const missing = undefined;
+    const dead = unreachable;
+}
+pub fn attempt() !void {
+    try consume();
+}
+pub extern fn prototype(value: i32) i32;
+test namedIdentifier {
+    return;
+}
+test {
+    const text = "not a name";
+}
+"#;
+    let file = leadline::analyze_source("custom.zig", source).unwrap();
+    assert!(file.parse_errors.is_empty(), "{:?}", file.parse_errors);
+
+    let names = file
+        .functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(!names.contains(&"prototype"), "{names:?}");
+    assert!(names.contains(&"namedIdentifier"), "{names:?}");
+    assert!(names.iter().any(|name| name.starts_with("<anonymous@")));
+    assert!(
+        !names.iter().any(|name| name.contains("not a name")),
+        "{names:?}"
+    );
+
+    let expression = function(&file, "expression");
+    assert_eq!(
+        (
+            expression.metrics.cyclomatic,
+            expression.metrics.cognitive,
+            expression.metrics.max_nesting,
+            expression.metrics.parameters,
+        ),
+        (4, 4, 1, 3)
+    );
+    let rules = |analysis: &FileAnalysis, name: &str| {
+        analysis
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap()
+            .contributions
+            .iter()
+            .map(|contribution| contribution.rule.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        rules(&file, "expression")
+            .into_iter()
+            .filter(|rule| matches!(rule.as_str(), "if" | "else-if" | "else"))
+            .collect::<Vec<_>>(),
+        ["if", "else-if", "else-if", "else"]
+    );
+
+    let attempt = function(&file, "attempt");
+    assert_eq!(
+        (
+            attempt.metrics.cyclomatic,
+            attempt.metrics.cognitive,
+            attempt.metrics.max_nesting,
+        ),
+        (2, 0, 0)
+    );
+    assert!(rules(&file, "attempt").iter().any(|rule| rule == "try"));
+
+    let literals = function(&file, "literals");
+    assert_eq!(
+        (
+            literals.metrics.halstead_n2,
+            literals.metrics.halstead_total_operands,
+        ),
+        (10, 10)
+    );
+
+    let tests = fixture("zig/test.zig");
+    assert_eq!(function(&tests, "named").kind, FunctionKind::Function);
+    assert_eq!(
+        function(&tests, "<anonymous@7:1>").kind,
+        FunctionKind::Function
+    );
+    assert_eq!(
+        function(&file, "namedIdentifier").kind,
+        FunctionKind::Function
+    );
 }
 
 #[test]

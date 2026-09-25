@@ -49,6 +49,22 @@ fn discovery_finds_rust_sources() {
 }
 
 #[test]
+fn discovery_finds_zig_sources() {
+    let root = temporary_directory();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("target")).unwrap();
+    std::fs::write(root.join("src/main.zig"), "pub fn main() void {}\n").unwrap();
+    std::fs::write(
+        root.join("target/ignored.zig"),
+        "pub fn ignored() void {}\n",
+    )
+    .unwrap();
+    let discovered = leadline::discovery::discover(&root).unwrap();
+    assert_eq!(discovered, vec![root.join("src/main.zig")]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn discovery_finds_c_sources() {
     let root = temporary_directory();
     std::fs::create_dir_all(root.join("src")).unwrap();
