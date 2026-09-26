@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.20.0 - 2026-09-26
+
 ### Changed (breaking)
 
 - The MCP server exposes a single `execute` tool instead of twenty. A script — a JavaScript async function body whose only global is a `tools` namespace, one async function per analyzer tool — composes the twenty analyzer tools in one round trip, so loops, branching, `await`, and `Promise.all` aggregate reports in the sandbox and the intermediate results never enter the model's context. `execute` takes one required `code` argument, rejects unknown argument fields with `-32602`, and returns the script's single JSON-serializable value; its description carries a generated declaration line per tool (name plus argument names) derived from the same specs the twenty advertised entries used to come from, so a host loads one tool and the model still sees every capability. Each tool returns its own JSON report unchanged, and a tool failure surfaces as `script error: <message>`, while a syntax error reports the real JavaScript message. Direct calls to the twenty names are rejected — the JSON-RPC direct-tool-method extension is removed, so `execute` is the only route and no caller can skip the sandbox or its call budget. A script stays sandboxed and offline: at most 100 tool calls, a 30s wall clock, and 64 MB of JavaScript memory, with no filesystem, network, module, timer, or process access. Adds the `rquickjs` dependency (`0.9`), whose job queue is driven synchronously, so no `futures` feature and no async runtime are needed. Telemetry is unchanged in kind: every tool called from a script still records its own invocation, cost, and outcome, alongside the outer `execute` call.
