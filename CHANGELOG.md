@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.19.1 - 2026-09-26
+
 ### Fixed
 
 - Go had no entry-point convention, so `unused` reported a Go service as entirely unused — its `main` package included. Every Go file declaring `package main` is now a convention entry point, because `go build ./...` and `go run ./cmd/x` name that package directly and no import edge reaches it. This matches the treatment Cargo crate roots, C and C++ translation units, and Python run-and-load modules already get.

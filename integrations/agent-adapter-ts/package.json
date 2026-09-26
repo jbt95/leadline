@@ -1,6 +1,6 @@
 {
   "name": "leadline-agent-adapter",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "description": "Shared TypeScript core plus thin Pi/OMP shims that shell out to the leadline binary",
   "type": "module",
   "scripts": {

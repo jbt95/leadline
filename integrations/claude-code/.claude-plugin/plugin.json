@@ -1,1 +1,1 @@
-{"description":"Deterministic function-level complexity feedback for changed code.","mcpServers":{"leadline":{"command":"leadline","args":["mcp"]}},"name":"leadline","version":"0.19.0"}
+{"description":"Deterministic function-level complexity feedback for changed code.","mcpServers":{"leadline":{"command":"leadline","args":["mcp"]}},"name":"leadline","version":"0.19.1"}
