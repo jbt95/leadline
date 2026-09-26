@@ -189,6 +189,26 @@ fn policy_json_reports_and_gates_violations() {
 
     let gate = leadline(&root, &["policy", "--fail-on-violation"]);
     assert_eq!(gate.status.code(), Some(1));
+    let rendered = String::from_utf8_lossy(&gate.stdout);
+    assert!(
+        rendered.starts_with("Policy: 1 rules, 0 info / 0 warning / 1 error\n"),
+        "unexpected policy summary: {rendered}"
+    );
+    assert!(
+        rendered.contains("  error    src/domain/a.ts -> src/ui/b.ts (domain-no-ui)\n"),
+        "unexpected policy violation row: {rendered}"
+    );
+
+    // A base revision classifies the violation, and the terminal renderer
+    // carries that status through. The offending import is already in the
+    // base commit, so it reads as existing rather than new.
+    let drift = leadline(&root, &["policy", "--base", "HEAD"]);
+    assert!(drift.status.success());
+    let rendered = String::from_utf8_lossy(&drift.stdout);
+    assert!(
+        rendered.contains("(domain-no-ui) [existing]\n"),
+        "committed violation must read as existing: {rendered}"
+    );
 
     std::fs::remove_dir_all(root).unwrap();
 }

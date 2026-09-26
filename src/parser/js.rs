@@ -339,3 +339,58 @@ fn decode_hex(chars: &mut impl Iterator<Item = char>, digits: usize) -> Option<u
     }
     Some(value)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::decode_javascript_escapes;
+
+    /// Every escape form a specifier can carry. The decoder decides which
+    /// file an import names, so each arm needs its own case.
+    #[test]
+    fn decodes_every_escape_form() {
+        for (literal, expected) in [
+            ("plain", "plain"),
+            (r"\b\f\n\r\t\v\0", "\u{0008}\u{000c}\n\r\t\u{000b}\0"),
+            (r"a\r\nb", "a\r\nb"),
+            ("a\\\r\nb", "ab"),
+            ("a\\\rb", "ab"),
+            ("a\\\nb", "ab"),
+            (r"\x41\x7a", "Az"),
+            (r"\u0041\u{42}", "AB"),
+            (r"\u{1F600}", "\u{1F600}"),
+            (r"\uD83D\uDE00", "\u{1F600}"),
+            (r"\\ \/ \. \!", "\\ / . !"),
+        ] {
+            assert_eq!(
+                decode_javascript_escapes(literal).as_deref(),
+                Some(expected),
+                "{literal:?}"
+            );
+        }
+    }
+
+    /// A malformed form must refuse the specifier. Decoding it partially
+    /// would resolve the import to a file that does not exist, so every
+    /// rejection path needs a case.
+    #[test]
+    fn rejects_malformed_escapes() {
+        for literal in [
+            r"\",
+            r"\xZZ",
+            r"\x4",
+            r"\u00",
+            r"\u{41",
+            r"\u{}",
+            r"\u{110000}",
+            r"\uD83D",
+            r"\uD83Dx",
+            r"\uD83D\u0041",
+        ] {
+            assert_eq!(
+                decode_javascript_escapes(literal),
+                None,
+                "{literal:?} must not decode"
+            );
+        }
+    }
+}

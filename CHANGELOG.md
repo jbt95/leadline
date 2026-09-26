@@ -4,6 +4,13 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Fixed
+
+- Go had no entry-point convention, so `unused` reported a Go service as entirely unused — its `main` package included. Every Go file declaring `package main` is now a convention entry point, because `go build ./...` and `go run ./cmd/x` name that package directly and no import edge reaches it. This matches the treatment Cargo crate roots, C and C++ translation units, and Python run-and-load modules already get.
+- Go imports are reported as `unresolved` with reason `unsupported` instead of being dropped. They still add no edge, since an import path is module-qualified, but a Go repository no longer reads as one with no dependencies at all, and `unused` no longer risks returning `complete: true` from an empty graph — which, with the `package main` entry point above, would have turned 43 false positives into a confident verdict.
+- `risk` and `project` degraded gracefully outside a Git repository but failed with a raw `fatal: Needed a single revision` in a repository that has no commits yet. A missing `HEAD` is now treated as unavailable history, matching `hotspots` and `coupling`; a revision the caller named explicitly still has to resolve.
+- `tests/stats.rs` and `tests/mcp.rs` named their temporary repositories from `SystemTime::now().as_nanos()`, which is not unique under load: two threads reading the clock in the same tick got the same path and then raced on `git init` and `.git/index.lock`, failing `stats` about one run in five. Both now take their directory from `common::temporary_directory()` — the process id plus per-binary atomic counter every other test file already used — so a parallel `cargo test` no longer fails intermittently.
+
 ## 0.19.0 - 2026-09-25
 
 ### Added

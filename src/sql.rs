@@ -1551,3 +1551,53 @@ pub fn add_unknown_table_findings(
     }
     sort_by_path(&mut report.findings);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Lexer, TokenKind};
+
+    /// Drive `lex_number` over `text` and report the token it produced and how
+    /// far it consumed. The consumed length matters as much as the kind: a
+    /// wrong `pos` desynchronizes every later token in the statement.
+    fn number(text: &str) -> (TokenKind, usize) {
+        let mut lexer = Lexer::new(text);
+        lexer.lex_number();
+        let kind = lexer
+            .tokens
+            .first()
+            .expect("lex_number pushes exactly one token")
+            .kind
+            .clone();
+        (kind, lexer.pos)
+    }
+
+    #[test]
+    fn lexes_integer_float_and_exponent_forms() {
+        use TokenKind::{Float, Int};
+        for (text, expected, consumed) in [
+            ("42", Int(42), 2),
+            ("1_000", Int(1000), 5),
+            ("1.5", Float, 3),
+            ("1_0.2_5", Float, 7),
+            ("1e3", Float, 3),
+            ("1E3", Float, 3),
+            ("1e+3", Float, 4),
+            ("1e-3", Float, 4),
+            ("1.5e-3", Float, 6),
+            ("99999999999999999999999", Float, 23),
+        ] {
+            assert_eq!(number(text), (expected, consumed), "{text:?}");
+        }
+    }
+
+    /// A dot or exponent with no digit after it is not part of the number, so
+    /// the number ends before it and the next token starts there. Anything
+    /// else would swallow the following operator as numeric text.
+    #[test]
+    fn stops_before_an_incomplete_fraction_or_exponent() {
+        use TokenKind::Int;
+        for (text, consumed) in [("1.", 1), ("1e", 1), ("1e+", 1), ("1e-x", 1)] {
+            assert_eq!(number(text), (Int(1), consumed), "{text:?}");
+        }
+    }
+}

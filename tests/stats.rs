@@ -1,3 +1,5 @@
+mod common;
+
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -27,15 +29,7 @@ impl Drop for StatsServer {
 /// OS-assigned port, and reads the port out of its banner.
 fn spawn_stats_server() -> StatsServer {
     use std::io::BufRead as _;
-    let root = std::env::temp_dir().join(format!(
-        "leadline-stats-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
+    let root = common::temporary_directory();
     let run = |args: &[&str]| {
         let output = std::process::Command::new("git")
             .args(args)

@@ -75,15 +75,8 @@ impl Drop for Fixture {
     }
 }
 
-fn git_fixture(name: &str) -> Fixture {
-    let root = Fixture::create(std::env::temp_dir().join(format!(
-        "leadline-mcp-{name}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    )));
+fn git_fixture() -> Fixture {
+    let root = Fixture::create(common::temporary_directory());
     run_git(&root, &["init"]);
     run_git(&root, &["config", "user.email", "test@example.com"]);
     run_git(&root, &["config", "user.name", "Test"]);
@@ -379,15 +372,7 @@ fn explain_metric_covers_all_five_and_rejects_unknown() {
 
 #[test]
 fn analyze_changed_reports_deltas() {
-    let root = std::env::temp_dir().join(format!(
-        "leadline-mcp-changed-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
+    let root = common::temporary_directory();
     let run = |args: &[&str]| {
         let output = std::process::Command::new("git")
             .args(args)
@@ -449,15 +434,7 @@ fn analyze_changed_reports_deltas() {
 
 #[test]
 fn analyze_changed_non_worktree_targets_ignore_worktree() {
-    let root = std::env::temp_dir().join(format!(
-        "leadline-mcp-index-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
+    let root = common::temporary_directory();
     let run = |args: &[&str]| {
         let output = std::process::Command::new("git")
             .args(args)
@@ -520,15 +497,7 @@ fn analyze_changed_non_worktree_targets_ignore_worktree() {
 
 #[test]
 fn analyze_changed_renames_pairs_git_detected_rename() {
-    let root = std::env::temp_dir().join(format!(
-        "leadline-mcp-rename-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
+    let root = common::temporary_directory();
     let run = |args: &[&str]| {
         let output = std::process::Command::new("git")
             .args(args)
@@ -1124,7 +1093,7 @@ fn impact_reports_dependents_and_rejects_a_missing_target() {
 #[test]
 fn coupling_reports_related_files() {
     // Git fixture: two files committed together twice.
-    let root = git_fixture("coupling");
+    let root = git_fixture();
     for (message, left, right) in [("one", "a", "b"), ("two", "a2", "b2")] {
         std::fs::write(root.join("a.ts"), format!("export const a = '{left}';\n")).unwrap();
         std::fs::write(root.join("b.ts"), format!("export const b = '{right}';\n")).unwrap();
@@ -1376,15 +1345,7 @@ fn analyze_function_explains_contributions() {
 
 #[test]
 fn analyze_changed_accepts_budget_params() {
-    let root = std::env::temp_dir().join(format!(
-        "leadline-mcp-budget-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
+    let root = common::temporary_directory();
     let run = |args: &[&str]| {
         let output = std::process::Command::new("git")
             .args(args)
@@ -1605,7 +1566,7 @@ fn sql_plan_compares_directories_over_call_and_direct_method() {
     envelope_ok(result);
     assert_eq!(result["tool"], "sql_plan");
     assert_eq!(result["violations"][0]["kind"], "cost_increase");
-    assert!(result.get("truncated").is_some());
+    assert_eq!(result["truncated"], false);
     assert!(result.get("queries").is_some());
     let direct = request("sql_plan", arguments);
     let direct_response: Value = serde_json::from_str(&handle_request(&direct).unwrap()).unwrap();
@@ -1732,7 +1693,7 @@ fn security_findings_compare_over_call_and_direct_method() {
     assert_eq!(result["tool"], "security_findings");
     assert_eq!(result["findings"][0]["rule_id"], "js/hardcoded-secret");
     assert!(result["findings"][0]["function_id"].is_string());
-    assert!(result.get("truncated").is_some());
+    assert_eq!(result["truncated"], false);
     assert!(!result["violations"].as_array().unwrap().is_empty());
     assert!(!serde_json::to_string(&result).unwrap().contains("SENTINEL"));
     let direct = request("security_findings", arguments);
@@ -1880,7 +1841,7 @@ fn vulnerabilities_reports_direct_import_evidence() {
     assert_eq!(result["tool"], "vulnerabilities");
     assert_eq!(result["findings"][0]["advisory_id"], "GHSA-xxxx-yyyy-zzzz");
     assert_eq!(result["reachability_model"], "changed-direct-imports");
-    assert!(result.get("truncated").is_some());
+    assert_eq!(result["truncated"], false);
     assert!(!result["violations"].as_array().unwrap().is_empty());
     assert!(!serde_json::to_string(&result).unwrap().contains("SENTINEL"));
     let direct = request("vulnerabilities", arguments);
@@ -2013,7 +1974,7 @@ fn sql_risks_reports_static_findings() {
         result["findings"][0]["rule_id"],
         "sql/update-delete-without-where"
     );
-    assert!(result.get("truncated").is_some());
+    assert_eq!(result["truncated"], false);
     assert!(!result["violations"].as_array().unwrap().is_empty());
     let direct = request("sql_risks", arguments);
     let direct_response: Value = serde_json::from_str(&handle_request(&direct).unwrap()).unwrap();
@@ -2800,7 +2761,7 @@ fn risk_reports_components() {
 
 #[test]
 fn debt_and_project_compare_a_git_repo() {
-    let root = git_fixture("debt");
+    let root = git_fixture();
     std::fs::write(
         root.join("sample.ts"),
         "function calc(x: boolean) { return 1; }\n",

@@ -65,9 +65,13 @@ fn run_hook(hook: &str, cwd: &Path, fake: &Path, log: &Path) -> std::process::Ou
     child.wait_with_output().unwrap()
 }
 
+/// Recorded analyzer invocations. The log is written only when a hook really
+/// spawns the analyzer, so a missing file is a failure here, not an empty
+/// result: tests that expect no invocation assert `!log.exists()` instead of
+/// calling this.
 fn calls(log: &Path) -> Vec<String> {
     std::fs::read_to_string(log)
-        .unwrap_or_default()
+        .unwrap_or_else(|error| panic!("reading {}: {error}", log.display()))
         .lines()
         .map(str::to_owned)
         .collect()
@@ -82,7 +86,7 @@ fn changed_hooks_skip_outside_a_repository() {
         let output = run_hook(hook, &root, &fake, &log);
         assert!(output.status.success(), "{hook}: {output:?}");
         assert!(
-            calls(&log).is_empty(),
+            !log.exists(),
             "{hook} spawned the analyzer outside a repository: {:?}",
             calls(&log)
         );
@@ -103,7 +107,7 @@ fn changed_hooks_skip_before_the_base_commit_exists() {
         let output = run_hook(hook, &root, &fake, &log);
         assert!(output.status.success(), "{hook}: {output:?}");
         assert!(
-            calls(&log).is_empty(),
+            !log.exists(),
             "{hook} spawned the analyzer without a base revision: {:?}",
             calls(&log)
         );

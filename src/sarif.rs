@@ -499,6 +499,7 @@ pub fn regression_violations<'a>(
 mod tests {
     use super::*;
     use crate::core::{FileAnalysis, FunctionAnalysis, FunctionKind, Language, MetricSpecs};
+    use crate::pg_plan::{PlanRegressionKind, QueryPlanChange};
 
     fn metrics(
         cognitive: u32,
@@ -663,5 +664,79 @@ mod tests {
                 ("src/b.ts", 3, "leadline/max-nesting"),
             ]
         );
+    }
+
+    fn plan_change(kind: PlanRegressionKind) -> QueryPlanChange {
+        QueryPlanChange {
+            query_id: "q1".to_owned(),
+            kind,
+            relation: Some("users".to_owned()),
+            detail: Some("detail".to_owned()),
+            baseline: Some(100.0),
+            current: Some(150.0),
+            violates_gate: true,
+        }
+    }
+
+    /// One fixed message per regression kind. The text is the whole contract
+    /// for a SARIF consumer, so every kind needs a case: a silently wrong arm
+    /// reports a regression the plan never had.
+    #[test]
+    fn pg_plan_messages_cover_every_kind() {
+        use PlanRegressionKind::{
+            AddedSort, CostIncrease, EstimateError, IndexToSequentialScan, JoinStrategyChange,
+            RowGrowth,
+        };
+        for (kind, expected) in [
+            (
+                IndexToSequentialScan,
+                "query 'q1' regressed from index scan to sequential scan on table 'users'",
+            ),
+            (CostIncrease, "query 'q1' total cost 100 -> 150 (detail)"),
+            (RowGrowth, "query 'q1' plan rows 100 -> 150 (detail)"),
+            (EstimateError, "query 'q1' planner estimate error 150.0x"),
+            (AddedSort, "query 'q1' added sort nodes (detail)"),
+            (
+                JoinStrategyChange,
+                "query 'q1' join strategy changed (detail)",
+            ),
+        ] {
+            assert_eq!(pg_plan_message(&plan_change(kind)), expected, "{kind:?}");
+        }
+    }
+
+    /// A missing relation, detail, or cost must render the `?` placeholder or
+    /// the short form rather than an empty gap.
+    #[test]
+    fn pg_plan_messages_substitute_placeholders() {
+        use PlanRegressionKind::{
+            AddedSort, CostIncrease, EstimateError, IndexToSequentialScan, JoinStrategyChange,
+            RowGrowth,
+        };
+        let bare = |kind| {
+            let mut change = plan_change(kind);
+            change.relation = None;
+            change.detail = None;
+            change.baseline = None;
+            change.current = None;
+            change
+        };
+
+        for (kind, expected) in [
+            (
+                IndexToSequentialScan,
+                "query 'q1' regressed from index scan to sequential scan on table '?'",
+            ),
+            (CostIncrease, "query 'q1' total cost increased"),
+            (RowGrowth, "query 'q1' plan rows grew"),
+            (
+                EstimateError,
+                "query 'q1' planner estimate error is unbounded",
+            ),
+            (AddedSort, "query 'q1' added sort nodes (?)"),
+            (JoinStrategyChange, "query 'q1' join strategy changed (?)"),
+        ] {
+            assert_eq!(pg_plan_message(&bare(kind)), expected, "{kind:?}");
+        }
     }
 }

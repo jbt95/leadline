@@ -53,21 +53,16 @@ fn history(files: Vec<FileHistory>, available: bool) -> HistoryReport {
     }
 }
 
-fn max_cognitive(report: &AnalysisReport, path: &str) -> u32 {
-    report
-        .files
-        .iter()
-        .find(|file| file.path == path)
-        .unwrap()
-        .functions
-        .iter()
-        .map(|function| function.metrics.cognitive)
-        .max()
-        .unwrap_or(0)
-}
-
 const LOW: &str = "function low(x: number) { if (x) { return 1; } return 0; }";
 const HIGH: &str = "function high(x: number) { if (x) { if (x > 1) { return 1; } } return 0; }";
+
+/// Cognitive complexity of the two fixtures, derived from the documented rule
+/// that each `if`, loop, `catch`, `switch`, and ternary adds `1 + current
+/// nesting` with no flat base: `LOW` has one `if` at nesting 0, `HIGH` adds a
+/// second `if` at nesting 1. Pinned as literals so a test asserts the metric
+/// instead of re-deriving it with a copy of the production fold.
+const LOW_COGNITIVE: u32 = 1;
+const HIGH_COGNITIVE: u32 = 3;
 
 #[test]
 fn build_joins_source_and_history_dimensions() {
@@ -84,7 +79,7 @@ fn build_joins_source_and_history_dimensions() {
     let hotspot = &hotspots.hotspots[0];
     assert_eq!(hotspot.path, "src/a.ts");
     assert_eq!(hotspot.functions, 1);
-    assert_eq!(hotspot.max_cognitive, max_cognitive(&report, "src/a.ts"));
+    assert_eq!(hotspot.max_cognitive, HIGH_COGNITIVE);
     assert_eq!(hotspot.changes_30d, Some(2));
     assert_eq!(hotspot.changes_90d, Some(10));
     assert_eq!(hotspot.changes_365d, Some(40));
@@ -96,7 +91,7 @@ fn build_joins_source_and_history_dimensions() {
     assert_eq!(hotspot.recent_contributors, Some(2));
     assert_eq!(
         hotspot.score,
-        Some(u64::from(hotspot.max_cognitive) * 10),
+        Some(u64::from(HIGH_COGNITIVE) * 10),
         "score is max cognitive times changes in the selected window"
     );
 }
@@ -120,8 +115,8 @@ fn ranking_uses_complexity_times_churn() {
         .iter()
         .map(|hotspot| hotspot.path.as_str())
         .collect();
-    let busy_score = u64::from(max_cognitive(&report, "src/busy.ts")) * 20;
-    let complex_score = u64::from(max_cognitive(&report, "src/complex.ts")) * 3;
+    let busy_score = u64::from(LOW_COGNITIVE) * 20;
+    let complex_score = u64::from(HIGH_COGNITIVE) * 3;
     assert!(
         busy_score > complex_score,
         "fixture must exercise a churn-led ranking"
@@ -133,7 +128,7 @@ fn ranking_uses_complexity_times_churn() {
 fn window_selection_changes_the_score() {
     let report = analysis(vec![analyze("src/a.ts", HIGH)]);
     let history = history(vec![history_file("src/a.ts", 1, 10, 100)], true);
-    let cognitive = u64::from(max_cognitive(&report, "src/a.ts"));
+    let cognitive = u64::from(HIGH_COGNITIVE);
 
     let recent = build(&report, &history, HistoryWindow::Days30, 10);
     assert_eq!(recent.window, "30d");

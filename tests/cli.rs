@@ -1496,7 +1496,7 @@ fn sql_plan_agent_json_sarif_and_determinism() {
         .unwrap();
     assert_eq!(agent.status.code(), Some(1));
     let body: serde_json::Value = serde_json::from_slice(&agent.stdout).unwrap();
-    assert!(body.get("truncated").is_some());
+    assert_eq!(body["truncated"], false);
     assert!(body.get("violations").is_some());
     let sarif = common::leadline()
         .args([
@@ -1865,7 +1865,7 @@ fn security_merges_repeated_files_and_renders_all_modes() {
         .output()
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&agent.stdout).unwrap();
-    assert!(body.get("truncated").is_some());
+    assert_eq!(body["truncated"], false);
     let sarif = common::leadline()
         .args([
             "security",
@@ -1963,13 +1963,16 @@ fn check_combines_complexity_and_security_violations() {
             root.to_str().unwrap(),
             "--sarif",
             sarif.to_str().unwrap(),
+            "--fail-on-severity",
+            "low",
             "--json",
         ])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.status.code(), Some(1));
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(report.get("security_violations").is_some());
+    assert!(report["files"].as_array().unwrap().is_empty());
+    assert!(!report["security_violations"].as_array().unwrap().is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -2123,7 +2126,7 @@ fn vulnerabilities_config_threshold_and_output_modes() {
         .output()
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&agent.stdout).unwrap();
-    assert!(body.get("truncated").is_some());
+    assert_eq!(body["truncated"], false);
     let sarif = common::leadline()
         .args([
             "vulnerabilities",
@@ -2201,7 +2204,7 @@ fn check_vulnerabilities_combines_both_families() {
     assert_eq!(output.status.code(), Some(1));
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(!report["files"].as_array().unwrap().is_empty());
-    assert!(report.get("security_violations").is_some());
+    assert!(!report["security_violations"].as_array().unwrap().is_empty());
     assert!(
         !report["vulnerability_violations"]
             .as_array()
@@ -2320,7 +2323,7 @@ fn sql_risk_config_threshold_modes_and_determinism() {
         .output()
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&agent.stdout).unwrap();
-    assert!(body.get("truncated").is_some());
+    assert_eq!(body["truncated"], false);
     let sarif = common::leadline()
         .args(["sql", root.to_str().unwrap(), "--format", "sarif"])
         .output()
@@ -2524,4 +2527,180 @@ fn index_verify_reports_true_for_an_untampered_index() {
 fn help_lists_the_index_command() {
     let output = common::leadline().arg("--help").output().unwrap();
     assert!(String::from_utf8_lossy(&output.stdout).contains("index [PATH]"));
+}
+
+/// `report` re-renders a saved `check --json` document without re-analyzing,
+/// so the saved metrics and the thresholds `report` is given decide the
+/// output: the document alone names no violation until a limit is applied.
+#[test]
+fn report_renders_a_saved_check_document() {
+    let root = temporary_directory();
+    let file = root.join("calc.ts");
+    std::fs::write(
+        &file,
+        "function calc(x: number) { if (x > 0) { if (x > 1) { return x; } } return 0; }\n",
+    )
+    .unwrap();
+    let saved = check(&file, &["--cognitive", "1", "--json"]);
+    assert_eq!(saved.status.code(), Some(1), "fixture must violate");
+    let document = root.join("check.json");
+    std::fs::write(&document, &saved.stdout).unwrap();
+    let from = document.to_str().unwrap().to_owned();
+
+    // No limit means nothing to compare against, so the document passes.
+    let unfiltered = common::leadline()
+        .args(["report", "--from", &from, "--format", "markdown"])
+        .output()
+        .unwrap();
+    assert!(unfiltered.status.success());
+    let rendered = String::from_utf8_lossy(&unfiltered.stdout);
+    assert!(
+        rendered.contains("**passing** - 0 violations in 1 file"),
+        "{rendered}"
+    );
+
+    // The same document fails once a limit the saved metrics exceed is applied,
+    // which is what makes the saved JSON worth re-rendering.
+    let failing = common::leadline()
+        .args([
+            "report",
+            "--from",
+            &from,
+            "--format",
+            "github-annotations",
+            "--cognitive",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(failing.status.success());
+    let annotation = String::from_utf8_lossy(&failing.stdout);
+    let annotation = annotation.trim();
+    assert!(annotation.starts_with("::warning file="), "{annotation}");
+    assert!(annotation.contains("calc.ts"), "{annotation}");
+    assert!(
+        annotation.ends_with(",line=1,title=function::exceeds cognitive"),
+        "{annotation}"
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Every `report` argument error must be a usage error naming the option, not
+/// a panic or a silent empty render.
+#[test]
+fn report_rejects_bad_arguments_with_usage_errors() {
+    let root = temporary_directory();
+    let missing = root.join("absent.json");
+    let not_json = root.join("plain.json");
+    std::fs::write(&not_json, b"not json").unwrap();
+    let absent = missing.to_str().unwrap().to_owned();
+    let plain = not_json.to_str().unwrap().to_owned();
+
+    for (args, expected) in [
+        (vec!["report"], "report requires --from FILE"),
+        (
+            vec!["report", "--from", &absent],
+            "report requires --format NAME",
+        ),
+        (vec!["report", "--from"], "--from requires a file"),
+        (vec!["report", "--format"], "--format requires a value"),
+        (vec!["report", "--bogus"], "unknown report option '--bogus'"),
+        (
+            vec!["report", "--from", &absent, "--format", "nope"],
+            "unknown --format 'nope'",
+        ),
+        (
+            vec!["report", "--from", &absent, "--format", "badge"],
+            "cannot read",
+        ),
+        (
+            vec!["report", "--from", &plain, "--format", "badge"],
+            "is not JSON",
+        ),
+    ] {
+        let output = common::leadline().args(&args).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected), "{args:?}: {stderr}");
+    }
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// The `unused` subcommand is the reachability report. No test drove it
+/// through the binary, so its argument parsing, config loading, and terminal
+/// rendering were unexercised.
+#[test]
+fn unused_reports_unreachable_files_through_the_cli() {
+    let root = temporary_directory();
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("entry.ts"), "export const a = 1;\n").unwrap();
+    std::fs::write(src.join("orphan.ts"), "export const b = 2;\n").unwrap();
+
+    let output = common::leadline()
+        .args(["unused", root.to_str().unwrap(), "--entry", "src/entry.ts"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        rendered.contains("src/orphan.ts"),
+        "an unreachable file must be listed: {rendered}"
+    );
+
+    let json = common::leadline()
+        .args([
+            "unused",
+            root.to_str().unwrap(),
+            "--entry",
+            "src/entry.ts",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(json.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["complete"], true);
+    assert_eq!(value["files_analyzed"], 2);
+    assert_eq!(
+        value["entry_points"],
+        serde_json::json!([{"path": "src/entry.ts", "source": "entry"}])
+    );
+    assert_eq!(
+        value["unused_files"],
+        serde_json::json!([{"path": "src/orphan.ts"}])
+    );
+
+    // `--json` and `--format` are mutually exclusive across every command.
+    let exclusive = common::leadline()
+        .args([
+            "unused",
+            root.to_str().unwrap(),
+            "--json",
+            "--format",
+            "agent-json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(exclusive.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&exclusive.stderr).contains("exclusive"));
+
+    let unknown = common::leadline()
+        .args(["unused", root.to_str().unwrap(), "--bogus"])
+        .output()
+        .unwrap();
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&unknown.stderr).contains("unknown unused option"));
+
+    let needs_pattern = common::leadline()
+        .args(["unused", root.to_str().unwrap(), "--entry"])
+        .output()
+        .unwrap();
+    assert_eq!(needs_pattern.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&needs_pattern.stderr).contains("--entry requires a pattern"));
+
+    std::fs::remove_dir_all(root).unwrap();
 }

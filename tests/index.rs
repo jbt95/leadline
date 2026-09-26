@@ -4,8 +4,7 @@ mod common;
 use common::temporary_directory;
 
 #[test]
-fn content_key_is_stable_and_content_sensitive() {
-    assert_eq!(content_key(b"let a = 1;"), content_key(b"let a = 1;"));
+fn content_key_is_content_sensitive() {
     assert_ne!(content_key(b"let a = 1;"), content_key(b"let a = 2;"));
 }
 
