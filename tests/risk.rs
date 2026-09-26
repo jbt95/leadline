@@ -801,6 +801,44 @@ fn cli_risk_without_git_still_ranks_with_null_churn() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// A repository that exists but has no commits yet has no `HEAD` to resolve.
+/// That is missing history, not a usage error: the command must degrade like it
+/// does outside a repository instead of leaking a raw `fatal:` from git.
+#[test]
+fn cli_risk_degrades_in_a_repository_without_commits() {
+    let root = cli_risk_temp_dir("leadline-risk-nocommit");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("risky.ts"), cli_risk_risky_source()).unwrap();
+    let init = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(init.status.success());
+
+    let output = common::leadline()
+        .current_dir(&root)
+        .args(["risk", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("Needed a single revision"),
+        "a raw git error leaked: {stderr}"
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["git_available"], false);
+    assert!(!value["risks"].as_array().unwrap().is_empty());
+    assert!(value["risks"][0]["components"]["churn"].is_null());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn cli_risk_empty_directory_is_incomplete() {
     let root = cli_risk_temp_dir("leadline-risk-empty");

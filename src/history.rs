@@ -170,6 +170,14 @@ pub fn analyze_git_at_with_mailmap(
     let Some(root) = context.repo_root.as_deref() else {
         return Ok(unavailable_analytics());
     };
+    // A repository that exists but has no commits yet has no `HEAD` to
+    // resolve. That is missing history, not a usage error, so it degrades the
+    // same way a directory outside a repository does instead of surfacing a
+    // raw `fatal: Needed a single revision`. A revision the caller named
+    // explicitly still has to resolve, so that stays an error.
+    if revision == "HEAD" && git::repository_head_optional(root)?.is_none() {
+        return Ok(unavailable_analytics());
+    }
     let (commit, commit_timestamp) = git::resolve_commit(root, revision)?;
     let mailmap = mailmap.map(Mailmap::parse).unwrap_or_default();
     let filter = SourceFilter::new(&context.analysis_root, &context.config.analysis_excludes)?;
