@@ -303,8 +303,11 @@ fn resolve(
         }
         // Go imports are module-qualified paths (`fmt`,
         // `github.com/org/repo/pkg`), never file-relative, so without
-        // module-graph resolution there is nothing sound to resolve.
-        RawDependencyKind::GoImport => Resolution::Ignored,
+        // module-graph resolution there is nothing sound to resolve. The
+        // reference is reported rather than dropped, keeping `complete` honest
+        // and the missing graph visible, and adds no edge — the same treatment
+        // absolute Python imports and Java wildcard imports get.
+        RawDependencyKind::GoImport => Resolution::Unresolved("unsupported"),
         // Rust modules are files: `mod foo;` names `foo.rs` or `foo/mod.rs`
         // beside the declaring file. `use` paths are module-qualified and
         // never reach this resolver.

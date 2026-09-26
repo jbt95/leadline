@@ -1,7 +1,12 @@
 # Dependencies and impact
 
 Static file-level dependency intelligence for Go, JavaScript, TypeScript, Java, Rust, C, C++, Python, and Zig.
-Go imports are module-qualified paths, so `GoImport` references are `Ignored` and never produce edges.
+Go imports are module-qualified paths, so a `GoImport` reference adds no
+edge, but it is reported as `unresolved` with reason `unsupported` rather than
+dropped: a Go repository must not read as one with no dependencies at all, and
+`unused` must not return a complete verdict off an empty graph. Go
+entry-point reachability comes from the `package main` convention, not from an
+edge, so a Go service without it reads as entirely unused.
 Python absolute imports are module-qualified paths on `sys.path`, so
 `PythonAbsoluteImport` references are recorded as `unresolved` with reason
 `unsupported` and never produce edges.
@@ -215,6 +220,10 @@ the target sits on a cycle.
 ## Limitations
 
 - No package-manager graph: third-party and bare imports are ignored.
+- No Go module graph: import paths are module-qualified, so a `GoImport` adds
+  no edge and is reported `unsupported`. Intra-module references therefore
+  never reach a Go file, and a Go `main` package is reachable only through the
+  entry-point convention.
 - No path aliases or `tsconfig` paths: only relative specifiers resolve.
 - No wildcard Java imports (`import pkg.*` is recorded, never resolved).
 - No same-package implicit Java references: files using a type without an

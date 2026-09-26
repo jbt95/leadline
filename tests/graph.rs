@@ -190,19 +190,6 @@ fn resolves_javascript_and_typescript_references_and_reports_cycles() {
 }
 
 #[test]
-fn go_imports_are_ignored_in_the_graph() {
-    let root = temporary_directory();
-    write(
-        &root,
-        "main.go",
-        "package main\n\nimport (\n\t\"fmt\"\n\t\"github.com/example/mod/pkg\"\n)\n\nfunc main() { fmt.Println(\"hi\") }\n",
-    );
-    let report = analyze_dependencies(&root, &[]).unwrap();
-    assert!(edge_pairs(&report).is_empty());
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
 fn zig_imports_resolve_local_files() {
     let root = temporary_directory();
     write(
@@ -596,6 +583,47 @@ fn resolves_java_exact_and_static_imports_but_not_wildcards_or_ambiguous_types()
         [
             ("duplicate.Value", "ambiguous"),
             ("wildcard.*", "unsupported")
+        ]
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Go import paths are module-qualified, so no edge can be resolved. They must
+/// still be reported as unsupported rather than dropped, or a Go repository
+/// looks like it has no dependencies at all and `unused` reports a complete
+/// verdict off an empty graph.
+#[test]
+fn go_imports_are_reported_unsupported_instead_of_dropped() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "go.mod",
+        "module github.com/example/svc\n\ngo 1.24\n",
+    );
+    write(
+        &root,
+        "cmd/server/main.go",
+        "package main\n\nimport (\n\t\"fmt\"\n\n\t\"github.com/example/svc/internal/domain\"\n)\n\nfunc main() { fmt.Println(domain.Name) }\n",
+    );
+    write(
+        &root,
+        "internal/domain/skill.go",
+        "package domain\n\nvar Name = \"x\"\n",
+    );
+
+    let report = analyze_dependencies(&root, &[]).unwrap();
+    assert!(report.edges.is_empty(), "no Go edge is resolvable");
+    let reasons: Vec<(&str, &str)> = report
+        .unresolved
+        .iter()
+        .map(|item| (item.specifier.as_str(), item.reason))
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            ("fmt", "unsupported"),
+            ("github.com/example/svc/internal/domain", "unsupported")
         ]
     );
 

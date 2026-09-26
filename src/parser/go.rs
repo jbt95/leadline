@@ -29,3 +29,26 @@ pub(super) fn extract_go_dependencies(root: Node<'_>, source: &[u8]) -> ParsedDe
     }
     parsed
 }
+
+/// True when the file declares `package main`.
+///
+/// The Go toolchain builds and runs a `main` package by name, so the file is
+/// reachable without an importer: `go build ./...`, `go run ./cmd/x`, and a
+/// bare `go run file.go` all take that path. A library package is only reached
+/// through an import edge, and Go import paths are module-qualified, so no
+/// other package is reachable by name.
+///
+/// The clause is looked up among the named children rather than assumed to be
+/// the first: a doc comment above `package main` is a named node too. The
+/// grammar exposes no `name` field on `package_clause`, so the identifier is
+/// read from its named child.
+pub(crate) fn has_main_package(root: Node<'_>, source: &[u8]) -> bool {
+    let mut cursor = root.walk();
+    root.named_children(&mut cursor).any(|child| {
+        child.kind() == "package_clause"
+            && child.named_child(0).is_some_and(|name| {
+                name.kind() == "package_identifier"
+                    && name.utf8_text(source).is_ok_and(|text| text == "main")
+            })
+    })
+}

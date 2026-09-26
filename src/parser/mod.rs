@@ -390,6 +390,15 @@ pub(crate) fn python_has_main_guard(path: &str, source: &[u8]) -> Result<bool> {
     Ok(python::has_main_guard(tree.root_node(), source))
 }
 
+/// True when a Go file declares `package main`.
+///
+/// Parses `source` with the Go grammar and delegates to the pure tree walk;
+/// `path` must be a Go path, exactly as `SourceEntry` paths are.
+pub(crate) fn go_has_main_package(path: &str, source: &[u8]) -> Result<bool> {
+    let (_, tree) = parse_tree(path, source)?;
+    Ok(go::has_main_package(tree.root_node(), source))
+}
+
 /// Parses one host-language file once for SQL call-site analysis and
 /// function attribution.
 pub(crate) fn parse_sql_host(
@@ -2384,6 +2393,37 @@ func outer(db *sql.DB) {
                 (RawDependencyKind::GoImport, "database/sql", 6),
             ]
         );
+    }
+
+    #[test]
+    fn go_main_package_is_an_entry_point_even_behind_a_doc_comment() {
+        // The doc comment is a named node above the clause, so the clause is
+        // not the file's first named child.
+        let documented = b"// Command server runs the service.\n//\n// Usage:\n//\n//\tserver  start it\npackage main\n\nfunc main() {}\n";
+        assert!(go_has_main_package("cmd/server/main.go", documented).unwrap());
+        assert!(
+            go_has_main_package("cmd/server/main.go", b"package main\n").unwrap(),
+            "a bare clause with no body is still a main package"
+        );
+    }
+
+    #[test]
+    fn go_library_packages_are_not_entry_points() {
+        for source in [
+            &b"package domain\n\nfunc F() {}\n"[..],
+            // The word in a comment or a string must not decide it.
+            &b"// package main\npackage domain\n"[..],
+            &b"package domain\n\nconst note = \"package main\"\n"[..],
+            // A differently named command package is still a library to us:
+            // only `main` is run by name.
+            &b"package tool\n\nfunc main() {}\n"[..],
+        ] {
+            assert!(
+                !go_has_main_package("internal/domain/skill.go", source).unwrap(),
+                "{:?} must not be an entry point",
+                String::from_utf8_lossy(source)
+            );
+        }
     }
 
     #[test]

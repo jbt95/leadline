@@ -626,6 +626,21 @@ fn convention_entries(
             });
         }
     }
+    // `go build ./...` and `go run ./cmd/x` name a `main` package, so no import
+    // edge reaches it either. Without this a Go service reads as entirely
+    // unused, its `main` package included. The tree walk reads the bytes
+    // already in memory, so no file is read twice.
+    for source in sources {
+        if !source.path.ends_with(".go") {
+            continue;
+        }
+        if crate::parser::go_has_main_package(&source.path, &source.bytes)? {
+            entries.push(EntryPoint {
+                path: source.path.clone(),
+                source: SOURCE_CONVENTION,
+            });
+        }
+    }
     Ok(entries)
 }
 

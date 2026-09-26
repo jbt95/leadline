@@ -645,3 +645,44 @@ fn python_relative_imports_resolve_while_absolute_ones_stay_unresolved() {
     assert_eq!(report.reason, Some("unresolved_references"));
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// `go build ./...` and `go run ./cmd/x` name a `main` package, so the command
+/// file is an entry point with no importer. Without that convention a Go
+/// service reads as entirely unused, its `main` package included.
+#[test]
+fn go_main_package_is_reachable_without_an_importer() {
+    let root = temporary_directory();
+    write(
+        &root,
+        "go.mod",
+        "module github.com/example/svc\n\ngo 1.24\n",
+    );
+    write(
+        &root,
+        "cmd/server/main.go",
+        "// Command server runs the service.\npackage main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"hi\") }\n",
+    );
+    write(
+        &root,
+        "internal/domain/skill.go",
+        "package domain\n\nvar Name = \"x\"\n",
+    );
+
+    let report = analyze_unused(&root, &[], &[], &UnusedConfig::default()).unwrap();
+
+    assert!(
+        report
+            .entry_points
+            .iter()
+            .any(|entry| entry.path == "cmd/server/main.go"),
+        "the main package must be an entry point: {:?}",
+        report.entry_points
+    );
+    assert!(!unused_file_paths(&report).contains(&"cmd/server/main.go"));
+    // No Go import resolves, so the graph is incomplete and the library
+    // package stays a candidate row rather than a verdict.
+    assert!(!report.complete);
+    assert_eq!(report.reason, Some("unresolved_references"));
+    assert!(report.unresolved > 0);
+    std::fs::remove_dir_all(root).unwrap();
+}
