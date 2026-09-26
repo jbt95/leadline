@@ -166,12 +166,22 @@ fn mcp_serves_tool_list_over_stdio() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert!(names.contains(&"analyze"));
-    assert!(names.contains(&"analyze_changed"));
-    assert!(names.contains(&"analyze_function"));
-    assert!(names.contains(&"check"));
-    assert!(names.contains(&"explain_metric"));
-    assert!(names.contains(&"repo_summary"));
+    // The server advertises one tool; the analyzer surface reaches the model
+    // through the declaration block in its description.
+    assert_eq!(names, vec!["execute"]);
+    let description = value["result"]["tools"][0]["description"].as_str().unwrap();
+    for name in [
+        "analyze",
+        "analyze_changed",
+        "check",
+        "explain_metric",
+        "repo_summary",
+    ] {
+        assert!(
+            description.contains(&format!("{name}(")),
+            "{name} must be declared"
+        );
+    }
 }
 
 /// Live MCP clients keep stdin open while waiting for responses, so every

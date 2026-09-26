@@ -130,17 +130,73 @@ where language or runtime configuration decides the real target);
 evidence, not a dependency). Inspect both lists, then make the smallest
 diff that covers them.
 
-## MCP tools (read-only)
+## MCP: one `execute` tool
 
-The MCP server exposes twenty read-only tools. It never writes files in the
+The MCP server advertises one read-only tool, `execute`. A script runs inside
+the server and calls the twenty analyzer tools from a `tools` namespace, so a
+multi-tool workflow costs one round trip instead of twenty and intermediate
+reports never enter the model's context. The server never writes files in the
 analyzed repository, runs hooks, or executes project code. When
 `LEADLINE_METRICS_DIR` is set, tool calls additionally update the opt-in
 local metrics store in that directory ([telemetry.md](telemetry.md)); keep
 that directory outside the analyzed repository so the repository itself
-stays write-free. The
-default transport is stdio (`leadline mcp`), matching every `command: leadline, args: [mcp]` harness config; `leadline mcp --port [N] [--host ADDR]` serves the same tools over HTTP (`POST /mcp`, `GET /health`). A bare `--port` means 3000, `0` asks the OS, and a taken port falls back to a free one with the actual address on stderr.
+stays write-free. Each tool called from a script records its own telemetry, and
+the outer `execute` call is recorded too.
 
-HTTP limits apply to every request: 32 MiB body, 64 KiB of headers, an 8 KiB line cap, a five-second whole-request read deadline, a ten-second whole-response write deadline, and 64 concurrent connections (excess connections get 503). At most 64 MiB of request bodies may be buffered across all connections; further declared bodies get 503 instead of multiplying memory. Only HTTP/1.1 is spoken (505 otherwise), malformed request lines and header lines are 400, `Transfer-Encoding` is 501, empty POST bodies are 400, and a request must carry exactly one `Host` and one `Content-Length`. Loopback-bound listeners only accept loopback authorities; browser `Origin`s must be loopback `http(s)` origins (scheme-less origins are rejected). JSON-RPC batches are capped at 64 requests and every response (batch included) at 32 MiB. `top` accepts at most 200 entries where a tool takes it (`repo_summary` caps at 50), and each scanner tool caps both `findings` and `violations` at `top`, setting `truncated` when either was cut. Artifact arguments (`sarif`, `osv`, `trivy`, and `sql_plan`'s `current`/`baseline`, and `project`'s `pit`/`stryker`/`test_map`/`snapshots`) stay root-relative: absolute paths, parent-directory escapes, and symlinks that resolve outside the working directory are rejected; `migration_roots` are analysis-root-relative and get lexical validation only. `check` fills missing metrics from `leadline.toml` `[thresholds.function]` and uses `[regressions]` limits for `regressions: true`, exactly like the CLI. `check` violation rows carry a `reason` array naming the failed thresholds (`regression` for a delta gate, `crap_unavailable` for a CRAP gate with no coverage record; an unavailable CRAP fails closed, matching the CLI). Unknown tool arguments and unknown `thresholds`/`regressions` keys are invalid-request errors instead of being ignored.
+The
+default transport is stdio (`leadline mcp`), matching every `command: leadline, args: [mcp]` harness config; `leadline mcp --port [N] [--host ADDR]` serves the same tool over HTTP (`POST /mcp`, `GET /health`). A bare `--port` means 3000, `0` asks the OS, and a taken port falls back to a free one with the actual address on stderr.
+
+HTTP limits apply to every request: 32 MiB body, 64 KiB of headers, an 8 KiB line cap, a five-second whole-request read deadline, a ten-second whole-response write deadline, and 64 concurrent connections (excess connections get 503). At most 64 MiB of request bodies may be buffered across all connections; further declared bodies get 503 instead of multiplying memory. Only HTTP/1.1 is spoken (505 otherwise), malformed request lines and header lines are 400, `Transfer-Encoding` is 501, empty POST bodies are 400, and a request must carry exactly one `Host` and one `Content-Length`. Loopback-bound listeners only accept loopback authorities; browser `Origin`s must be loopback `http(s)` origins (scheme-less origins are rejected). JSON-RPC batches are capped at 64 …
+
+### The `code` argument
+
+`execute` takes one argument, `code`: a JavaScript **async function body**, not
+an expression. Use `return` to produce the result. Top-level `await`, loops,
+branching, and `Promise.all` all work, and the returned value must be
+JSON-serializable. Inside a script, each tool is an async function taking that
+tool's argument object and returning its report unchanged.
+
+Pre-edit triage in one call:
+
+```js
+const [risk, blast, related] = await Promise.all([
+  tools.risk({ path: "src/payment.ts" }),
+  tools.impact({ target: "src/payment.ts" }),
+  tools.coupling({ target: "src/payment.ts" }),
+]);
+return {
+  score: risk.risks[0]?.score,
+  dependents: blast.blast_radius,
+  oftenChangedWith: related.related.map((row) => row.path),
+};
+```
+
+Batch a gate over several paths, or fold a result into a decision:
+
+```js
+const targets = ["src/a.ts", "src/b.ts"];
+const reports = [];
+for (const path of targets) {
+  const gate = await tools.check({ path, thresholds: { cognitive: 15 } });
+  if (!gate.passed) reports.push({ path, violations: gate.violations });
+}
+return reports.length === 0 ? { ok: true } : { ok: false, reports };
+```
+
+### Limits and errors
+
+A script has no filesystem, network, module, timer, or process access. One run
+is capped at 100 tool calls, 30 seconds of wall clock, and 64 MB of script
+memory. A tool that fails makes the script fail with
+`script error: <message>`, carrying the tool's own message. A syntax error or
+a thrown error reports the JavaScript message. Unknown `code` fields are
+rejected as invalid parameters.
+
+The twenty analyzer tools are reachable only from a script. A direct call to
+one of their names is rejected with `unknown tool '<name>'; this server exposes
+only \`execute\`, which calls leadline tools from a script`.
+
+### Tools available inside a script
 
 | Tool | Mirrors | Input | Output |
 | --- | --- | --- | --- |

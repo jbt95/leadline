@@ -9,13 +9,55 @@ fn request(method: &str, params: Value) -> String {
     serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string()
 }
 
+/// Call one analyzer tool from inside an `execute` script.
+///
+/// This is the only route a client has to the twenty tools, so every behavior
+/// test goes through the script sandbox too. `serde_json` renders arguments as
+/// compact JSON, which is also a valid JavaScript object literal.
 fn call_tool(name: &str, arguments: Value) -> Value {
+    let code = format!("return await tools.{name}({arguments});");
     let raw = request(
         "tools/call",
-        serde_json::json!({ "name": name, "arguments": arguments }),
+        serde_json::json!({ "name": "execute", "arguments": { "code": code } }),
     );
     let response = handle_request(&raw).expect("tools/call must respond");
     serde_json::from_str(&response).unwrap()
+}
+
+/// Run a raw script body through `execute`.
+fn execute_code(code: &str) -> Value {
+    let raw = request(
+        "tools/call",
+        serde_json::json!({ "name": "execute", "arguments": { "code": code } }),
+    );
+    let response = handle_request(&raw).expect("tools/call must respond");
+    serde_json::from_str(&response).unwrap()
+}
+
+/// The `execute` tool spec from `tools/list`.
+fn execute_spec() -> Value {
+    let response: Value = serde_json::from_str(
+        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
+    )
+    .unwrap();
+    let tools = result_of(&response)["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 1, "only `execute` is advertised: {tools:?}");
+    assert_eq!(tools[0]["name"], "execute");
+    tools[0].clone()
+}
+
+/// A `tools/list` response, for assertions that need the whole array.
+fn execute_list_response() -> Value {
+    serde_json::from_str(&handle_request(&request("tools/list", serde_json::json!({}))).unwrap())
+        .unwrap()
+}
+
+/// The generated declaration block inside `execute`'s description.
+fn execute_declarations() -> String {
+    execute_spec()["description"]
+        .as_str()
+        .expect("execute must carry a description")
+        .to_owned()
 }
 
 fn result_of(response: &Value) -> &Value {
@@ -118,59 +160,123 @@ fn initialize_and_tools_list() {
     .unwrap();
     assert_eq!(result_of(&response)["serverInfo"]["name"], "leadline");
 
-    let response: Value = serde_json::from_str(
-        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
-    )
-    .unwrap();
-    let tools = result_of(&response)["tools"].as_array().unwrap();
-    let mut names: Vec<&str> = tools
-        .iter()
-        .map(|tool| tool["name"].as_str().unwrap())
-        .collect();
-    names.sort_unstable();
+    // One advertised tool, not twenty: the analyzer surface reaches the model
+    // as the declaration block in `execute`'s description.
+    let spec = execute_spec();
+    assert_eq!(spec["inputSchema"]["required"][0], "code");
+    assert_eq!(spec["inputSchema"]["properties"]["code"]["type"], "string");
+
+    // The declaration block must be a real, non-trivial API listing. Which
+    // tools it contains is the crate's own invariant, covered by
+    // `mcp::tests::declarations_list_every_tool_with_its_arguments`; repeating
+    // the twenty names here would only create a second list to keep in sync.
+    let declarations = execute_declarations();
+    let callable = declarations
+        .lines()
+        .filter(|line| {
+            line.trim_start().starts_with("analyze(")
+                || line.trim_start().starts_with("check(")
+                || line.trim_start().starts_with("project(")
+                || line.trim_start().starts_with("repo_summary(")
+        })
+        .count();
     assert_eq!(
-        names,
-        vec![
-            "analyze",
-            "analyze_changed",
-            "analyze_function",
-            "check",
-            "coupling",
-            "debt",
-            "dependencies",
-            "duplication",
-            "explain_metric",
-            "hotspots",
-            "impact",
-            "policy",
-            "project",
-            "repo_summary",
-            "risk",
-            "security_findings",
-            "sql_plan",
-            "sql_risks",
-            "test_targets",
-            "vulnerabilities"
-        ]
+        callable, 4,
+        "declarations must be callable lines: {declarations}"
     );
-    let changed = tools
-        .iter()
-        .find(|tool| tool["name"] == "analyze_changed")
-        .unwrap();
+    assert!(declarations.contains("Promise<object>"), "{declarations}");
+}
+
+#[test]
+fn direct_analyzer_call_is_rejected_with_a_redirect() {
+    for name in ["analyze", "check", "project"] {
+        let raw = request(
+            "tools/call",
+            serde_json::json!({ "name": name, "arguments": {} }),
+        );
+        let response: Value = serde_json::from_str(&handle_request(&raw).unwrap()).unwrap();
+        let error = error_of(&response);
+        assert_eq!(error["code"], -32602, "{name}: {error}");
+        let message = error["message"].as_str().unwrap();
+        assert!(message.contains("execute"), "{name}: {message}");
+    }
+}
+
+#[test]
+fn execute_runs_a_script_over_several_tools() {
+    let dir = fixture_dir("function branch(x: boolean) { if (x) return 1; return 0; }\n");
+    let path = dir.to_str().unwrap();
+    // The whole point of the surface: one call, several tools, one result.
+    let response = execute_code(&format!(
+        "const [summary, risk] = await Promise.all([
+           tools.repo_summary({{ path: {path:?} }}),
+           tools.risk({{ path: {path:?} }}),
+         ]);
+         return {{ files: summary.totals.files, top: risk.risks[0].path }};"
+    ));
+    let result = result_of(&response);
+    assert_eq!(result["files"], 1);
+    assert_eq!(result["top"], "sample.ts");
+}
+
+#[test]
+fn execute_reports_tool_failures_with_the_original_message() {
+    let response = execute_code("return await tools.explain_metric({ metric: \"vibes\" });");
+    let error = error_of(&response);
+    assert_eq!(error["code"], -32602);
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("vibes"), "{message}");
+    assert!(message.contains("script error"), "{message}");
+}
+
+#[test]
+fn execute_denies_host_capabilities() {
+    // The script holds `tools` and nothing else: no require, no process, no
+    // fetch, no timers.
+    let response =
+        execute_code("return [typeof require, typeof process, typeof fetch, typeof setTimeout];");
     assert_eq!(
-        changed["inputSchema"]["properties"]["target"]["default"],
-        "worktree"
+        result_of(&response),
+        &serde_json::json!(["undefined", "undefined", "undefined", "undefined"])
     );
-    assert_eq!(
-        changed["inputSchema"]["properties"]["renames"]["default"],
-        false
+}
+
+#[test]
+fn execute_enforces_the_tool_call_budget() {
+    let response = execute_code(
+        "for (let i = 0; i < 200; i++) { await tools.explain_metric({ metric: \"cognitive\" }); }
+         return \"unreachable\";",
     );
-    let check = tools.iter().find(|tool| tool["name"] == "check").unwrap();
-    assert_eq!(check["inputSchema"]["properties"]["base"]["type"], "string");
-    assert_eq!(
-        check["inputSchema"]["properties"]["regressions"]["type"][0],
-        "boolean"
+    let message = error_of(&response)["message"].as_str().unwrap().to_owned();
+    assert!(message.contains("tool call limit"), "{message}");
+}
+
+#[test]
+fn execute_requires_code_and_rejects_unknown_fields() {
+    for arguments in [serde_json::json!({}), serde_json::json!({ "code": 1 })] {
+        let raw = request(
+            "tools/call",
+            serde_json::json!({ "name": "execute", "arguments": arguments }),
+        );
+        let response: Value = serde_json::from_str(&handle_request(&raw).unwrap()).unwrap();
+        assert_eq!(error_of(&response)["code"], -32602, "{arguments}");
+    }
+    let raw = request(
+        "tools/call",
+        serde_json::json!({
+            "name": "execute",
+            "arguments": { "code": "return 1;", "bogus": 1 }
+        }),
     );
+    let response: Value = serde_json::from_str(&handle_request(&raw).unwrap()).unwrap();
+    assert_eq!(error_of(&response)["code"], -32602);
+}
+
+#[test]
+fn execute_reports_a_javascript_syntax_error() {
+    let response = execute_code("const = ;");
+    let message = error_of(&response)["message"].as_str().unwrap();
+    assert!(message.contains("variable name expected"), "{message}");
 }
 
 #[test]
@@ -276,16 +382,15 @@ fn analyze_returns_compact_deterministic_envelope() {
 }
 
 #[test]
-fn analyze_accepts_direct_method_and_coverage() {
+fn analyze_accepts_coverage_through_a_script() {
     let dir = fixture_dir("function covered(x: boolean) { if (x) return 1; return 0; }\n");
     let file = dir.join("sample.ts");
     let lcov = dir.join("lcov.info");
     std::fs::write(&lcov, "SF:sample.ts\nDA:1,1\nDA:2,0\nend_of_record\n").unwrap();
-    let raw = request(
+    let response = call_tool(
         "analyze",
         serde_json::json!({ "path": dir.to_str().unwrap(), "coverage": lcov.to_str().unwrap() }),
     );
-    let response: Value = serde_json::from_str(&handle_request(&raw).unwrap()).unwrap();
     let result = result_of(&response);
     envelope_ok(result);
     assert_eq!(result["functions"].as_array().unwrap().len(), 1);
@@ -642,22 +747,31 @@ fn check_rejects_regressions_without_base() {
 }
 
 #[test]
-fn tools_list_includes_test_targets() {
-    let response: Value = serde_json::from_str(
-        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
-    )
-    .unwrap();
-    let tools = result_of(&response)["tools"].as_array().unwrap();
-    assert!(tools.iter().any(|tool| tool["name"] == "test_targets"));
-    // The CRAP list in repo_summary needs coverage, so the schema must take it.
-    let repo_summary = tools
-        .iter()
-        .find(|tool| tool["name"] == "repo_summary")
-        .expect("repo_summary must be registered");
-    assert!(
-        repo_summary["inputSchema"]["properties"]["coverage"].is_object(),
-        "{repo_summary}"
-    );
+fn execute_declarations_carry_every_tool_and_its_arguments() {
+    let declarations = execute_declarations();
+    for (name, argument) in [
+        ("analyze", "sort_by"),
+        ("analyze_changed", "min_delta"),
+        ("analyze_function", "explain"),
+        ("check", "thresholds"),
+        ("repo_summary", "coverage"),
+        ("test_targets", "coverage"),
+        ("impact", "target"),
+        ("coupling", "min_cochanges"),
+        ("hotspots", "since"),
+        ("sql_plan", "max_cost_increase_percent"),
+        ("security_findings", "minimum_severity"),
+        ("vulnerabilities", "osv"),
+        ("sql_risks", "migration_roots"),
+        ("project", "test_map"),
+    ] {
+        assert!(
+            declarations.contains(&format!("{name}({{")) && declarations.contains(argument),
+            "{name} must be declared with {argument}, got: {declarations}"
+        );
+    }
+    // `explain_metric` takes no options beyond the metric itself.
+    assert!(declarations.contains("explain_metric({"), "{declarations}");
 }
 
 #[test]
@@ -735,43 +849,6 @@ fn check_gates_baseline_regressions() {
     );
     assert_eq!(error_of(&conflict)["code"], -32602);
     std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn tools_list_check_schema_covers_baseline_and_regressions() {
-    let response: Value = serde_json::from_str(
-        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
-    )
-    .unwrap();
-    let tools = result_of(&response)["tools"].as_array().unwrap();
-    let check = tools
-        .iter()
-        .find(|tool| tool["name"] == "check")
-        .expect("check tool must be registered");
-    let properties = &check["inputSchema"]["properties"];
-    assert!(properties["baseline"].is_object());
-    assert!(properties["regressions"].is_object());
-    assert!(properties["thresholds"].is_object());
-    assert!(properties["coverage"].is_object());
-    let changed = tools
-        .iter()
-        .find(|tool| tool["name"] == "analyze_changed")
-        .expect("analyze_changed tool must be registered");
-    let changed_properties = &changed["inputSchema"]["properties"];
-    assert!(changed_properties["target"].is_object());
-    assert!(changed_properties["renames"].is_object());
-    assert!(changed_properties["explain"].is_object());
-    assert!(changed_properties["top"].is_object());
-    assert!(changed_properties["min_delta"].is_object());
-    let analyze = tools
-        .iter()
-        .find(|tool| tool["name"] == "analyze")
-        .expect("analyze tool must be registered");
-    let analyze_properties = &analyze["inputSchema"]["properties"];
-    assert!(analyze_properties["top"].is_object());
-    assert!(analyze_properties["sort_by"].is_object());
-    assert!(analyze_properties["min_crap"].is_object());
-    assert!(tools.iter().any(|tool| tool["name"] == "repo_summary"));
 }
 
 #[test]
@@ -980,29 +1057,11 @@ fn remaining_tools_reject_unknown_arguments() {
 }
 
 #[test]
-fn graph_analytics_tools_registered_with_schema() {
-    let response: Value = serde_json::from_str(
-        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
-    )
-    .unwrap();
-    let tools = result_of(&response)["tools"].as_array().unwrap().clone();
+fn graph_analytics_tools_are_reachable_and_named_in_instructions() {
+    let declarations = execute_declarations();
     for name in ["dependencies", "impact", "coupling"] {
-        assert!(
-            tools.iter().any(|tool| tool["name"] == name),
-            "{name} missing"
-        );
+        assert!(declarations.contains(&format!("{name}(")), "{name} missing");
     }
-    let impact = tools.iter().find(|tool| tool["name"] == "impact").unwrap();
-    assert_eq!(impact["inputSchema"]["required"][0], "target");
-    assert_eq!(impact["inputSchema"]["properties"]["top"]["default"], 20);
-    let coupling = tools
-        .iter()
-        .find(|tool| tool["name"] == "coupling")
-        .unwrap();
-    assert_eq!(
-        coupling["inputSchema"]["properties"]["min_cochanges"]["default"],
-        2
-    );
     let instructions = handle_request(&request("initialize", serde_json::json!({}))).unwrap();
     for name in ["dependencies", "impact", "coupling"] {
         assert!(instructions.contains(name), "instructions must name {name}");
@@ -1010,27 +1069,11 @@ fn graph_analytics_tools_registered_with_schema() {
 }
 
 #[test]
-fn history_and_report_tools_registered_with_schema() {
-    let response: Value = serde_json::from_str(
-        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
-    )
-    .unwrap();
-    let tools = result_of(&response)["tools"].as_array().unwrap().clone();
+fn history_and_report_tools_are_reachable() {
+    let declarations = execute_declarations();
     for name in ["hotspots", "duplication", "policy"] {
-        assert!(
-            tools.iter().any(|tool| tool["name"] == name),
-            "{name} missing"
-        );
+        assert!(declarations.contains(&format!("{name}(")), "{name} missing");
     }
-    let hotspots = tools
-        .iter()
-        .find(|tool| tool["name"] == "hotspots")
-        .unwrap();
-    assert_eq!(
-        hotspots["inputSchema"]["properties"]["since"]["default"],
-        "90d"
-    );
-    assert_eq!(hotspots["inputSchema"]["properties"]["top"]["default"], 10);
 }
 
 #[test]
@@ -1232,16 +1275,17 @@ fn registered_tool_names(source: &str) -> Vec<String> {
 #[test]
 fn native_tool_names_do_not_collide_with_mcp_tool_names() {
     use std::collections::BTreeSet;
-    let response: Value = serde_json::from_str(
-        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
-    )
-    .unwrap();
-    let mcp: BTreeSet<String> = result_of(&response)["tools"]
+    let mcp: BTreeSet<String> = result_of(&execute_list_response())["tools"]
         .as_array()
         .unwrap()
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_owned())
         .collect();
+    // Only `execute` is advertised, so this is the single namespaced MCP name a
+    // host can shadow.
+    assert_eq!(mcp, BTreeSet::from(["execute".to_owned()]));
+    let namespaced: BTreeSet<String> = mcp.iter().map(|name| format!("leadline_{name}")).collect();
+    assert!(namespaced.contains("leadline_execute"));
     // Harness MCP clients expose a server tool as `<server>_<tool>`, and the
     // leadline server is keyed `leadline`; a native tool with the same name is
     // silently shadowed, so the names must stay disjoint.
@@ -1447,43 +1491,30 @@ fn initialize_carries_usage_instructions() {
 }
 
 #[test]
-fn tools_list_marks_every_tool_read_only() {
-    let response: Value = serde_json::from_str(
-        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
-    )
-    .unwrap();
-    let tools = result_of(&response)["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 20);
-    for tool in tools {
-        let name = tool["name"].as_str().unwrap();
-        assert!(
-            tool["annotations"]["title"].is_string(),
-            "{name} needs a display title"
-        );
-        assert_eq!(
-            tool["annotations"]["readOnlyHint"], true,
-            "{name} must advertise readOnlyHint"
-        );
-        assert_eq!(
-            tool["annotations"]["idempotentHint"], true,
-            "{name} must advertise idempotentHint"
-        );
-        assert_eq!(
-            tool["annotations"]["openWorldHint"], false,
-            "{name} must advertise a closed world"
-        );
-    }
-    let changed = tools
-        .iter()
-        .find(|tool| tool["name"] == "analyze_changed")
-        .unwrap();
+fn tools_list_marks_execute_read_only() {
+    let spec = execute_spec();
+    let name = spec["name"].as_str().unwrap();
     assert!(
-        changed["description"]
-            .as_str()
-            .unwrap()
-            .contains("after editing"),
-        "descriptions must state when to reach for the tool"
+        spec["annotations"]["title"].is_string(),
+        "{name} needs a title"
     );
+    assert_eq!(
+        spec["annotations"]["readOnlyHint"], true,
+        "{name} readOnlyHint"
+    );
+    assert_eq!(
+        spec["annotations"]["idempotentHint"], true,
+        "{name} idempotentHint"
+    );
+    assert_eq!(
+        spec["annotations"]["openWorldHint"], false,
+        "{name} must advertise a closed world"
+    );
+    // The description must say when to reach for the surface, not just what it
+    // is: a model picks the tool from this text alone.
+    let description = spec["description"].as_str().unwrap();
+    assert!(description.contains("Promise.all"), "{description}");
+    assert!(description.contains("await"), "{description}");
 }
 
 fn sql_plan_fixture(cost_current: f64, cost_baseline: f64) -> PathBuf {
@@ -1514,17 +1545,8 @@ fn sql_plan_fixture(cost_current: f64, cost_baseline: f64) -> PathBuf {
 }
 
 #[test]
-fn sql_plan_registered_with_schema_and_instructions() {
-    let response: Value = serde_json::from_str(
-        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
-    )
-    .unwrap();
-    let tools = result_of(&response)["tools"].as_array().unwrap().clone();
-    let tool = tools
-        .iter()
-        .find(|tool| tool["name"] == "sql_plan")
-        .expect("sql_plan must be registered");
-    let properties = &tool["inputSchema"]["properties"];
+fn sql_plan_is_reachable_and_named_in_instructions() {
+    let declarations = execute_declarations();
     for key in [
         "current",
         "baseline",
@@ -1533,12 +1555,8 @@ fn sql_plan_registered_with_schema_and_instructions() {
         "max_estimate_error_ratio",
         "top",
     ] {
-        assert!(properties.get(key).is_some(), "{key} must be a parameter");
+        assert!(declarations.contains(key), "sql_plan must take {key}");
     }
-    assert_eq!(
-        tool["inputSchema"]["required"],
-        serde_json::json!(["current", "baseline"])
-    );
     let init: Value = serde_json::from_str(
         &handle_request(&request("initialize", serde_json::json!({}))).unwrap(),
     )
@@ -1552,12 +1570,12 @@ fn sql_plan_registered_with_schema_and_instructions() {
 }
 
 #[test]
-fn sql_plan_compares_directories_over_call_and_direct_method() {
+fn sql_plan_compares_directories_through_a_script() {
     let root = sql_plan_fixture(150.0, 100.0);
     let current = root.join("current").to_str().unwrap().to_owned();
     let baseline = root.join("baseline").to_str().unwrap().to_owned();
     let arguments = serde_json::json!({ "current": current, "baseline": baseline, "max_cost_increase_percent": 25.0 });
-    let response = call_tool("sql_plan", arguments.clone());
+    let response = call_tool("sql_plan", arguments);
     assert!(
         response.get("error").is_none(),
         "unexpected error: {response}"
@@ -1568,12 +1586,6 @@ fn sql_plan_compares_directories_over_call_and_direct_method() {
     assert_eq!(result["violations"][0]["kind"], "cost_increase");
     assert_eq!(result["truncated"], false);
     assert!(result.get("queries").is_some());
-    let direct = request("sql_plan", arguments);
-    let direct_response: Value = serde_json::from_str(&handle_request(&direct).unwrap()).unwrap();
-    assert!(
-        direct_response.get("error").is_none(),
-        "direct method failed: {direct_response}"
-    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1637,17 +1649,8 @@ fn security_findings_fixture() -> (Fixture, String, String) {
 }
 
 #[test]
-fn security_findings_registered_with_schema_and_instructions() {
-    let response: Value = serde_json::from_str(
-        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
-    )
-    .unwrap();
-    let tools = result_of(&response)["tools"].as_array().unwrap().clone();
-    let tool = tools
-        .iter()
-        .find(|tool| tool["name"] == "security_findings")
-        .expect("security_findings must be registered");
-    let properties = &tool["inputSchema"]["properties"];
+fn security_findings_is_reachable_and_named_in_instructions() {
+    let declarations = execute_declarations();
     for key in [
         "path",
         "sarif",
@@ -1660,12 +1663,11 @@ fn security_findings_registered_with_schema_and_instructions() {
         "changed_only",
         "top",
     ] {
-        assert!(properties.get(key).is_some(), "{key} must be a parameter");
+        assert!(
+            declarations.contains(key),
+            "security_findings must take {key}"
+        );
     }
-    assert_eq!(
-        tool["inputSchema"]["required"],
-        serde_json::json!(["sarif"])
-    );
     let init: Value = serde_json::from_str(
         &handle_request(&request("initialize", serde_json::json!({}))).unwrap(),
     )
@@ -1679,11 +1681,11 @@ fn security_findings_registered_with_schema_and_instructions() {
 }
 
 #[test]
-fn security_findings_compare_over_call_and_direct_method() {
+fn security_findings_compares_through_a_script() {
     let (root, proj, sarif) = security_findings_fixture();
     let arguments =
         serde_json::json!({ "path": proj, "sarif": [sarif], "minimum_severity": "low" });
-    let response = call_tool("security_findings", arguments.clone());
+    let response = call_tool("security_findings", arguments);
     assert!(
         response.get("error").is_none(),
         "unexpected error: {response}"
@@ -1696,12 +1698,6 @@ fn security_findings_compare_over_call_and_direct_method() {
     assert_eq!(result["truncated"], false);
     assert!(!result["violations"].as_array().unwrap().is_empty());
     assert!(!serde_json::to_string(&result).unwrap().contains("SENTINEL"));
-    let direct = request("security_findings", arguments);
-    let direct_response: Value = serde_json::from_str(&handle_request(&direct).unwrap()).unwrap();
-    assert!(
-        direct_response.get("error").is_none(),
-        "direct method failed: {direct_response}"
-    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1789,17 +1785,8 @@ fn vulnerabilities_fixture() -> (PathBuf, String, String) {
 }
 
 #[test]
-fn vulnerabilities_registered_with_schema_and_instructions() {
-    let response: Value = serde_json::from_str(
-        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
-    )
-    .unwrap();
-    let tools = result_of(&response)["tools"].as_array().unwrap().clone();
-    let tool = tools
-        .iter()
-        .find(|tool| tool["name"] == "vulnerabilities")
-        .expect("vulnerabilities must be registered");
-    let properties = &tool["inputSchema"]["properties"];
+fn vulnerabilities_is_reachable_and_named_in_instructions() {
+    let declarations = execute_declarations();
     for key in [
         "path",
         "osv",
@@ -1812,9 +1799,11 @@ fn vulnerabilities_registered_with_schema_and_instructions() {
         "minimum_severity",
         "top",
     ] {
-        assert!(properties.get(key).is_some(), "{key} must be a parameter");
+        assert!(
+            declarations.contains(key),
+            "vulnerabilities must take {key}"
+        );
     }
-    assert!(tool["inputSchema"].get("required").is_none());
     let init: Value = serde_json::from_str(
         &handle_request(&request("initialize", serde_json::json!({}))).unwrap(),
     )
@@ -1828,10 +1817,10 @@ fn vulnerabilities_registered_with_schema_and_instructions() {
 }
 
 #[test]
-fn vulnerabilities_reports_direct_import_evidence() {
+fn vulnerabilities_reports_import_evidence_through_a_script() {
     let (root, proj, osv) = vulnerabilities_fixture();
     let arguments = serde_json::json!({ "path": proj, "osv": [osv], "minimum_severity": "low" });
-    let response = call_tool("vulnerabilities", arguments.clone());
+    let response = call_tool("vulnerabilities", arguments);
     assert!(
         response.get("error").is_none(),
         "unexpected error: {response}"
@@ -1844,12 +1833,6 @@ fn vulnerabilities_reports_direct_import_evidence() {
     assert_eq!(result["truncated"], false);
     assert!(!result["violations"].as_array().unwrap().is_empty());
     assert!(!serde_json::to_string(&result).unwrap().contains("SENTINEL"));
-    let direct = request("vulnerabilities", arguments);
-    let direct_response: Value = serde_json::from_str(&handle_request(&direct).unwrap()).unwrap();
-    assert!(
-        direct_response.get("error").is_none(),
-        "direct method failed: {direct_response}"
-    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1925,17 +1908,8 @@ fn sql_risks_fixture() -> (Fixture, String) {
 }
 
 #[test]
-fn sql_risks_registered_with_schema_and_instructions() {
-    let response: Value = serde_json::from_str(
-        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
-    )
-    .unwrap();
-    let tools = result_of(&response)["tools"].as_array().unwrap().clone();
-    let tool = tools
-        .iter()
-        .find(|tool| tool["name"] == "sql_risks")
-        .expect("sql_risks must be registered");
-    let properties = &tool["inputSchema"]["properties"];
+fn sql_risks_is_reachable_and_named_in_instructions() {
+    let declarations = execute_declarations();
     for key in [
         "path",
         "large_offset",
@@ -1943,7 +1917,7 @@ fn sql_risks_registered_with_schema_and_instructions() {
         "minimum_severity",
         "top",
     ] {
-        assert!(properties.get(key).is_some(), "{key} must be a parameter");
+        assert!(declarations.contains(key), "sql_risks must take {key}");
     }
     let init: Value = serde_json::from_str(
         &handle_request(&request("initialize", serde_json::json!({}))).unwrap(),
@@ -1961,7 +1935,7 @@ fn sql_risks_registered_with_schema_and_instructions() {
 fn sql_risks_reports_static_findings() {
     let (root, rel) = sql_risks_fixture();
     let arguments = serde_json::json!({ "path": rel, "minimum_severity": "low" });
-    let response = call_tool("sql_risks", arguments.clone());
+    let response = call_tool("sql_risks", arguments);
     assert!(
         response.get("error").is_none(),
         "unexpected error: {response}"
@@ -1976,12 +1950,6 @@ fn sql_risks_reports_static_findings() {
     );
     assert_eq!(result["truncated"], false);
     assert!(!result["violations"].as_array().unwrap().is_empty());
-    let direct = request("sql_risks", arguments);
-    let direct_response: Value = serde_json::from_str(&handle_request(&direct).unwrap()).unwrap();
-    assert!(
-        direct_response.get("error").is_none(),
-        "direct method failed: {direct_response}"
-    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -2868,12 +2836,17 @@ fn mcp_records_sessions_methods_and_payloads() {
         &request(
             "tools/call",
             serde_json::json!({
-                "name": "repo_summary",
-                "arguments": { "path": fixture.to_str().unwrap() }
+                "name": "execute",
+                "arguments": {
+                    "code": format!(
+                        "const s = await tools.repo_summary({{ path: {:?} }}); return s.totals;",
+                        fixture.to_str().unwrap()
+                    )
+                }
             }),
         ),
     );
-    assert!(called.contains("summary"), "{called}");
+    assert!(called.contains("functions"), "{called}");
     let _ = post_json(
         port,
         r#"{"jsonrpc":"2.0","id":2,"method":"nope","params":{}}"#,

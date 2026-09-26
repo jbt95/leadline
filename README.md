@@ -79,7 +79,7 @@ leadline changed --base origin/main --format agent-json
    "before": {"cognitive": 12}, "after": {"cognitive": 24}}]}
 ```
 
-**MCP server** (read-only; stdio by default, HTTP with `--port`; twenty tools: `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `test_targets`, `sql_plan`, `security_findings`, `vulnerabilities`, `sql_risks`, `hotspots`, `risk`, `dependencies`, `impact`, `coupling`, `duplication`, `policy`, `debt`, `project`). Its only writes are the opt-in local metrics store ([docs/telemetry.md](docs/telemetry.md)):
+**MCP server** (read-only; stdio by default, HTTP with `--port`; one `execute` tool). A script runs inside the server and calls the twenty analyzer tools (`analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `test_targets`, `sql_plan`, `security_findings`, `vulnerabilities`, `sql_risks`, `hotspots`, `risk`, `dependencies`, `impact`, `coupling`, `duplication`, `policy`, `debt`, `project`) from a `tools` namespace, so a multi-tool workflow is one round trip. Scripts have no filesystem, network, module, or process access, and are capped at 100 tool calls and 30 seconds. Its only writes are the opt-in local metrics store ([docs/telemetry.md](docs/telemetry.md)):
 
 ```console
 leadline mcp
@@ -87,6 +87,58 @@ leadline mcp --port 3000
 ```
 
 A bare `--port` means 3000 (`0` asks the OS for a free port); when the requested port is taken the server picks a free one and prints the actual address to stderr. `GET /health` reports status in HTTP mode.
+
+The `code` argument is the script a model writes. It is a JavaScript **async
+function body**, not an expression: use `return`, and `await`, loops, and
+`Promise.all` all work. The twenty tools are async functions on `tools`, so a
+model composes them and returns only what it needs.
+
+Before editing a file, one call answers risk, blast radius, and hidden
+co-change contracts:
+
+```js
+const target = "src/mcp.rs";
+const [risk, blast, related] = await Promise.all([
+  tools.risk({ path: target }),
+  tools.impact({ target }),
+  tools.coupling({ target }),
+]);
+return {
+  blastRadius: blast.blast_radius,
+  dependents: blast.dependents.slice(0, 3).map((d) => d.path),
+  usuallyChangedWith: related.related.slice(0, 3).map((r) => r.path),
+};
+```
+
+```json
+{"blastRadius": 1, "dependents": ["src/lib.rs"],
+ "usuallyChangedWith": ["CHANGELOG.md", "src/main.rs", "tests/mcp.rs"]}
+```
+
+After editing, one call gates the changed code and names only what failed:
+
+```js
+const gate = await tools.check({ base: "HEAD~1", thresholds: { cognitive: 10, cyclomatic: 12 } });
+return {
+  passed: gate.passed,
+  count: gate.violations.length,
+  worst: gate.violations
+    .slice(0, 2)
+    .map((v) => `${v.path}:${v.line} ${v.name} (${v.reason.join(", ")})`),
+};
+```
+
+```json
+{"passed": false, "count": 2,
+ "worst": ["src/mcp.rs:608 dispatch_analyzer (cyclomatic)",
+           "src/sandbox.rs:97 run_script (cyclomatic)"]}
+```
+
+The script travels as the `code` argument of a `tools/call`, and its return
+value is the tool result. A tool failure surfaces as `script error: <message>`
+and a syntax error reports the JavaScript message. See
+[docs/agent-integration-guide.md](docs/agent-integration-guide.md#the-code-argument)
+for the full interface and the twenty tools.
 
 **Local metrics server.** `leadline stats` analyzes once and serves the page and the canonical `Project` JSON over loopback. The page covers the quality gate, measures, complexity distributions, hotspots, coupling, trends, policy violations, and live telemetry — sorting and filtering canonical values only, and naming the reason when a section has no data to show. Read-only with respect to the repository, and the URL goes to stderr so stdout stays clean:
 
@@ -121,7 +173,7 @@ leadline check . --cognitive 15 --cyclomatic 10 --max-nesting 4
 flowchart TD
     CLI["CLI: analyze, function, changed, check, hotspots, risk, project, security, vulnerabilities, sql, sql-plan, ..."]
     CLI --> Human["Humans and CI: terminal, JSON, SARIF, exit codes 0-5"]
-    CLI --> MCP["MCP server, read-only stdio or HTTP: twenty tools"]
+    CLI --> MCP["MCP server, read-only stdio or HTTP: one execute tool"]
     MCP --> Harnesses["Claude Code, Pi, OMP, OpenCode, Codex, Gemini, Cursor, Cline, Windsurf, Copilot"]
     CLI --> Stats["Local metrics server, read-only loopback page: stats"]
     Stats --> Human

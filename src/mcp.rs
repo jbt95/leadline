@@ -41,12 +41,10 @@ const MAX_STDIO_LINE: usize = MAX_HTTP_BODY;
 
 /// Usage guidance returned by `initialize`. Hosts may inject this into the
 /// system prompt, so it doubles as the server's self-advertisement.
-/// Trigger-first: name the user intent, then the tool. Keep every tool named
-/// so hosts can route to it.
-const SERVER_INSTRUCTIONS: &str = "Always use leadline for C, C++, Go, Java, JavaScript, Python, TypeScript, TSX, Rust, Zig questions about complexity, maintainability, risk, hotspots, or change impact: deterministic function-level metrics without executing code or touching the network. Zig analysis discovers body-bearing function declarations and block-bearing test declarations. Call analyze_changed after editing code, fixing bugs, refactoring, or before committing to spot regressions (before/after deltas; metrics are evidence, not objectives — do not refactor solely to lower a number). Call repo_summary first on unfamiliar code, onboarding, or triage; call risk plus impact plus coupling before editing a file to gauge change risk, blast radius, and hidden co-change contracts. Call analyze_function with explain:true for line-level causes (explain_metric before interpreting numbers), check to gate thresholds or regressions (pass coverage so CRAP gates are meaningful). Call hotspots for churn hotspots, test_targets (needs coverage) to pick what to test, dependencies for the static graph, duplication for token clones, policy for leadline.toml rules, debt to compare full state against a base, and project for the canonical summary when targeted tools are not enough. Call sql_plan to compare checked-in PostgreSQL EXPLAIN artifacts, security_findings to triage scanner SARIF with code context (needs pre-generated SARIF), vulnerabilities to prioritize deps with changed-import evidence (needs pre-generated OSV/Trivy), and sql_risks to flag static PostgreSQL risks — all read-only, never run scanners, databases, or network; secrets use native leadline_secret_check. The analyze and check tools accept an optional index directory and only ever read it. Batch independent calls in one block; start from repo_summary or project before per-function drills.";
+const SERVER_INSTRUCTIONS: &str = "Always use leadline for C, C++, Go, Java, JavaScript, Python, TypeScript, TSX, Rust, Zig questions about complexity, maintainability, risk, hotspots, or change impact: deterministic function-level metrics without executing code or touching the network. Metrics are evidence, not objectives, so never rewrite code to lower a number without improving the design. The server exposes one tool, execute, which runs a JavaScript async function body against a `tools` namespace: compose several analyzer calls in one round trip with loops, branching, `await`, and `Promise.all`, then return one JSON-serializable value. Leadline tools cover repo_summary, project, risk, impact, coupling, and hotspots to find what to inspect; analyze, analyze_function, and analyze_changed to measure; check to gate thresholds or regressions (pass coverage so CRAP gates are meaningful); explain_metric before interpreting a number; dependencies, duplication, policy, debt, and test_targets for structure; and security_findings, vulnerabilities, sql_risks, and sql_plan for artifacts (needs pre-generated SARIF, OSV/Trivy, or EXPLAIN). All are read-only and never run scanners, databases, or network; secrets use native leadline_secret_check. The analyze and check tools accept an optional index directory and only ever read it. Start from repo_summary or project, then drill in; after editing, call analyze_changed against a base to spot regressions.";
 
-/// The twenty tools this server exposes. Fixed set; keep in sync with
-/// [`tools_list`] and [`dispatch_tool`].
+/// The twenty analyzer tools a script can call. This is the inner surface, not
+/// the advertised tool list: keep in sync with [`tool_specs`] and [`tool_table`].
 const TOOL_NAMES: [&str; 20] = [
     "analyze",
     "analyze_changed",
@@ -470,18 +468,9 @@ fn dispatch_method(
             .inspect_err(|_| {
                 crate::telemetry::record_mcp_error(transport(), "tool_error");
             }),
-        name if TOOL_NAMES.contains(&name) => {
-            // Direct tool methods are an extension; they take named parameters
-            // only, so an array must not silently fall back to default paths.
-            if params.is_array() {
-                return Err((-32602, "tool parameters must be an object".to_owned()));
-            }
-            dispatch_tool(name, params)
-                .map(tool_result)
-                .inspect_err(|_| {
-                    crate::telemetry::record_mcp_error(transport(), "tool_error");
-                })
-        }
+        // There is no direct-tool-method extension: `execute` is the single
+        // route to the analyzer tools, so a host cannot skip the script
+        // sandbox or its call budget.
         _ => Err((-32601, "Method not found".to_owned())),
     }
 }
@@ -517,8 +506,14 @@ fn dispatch_tools_call(params: &serde_json::Value) -> Result<serde_json::Value, 
         .get("name")
         .and_then(serde_json::Value::as_str)
         .ok_or((-32602, "tools/call requires a string name".to_owned()))?;
-    if !TOOL_NAMES.contains(&name) {
-        return Err((-32602, format!("unknown tool '{name}'")));
+    if name != "execute" {
+        return Err((
+            -32602,
+            format!(
+                "unknown tool '{name}'; this server exposes only `execute`, which calls \
+                 leadline tools from a script"
+            ),
+        ));
     }
     let arguments = object
         .get("arguments")
@@ -527,19 +522,33 @@ fn dispatch_tools_call(params: &serde_json::Value) -> Result<serde_json::Value, 
     dispatch_tool(name, &arguments)
 }
 
+/// Host-facing entry: `execute` is the only name a client may call.
 fn dispatch_tool(
     name: &str,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, (i64, String)> {
+    run_tool_call(name, || dispatch_tool_inner(name, params))
+}
+
+/// Script-facing entry: one analyzer tool, measured exactly like a direct call.
+fn analyzer_call(
+    name: &'static str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, (i64, String)> {
+    run_tool_call(name, || dispatch_analyzer(name, params))
+}
+
+/// Inflight gauge, cost sampling, and outcome classification for one call.
+fn run_tool_call(
+    name: &str,
+    call: impl FnOnce() -> Result<serde_json::Value, (i64, String)>,
+) -> Result<serde_json::Value, (i64, String)> {
     let started = std::time::Instant::now();
     let _inflight = Inflight::enter(transport());
     let sampler = crate::telemetry::Sampler::start("mcp", name);
-    let result = dispatch_tool_inner(name, params);
+    let result = call();
     let outcome = match &result {
-        Ok(payload)
-            if name == "check"
-                && payload.get("passed") == Some(&serde_json::Value::Bool(false)) =>
-        {
+        Ok(payload) if payload.get("passed") == Some(&serde_json::Value::Bool(false)) => {
             "gate_failed"
         }
         Ok(_) => "success",
@@ -582,15 +591,25 @@ impl Drop for Inflight {
     }
 }
 
+/// Host-facing dispatch. `execute` is the only routable name: the twenty
+/// analyzer tools are reached from a script, so a client cannot call them
+/// directly and bypass the script sandbox.
 fn dispatch_tool_inner(
     name: &str,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, (i64, String)> {
-    let params = if params.is_null() {
-        &serde_json::Value::Object(serde_json::Map::new())
-    } else {
-        params
-    };
+    match name {
+        "execute" => tool_execute(&arguments_or_empty(params)),
+        _ => Err((-32602, format!("unknown tool '{name}'"))),
+    }
+}
+
+/// Script-facing dispatch: the twenty analyzer tools, by name.
+fn dispatch_analyzer(
+    name: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, (i64, String)> {
+    let params = &arguments_or_empty(params);
     match name {
         "analyze" => tool_analyze(params),
         "analyze_changed" => tool_analyze_changed(params),
@@ -613,6 +632,15 @@ fn dispatch_tool_inner(
         "debt" => tool_debt(params),
         "project" => tool_project(params),
         _ => Err((-32602, format!("unknown tool '{name}'"))),
+    }
+}
+
+/// Null arguments mean "no arguments", matching a host that omits the field.
+fn arguments_or_empty(params: &serde_json::Value) -> serde_json::Value {
+    if params.is_null() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        params.clone()
     }
 }
 
@@ -2772,7 +2800,12 @@ fn opt_plan_limit(params: &serde_json::Value, key: &str) -> Result<Option<f64>, 
     }
 }
 
-fn tools_list_result() -> serde_json::Value {
+/// Specs for the twenty analyzer tools: descriptions and input schemas.
+///
+/// This is the source of truth for the `execute` declarations and for the
+/// inner dispatch table. It is not advertised: `tools/list` exposes only
+/// `execute`, so a host loads one tool instead of twenty.
+fn tool_specs() -> serde_json::Value {
     serde_json::json!({
         "tools": [
             {
@@ -3101,6 +3134,100 @@ fn tools_list_result() -> serde_json::Value {
     })
 }
 
+/// The advertised tool list: one `execute` tool.
+///
+/// The analyzer surface reaches the model as the generated declaration block
+/// in `execute`'s description, so the host loads a single tool and the model
+/// still sees every capability.
+fn tools_list_result() -> serde_json::Value {
+    serde_json::json!({
+        "tools": [
+            {
+                "name": "execute",
+                "description": format!(
+                    "Run a JavaScript async function body that orchestrates leadline tools. \
+                     The body sees only `tools`, one function per analyzer tool, and returns one \
+                     JSON-serializable value. Loops, branching, aggregation, `await`, and \
+                     `Promise.all` all work, so a multi-tool workflow is one round trip and \
+                     intermediate results never enter your context. No filesystem, network, \
+                     module, timer, or process access; at most 100 tool calls and 30s per run. \
+                     Each tool returns its JSON report; argument names are optional. \
+                     Available tools:\n{}",
+                    tool_declarations()
+                ),
+                "annotations": { "title": "Execute leadline tools", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "code": { "type": "string", "description": "JavaScript async function body. Use `return` to produce the result." }
+                    },
+                    "required": ["code"]
+                }
+            }
+        ]
+    })
+}
+
+/// One declaration line per tool, derived from [`tool_specs`].
+///
+/// Only the callable name and its argument names are emitted: full JSON
+/// schemas and long descriptions would cost more context than the twenty
+/// tool entries they replace, and the tool handlers already reject unknown
+/// fields with the real message.
+fn tool_declarations() -> String {
+    let specs = tool_specs();
+    let Some(tools) = specs.get("tools").and_then(|t| t.as_array()) else {
+        return String::new();
+    };
+    let lines: Vec<String> = tools
+        .iter()
+        .filter_map(|spec| {
+            let name = spec.get("name")?.as_str()?;
+            let empty = serde_json::Map::new();
+            let properties = spec
+                .get("inputSchema")
+                .and_then(|schema| schema.get("properties"))
+                .and_then(|p| p.as_object())
+                .unwrap_or(&empty);
+            let args: Vec<&str> = properties.keys().map(String::as_str).collect();
+            if args.is_empty() {
+                Some(format!("  {name}(): Promise<object>;"))
+            } else {
+                Some(format!(
+                    "  {name}({{{}}}): Promise<object>;",
+                    args.join(", ")
+                ))
+            }
+        })
+        .collect();
+    lines.join("\n")
+}
+
+/// The tool surface a script can call, one handler per tool name.
+///
+/// Each handler goes through [`dispatch_tool`] so a tool called from a script
+/// keeps the same telemetry, inflight gauge, and `check` gate outcome it has
+/// when called directly.
+fn tool_table() -> crate::sandbox::ToolTable {
+    TOOL_NAMES
+        .iter()
+        .map(|&name| {
+            let handler: crate::sandbox::ToolHandler =
+                Arc::new(move |args| analyzer_call(name, &args));
+            (name, handler)
+        })
+        .collect()
+}
+
+/// Run a script against the tool surface and return its result.
+fn tool_execute(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
+    reject_unknown(params, "execute", &["code"])?;
+    let code = req_str(params, "code")?;
+    let sandbox = crate::sandbox::Sandbox::new().map_err(|e| (-32603, e))?;
+    let result = sandbox.run(code, &tool_table()).map_err(|e| (-32602, e))?;
+    Ok(result)
+}
+
 fn success_response(id: serde_json::Value, result: serde_json::Value) -> serde_json::Value {
     serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
@@ -3188,7 +3315,7 @@ mod tests {
     }
 
     #[test]
-    fn stdio_lines_are_bounded_and_arrays_are_rejected_for_direct_tools() {
+    fn stdio_lines_are_bounded() {
         let mut reader = std::io::BufReader::new(&b"{\"id\":1}\n"[..]);
         assert_eq!(
             read_request_line(&mut reader, 64).unwrap().as_deref(),
@@ -3198,14 +3325,142 @@ mod tests {
         // A line past the limit fails instead of allocating the rest.
         let mut reader = std::io::BufReader::new(&b"aaaaaaaaaaaaaaaaaaaa\n"[..]);
         assert!(read_request_line(&mut reader, 8).is_err());
-        // Direct tool methods take named parameters only, so an array must
-        // not silently analyze the default path.
+    }
+
+    /// The spec of one analyzer tool, or a panic naming the tool.
+    fn spec(name: &str) -> serde_json::Value {
+        tool_specs()["tools"]
+            .as_array()
+            .expect("specs must be an array")
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("{name} must have a spec"))
+            .clone()
+    }
+
+    #[test]
+    fn tool_specs_cover_every_dispatchable_name() {
+        // Order is irrelevant to dispatch, so compare as sets: the specs and
+        // the name list are maintained separately and only membership holds.
+        let mut declared: Vec<String> = tool_specs()["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect();
+        declared.sort();
+        let mut names: Vec<String> = TOOL_NAMES.iter().map(|n| (*n).to_owned()).collect();
+        names.sort();
+        assert_eq!(names, declared);
+        let mut table: Vec<String> = tool_table().keys().map(|n| (*n).to_owned()).collect();
+        table.sort();
+        assert_eq!(table, names);
+    }
+
+    #[test]
+    fn tool_specs_keep_their_documented_arguments() {
+        // The twenty schemas are no longer advertised directly, so these
+        // guarantees live here rather than in the integration suite.
+        for key in ["baseline", "regressions", "thresholds", "coverage"] {
+            assert!(
+                spec("check")["inputSchema"]["properties"][key].is_object(),
+                "{key}"
+            );
+        }
+        for key in ["target", "renames", "explain", "top", "min_delta"] {
+            assert!(
+                spec("analyze_changed")["inputSchema"]["properties"][key].is_object(),
+                "{key}"
+            );
+        }
+        for key in ["top", "sort_by", "min_crap", "index"] {
+            assert!(
+                spec("analyze")["inputSchema"]["properties"][key].is_object(),
+                "{key}"
+            );
+        }
+        // Defaults a caller relies on when it omits the argument.
         assert_eq!(
-            dispatch_method("analyze", &serde_json::json!([1]))
-                .unwrap_err()
-                .0,
-            -32602
+            spec("analyze_changed")["inputSchema"]["properties"]["target"]["default"],
+            "worktree"
         );
+        assert_eq!(
+            spec("analyze_changed")["inputSchema"]["properties"]["renames"]["default"],
+            false
+        );
+        assert_eq!(
+            spec("check")["inputSchema"]["properties"]["base"]["type"],
+            "string"
+        );
+        assert_eq!(
+            spec("check")["inputSchema"]["properties"]["regressions"]["type"][0],
+            "boolean"
+        );
+        assert_eq!(spec("impact")["inputSchema"]["required"][0], "target");
+        assert_eq!(
+            spec("impact")["inputSchema"]["properties"]["top"]["default"],
+            20
+        );
+        assert_eq!(
+            spec("coupling")["inputSchema"]["properties"]["min_cochanges"]["default"],
+            2
+        );
+        assert_eq!(
+            spec("hotspots")["inputSchema"]["properties"]["since"]["default"],
+            "90d"
+        );
+        assert_eq!(
+            spec("hotspots")["inputSchema"]["properties"]["top"]["default"],
+            10
+        );
+        // repo_summary's CRAP list needs coverage, so the argument must exist.
+        assert!(spec("repo_summary")["inputSchema"]["properties"]["coverage"].is_object());
+        // Artifacts are opt-in: only the tools that read reports require input.
+        assert_eq!(
+            spec("security_findings")["inputSchema"]["required"],
+            serde_json::json!(["sarif"])
+        );
+        assert_eq!(
+            spec("sql_plan")["inputSchema"]["required"],
+            serde_json::json!(["current", "baseline"])
+        );
+        assert!(
+            spec("vulnerabilities")["inputSchema"]
+                .get("required")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn every_spec_declares_a_title_and_a_closed_world() {
+        for name in TOOL_NAMES {
+            let tool = spec(name);
+            assert!(
+                tool["annotations"]["title"].is_string(),
+                "{name} needs a title"
+            );
+            assert_eq!(tool["annotations"]["readOnlyHint"], true, "{name}");
+            assert_eq!(tool["annotations"]["idempotentHint"], true, "{name}");
+            assert_eq!(tool["annotations"]["openWorldHint"], false, "{name}");
+            assert!(
+                tool["description"].as_str().is_some_and(|d| !d.is_empty()),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn declarations_list_every_tool_with_its_arguments() {
+        let declarations = tool_declarations();
+        for name in TOOL_NAMES {
+            assert!(
+                declarations.contains(&format!("{name}({{")),
+                "{name} missing"
+            );
+        }
+        // Arguments are listed too, otherwise a model cannot compose a call.
+        assert!(declarations.contains("sort_by"), "arguments must be listed");
+        assert!(declarations.lines().count() >= TOOL_NAMES.len());
     }
 
     #[test]

@@ -27,6 +27,7 @@ pub mod project;
 pub mod render;
 pub mod report;
 pub mod risk;
+pub mod sandbox;
 pub mod sarif;
 pub mod security;
 pub mod snapshots;
