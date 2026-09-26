@@ -480,20 +480,32 @@ fn mcp_tool_calls_and_gate_failures_are_recorded() {
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
+    // The script routes through `execute`, so the inner tool still records
+    // under its own operation name, which is what these counters assert.
+    let path = serde_json::Value::String(root.to_string_lossy().into_owned()).to_string();
     let requests = [
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": { "name": "explain_metric", "arguments": { "metric": "cognitive" } }
+            "params": {
+                "name": "execute",
+                "arguments": {
+                    "code": "return await tools.explain_metric({ metric: \"cognitive\" });"
+                }
+            }
         }),
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
             "params": {
-                "name": "check",
-                "arguments": { "path": root, "thresholds": { "cognitive": 1 } }
+                "name": "execute",
+                "arguments": {
+                    "code": format!(
+                        "return await tools.check({{ path: {path}, thresholds: {{ cognitive: 1 }} }});"
+                    )
+                }
             }
         }),
     ];

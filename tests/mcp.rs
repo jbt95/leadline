@@ -2372,7 +2372,7 @@ fn jsonrpc_rejects_invalid_requests_and_oversized_batches() {
     // answered.
     assert!(
         handle_request(
-            r#"{"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "explain_metric", "arguments": {"metric": "crap"}}}"#
+            r#"{"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "execute", "arguments": {"code": "return await tools.explain_metric({ metric: \"crap\" });"}}}"#
         )
         .is_none()
     );
