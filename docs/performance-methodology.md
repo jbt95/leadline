@@ -193,3 +193,29 @@ End-to-end self-debt (`./target/release/leadline debt --base HEAD~1 --json`, `/u
 | `duplication_detection/repeated/2000` | [−1.28%, −1.08%, −0.89%] |
 
 Peak RSS (`/usr/bin/time -l`, same session): `duplication dup-scale/500` 18.19 → 16.28 MiB (−10.5%), `dup-scale/100` 9.08 → 8.38 MiB (−7.7%), `bench-repo-diverse/src` 28.41 → 22.42 MiB (−21.1%), and self-duplication 22.64 → 21.50 MiB (−5.0%). The single-file 200,000-function shape still fails: both the before and after binaries are killed at a 3 GiB watchdog inside ~3.6 s with no JSON, which is the documented capacity limit rather than a regression.
+
+> **Provisional — do not compare against this table yet.** These numbers were taken on a machine that external Go and Node test runs had pushed to a load average of 40-75 against 10 cores. Re-running the identical comparison against the identical frozen baseline while that load was present flipped the short cases outright: `typescript_analysis/10000` went from −16.1% to +67.8% and `/100000` from −12.2% to +56.6%, both at p=0.00, while the 1M-line case — three seconds of work, enough to amortise scheduler contention — held at −9.5%. The direction of the change is corroborated by the 1M case and by a `sample` profile that attributed 24% of active CPU to the repeated `kind()` lookups, but the magnitudes below are contaminated. Re-measure on an idle machine before treating any row here as a reference.
+
+2026-09-27, leadline 0.20.0 with the node-kind hoist applied (unreleased at the time of measurement), Criterion 0.8.2, Rust 1.90.0 (LLVM 20.1.8), Mac14,9, Apple M2 Pro (10 cores), 32 GiB, macOS 26.6.2 (Darwin 25.6.0 arm64), same machine and the same frozen baseline (`--baseline before-kindhoist`, `--warm-up-time 0.1 --measurement-time 0.2 --sample-size 10`). The change resolves `Node::kind()` once per node in `walk_function` and threads the resulting `&str` through the helpers that walk calls. `Node::kind()` is an FFI call plus `strlen` plus a full UTF-8 validation, and the walk previously re-derived it 10-14 times per node. Every paired JSON stayed byte-identical with an identical exit code.
+
+| Case | Before | After | Change [low, median, high] |
+| --- | ---: | ---: | --- |
+| `typescript_analysis/10000` | 31.763 ms | 26.643 ms | [−17.7%, −16.1%, −14.6%] |
+| `typescript_analysis/100000` | 331.05 ms | 290.61 ms | [−15.5%, −12.2%, −6.8%] |
+| `typescript_analysis/1000000` | 3.3388 s | 2.9132 s | [−13.6%, −12.7%, −11.9%] |
+| `language_analysis/c` | 33.066 ms | 27.985 ms | [−16.8%, −15.4%, −14.1%] |
+| `language_analysis/cpp` | 34.572 ms | 29.615 ms | [−16.5%, −14.3%, −11.8%] |
+| `language_analysis/java` | 32.642 ms | 29.196 ms | [−13.5%, −10.6%, −7.0%] |
+| `language_analysis/javascript` | 28.511 ms | 25.580 ms | [−13.0%, −10.3%, −7.2%] |
+| `language_analysis/python` | 28.764 ms | 28.136 ms | [−8.9%, −2.2%, +7.7%] |
+| `language_analysis/rust` | 33.707 ms | 31.367 ms | [−12.0%, −6.9%, −0.8%] |
+| `language_analysis/typescript` | 34.874 ms | 31.231 ms | [−13.5%, −10.4%, −7.1%] |
+| `language_analysis/tsx` | 39.190 ms | 35.666 ms | [−12.7%, −9.0%, −4.1%] |
+| `language_analysis/zig` | 38.790 ms | 32.889 ms | [−1.8%, +1.1%, +3.6%] |
+| `repository_analysis/10000-lines/1` | 34.398 ms | 29.973 ms | [−15.1%, −12.9%, −10.6%] |
+| `repository_analysis/10000-lines/100` | 9.3974 ms | 8.7863 ms | [−11.0%, −6.5%, −1.0%] |
+| `result_serialization/100-files` | 1.1701 ms | 1.1928 ms | [−1.8%, +1.1%, +3.6%] |
+
+At ten samples only `python` (p=0.64), `rust` (p=0.05), and `zig` (p=0.49) fail the significance test; the remaining twelve report p=0.00 to p=0.02. Zig is expected to be flat: its walk already reached one kind match in the branch that fires for most of its nodes. `result_serialization` is untouched by the change and its two columns agree within noise, which is the intended control.
+
+`repository_analysis/10000-lines/1000` is deliberately omitted. The ten-sample run reported +5.9% (p=0.01) as a regression, but re-running that same case against the same frozen baseline at Criterion's default 100 samples returned +0.7% (p=0.59). A thousand files across ten workers is scheduling-bound rather than parse-bound, so ten samples cannot resolve it. Read the wide fan-out rows as rayon variance, not as a measurement of the analyzer.

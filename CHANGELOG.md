@@ -4,6 +4,10 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Changed
+
+- Source analysis is faster with byte-identical output. `Node::kind()` in the tree-sitter binding is an FFI call plus `strlen` plus a full UTF-8 validation, and `walk_function` re-derived it 10-14 times per node: once in the loop body and once inside each of `is_function`, `is_logical_loc`, `is_else_if`, `decision_kind`, `is_labeled_jump`, `logical_operator`, `is_operand_leaf`, and `is_operator_leaf`. The walk now resolves the kind once and threads the resulting `&str` through those helpers. A `sample` profile of the analyzer attributed 24% of active CPU to those repeated lookups, and the isolated classification step measures 34.9x faster. The paired Criterion magnitudes are not yet publishable: the machine was under heavy external load, and re-running the same comparison flipped the short cases, so a clean re-measurement on an idle machine is still owed and `docs/performance-methodology.md` carries the full table marked provisional. `is_function` splits into a wrapper and `is_function_kind` so the walk can pass an already-resolved kind; the `is_named` gate moves into `is_function_kind` rather than staying at the call sites, because Python's `lambda` keyword token carries the same kind string as the `lambda` rule and an unnamed node must never reach the kind match. No metric, schema field, or CLI surface changes, and paired JSON output is byte-identical with an identical exit code.
+
 ## 0.20.0 - 2026-09-26
 
 ### Changed (breaking)

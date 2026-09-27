@@ -491,10 +491,18 @@ fn discover_tree<'tree>(
 /// grammar spells its function rules as named nodes too, so the gate is
 /// uniform.
 fn is_function(node: Node<'_>, language: Language) -> bool {
+    is_function_kind(node, node.kind(), language)
+}
+
+/// `is_function` with the node kind already resolved by the caller.
+///
+/// The `is_named` gate lives here rather than at the call sites: Python's
+/// `lambda` keyword token carries the same kind string as the `lambda` rule,
+/// so an unnamed node must never reach the kind match.
+fn is_function_kind(node: Node<'_>, kind: &str, language: Language) -> bool {
     if !node.is_named() {
         return false;
     }
-    let kind = node.kind();
     match language {
         Language::Go => matches!(
             kind,
@@ -609,8 +617,13 @@ fn walk_function(
     let mut next_sequence = 0;
     let mut stack = vec![(root, 0, false)];
     while let Some((node, nesting, inside_logical)) = stack.pop() {
-        if node.id() != root.id() && is_function(node, language) {
-            if language == Language::Java && node.kind() == "lambda_expression" {
+        // Resolve the node kind once: `Node::kind()` is an FFI call plus
+        // strlen and a full UTF-8 validation, and the helpers below each
+        // re-derive it. Keeping one `&str` for the whole body removes that
+        // repeated work from the hottest loop in the analyzer.
+        let kind = node.kind();
+        if node.id() != root.id() && is_function_kind(node, kind, language) {
+            if language == Language::Java && kind == "lambda_expression" {
                 events.push(Event::Decision {
                     kind: DecisionKind::Arrow,
                     nesting,
@@ -621,12 +634,12 @@ fn walk_function(
             continue;
         }
 
-        if is_logical_loc(node, language) {
+        if is_logical_loc(node, kind, language) {
             *logical_loc += 1;
         }
 
-        let else_if = is_else_if(node, language);
-        let decision = decision_kind(node, language, source);
+        let else_if = is_else_if(node, kind, language);
+        let decision = decision_kind(node, kind, language, source);
         if let Some(kind) = decision {
             events.push(Event::Decision {
                 kind,
@@ -635,7 +648,7 @@ fn walk_function(
                 line: node.start_position().row as u32 + 1,
             });
         }
-        if node.kind() == "if_statement" {
+        if kind == "if_statement" {
             // Python repeats the `alternative` field once per `elif_clause`
             // before the trailing `else_clause`, so the first alternative of an
             // if/elif chain is an `elif_clause`: it is scored as an else-if, not
@@ -652,23 +665,23 @@ fn walk_function(
                 });
             }
         } else if (language == Language::Zig
-            && node.kind() == "if_expression"
+            && kind == "if_expression"
             && zig_if_expression_has_non_if_else(node))
-            || (node.kind() == "else_clause" && !has_if_child(node))
+            || (kind == "else_clause" && !has_if_child(node))
         {
             events.push(Event::Else {
                 line: node.start_position().row as u32 + 1,
                 nesting,
             });
         }
-        if is_labeled_jump(node, language) {
+        if is_labeled_jump(node, kind, language) {
             events.push(Event::LabeledJump {
                 line: node.start_position().row as u32 + 1,
                 nesting,
             });
         }
 
-        let this_logical = logical_operator(node, language, source).is_some();
+        let this_logical = logical_operator(node, kind, language, source).is_some();
         if this_logical && !inside_logical {
             collect_logical(node, language, next_sequence, nesting, events);
             next_sequence += 1;
@@ -676,7 +689,7 @@ fn walk_function(
 
         if language == Language::Zig
             && matches!(
-                node.kind(),
+                kind,
                 "boolean" | "builtin_type" | "string" | "character" | "multiline_string"
             )
         {
@@ -693,11 +706,11 @@ fn walk_function(
             // future grammar bump that emits one activates Arrow automatically.
             // A lambda's own header `->` is excluded: Arrow counts in the
             // enclosing function (skip branch above), never in itself.
-            let own_lambda_header = node.kind() == "->"
+            let own_lambda_header = kind == "->"
                 && node.parent().is_some_and(|parent| {
                     parent.id() == root.id() && parent.kind() == "lambda_expression"
                 });
-            if node.kind() == "->" && language == Language::Java && !own_lambda_header {
+            if kind == "->" && language == Language::Java && !own_lambda_header {
                 events.push(Event::Decision {
                     kind: DecisionKind::Arrow,
                     nesting,
@@ -710,9 +723,9 @@ fn walk_function(
                 start: node.start_byte(),
                 end: node.end_byte(),
             };
-            if is_operator_leaf(node.kind(), language) {
+            if is_operator_leaf(kind, language) {
                 events.push(Event::Operator(span));
-            } else if is_operand_leaf(node, language) {
+            } else if is_operand_leaf(node, kind, language) {
                 events.push(Event::Operand(span));
             }
             continue;
@@ -746,8 +759,13 @@ fn walk_function(
     }
 }
 
-fn decision_kind(node: Node<'_>, language: Language, source: &[u8]) -> Option<DecisionKind> {
-    match node.kind() {
+fn decision_kind(
+    node: Node<'_>,
+    kind: &str,
+    language: Language,
+    source: &[u8],
+) -> Option<DecisionKind> {
+    match kind {
         "if_statement" | "if_expression" => Some(DecisionKind::If),
         "for_statement"
         | "for_in_statement"
@@ -783,7 +801,7 @@ fn decision_kind(node: Node<'_>, language: Language, source: &[u8]) -> Option<De
         "throw_statement" if !matches!(language, Language::Java | Language::Cpp) => {
             Some(DecisionKind::Throw)
         }
-        _ if language == Language::Python => python_decision_kind(node.kind()),
+        _ if language == Language::Python => python_decision_kind(kind),
         _ => None,
     }
 }
@@ -807,8 +825,8 @@ fn python_decision_kind(kind: &str) -> Option<DecisionKind> {
 }
 
 /// True when a `break`/`continue` carries a label.
-fn is_labeled_jump(node: Node<'_>, language: Language) -> bool {
-    match node.kind() {
+fn is_labeled_jump(node: Node<'_>, kind: &str, language: Language) -> bool {
+    match kind {
         // Go and the C-family grammars expose the label as the only named
         // child. Rust exposes a `label` node, so `break value` stays a value
         // jump rather than a labeled one.
@@ -844,16 +862,16 @@ fn zig_if_expression_has_non_if_else(node: Node<'_>) -> bool {
     alternative.is_some_and(|child| child.kind() != "if_expression")
 }
 
-fn is_else_if(node: Node<'_>, language: Language) -> bool {
-    if language == Language::Zig && node.kind() == "if_expression" {
+fn is_else_if(node: Node<'_>, kind: &str, language: Language) -> bool {
+    if language == Language::Zig && kind == "if_expression" {
         return node
             .prev_sibling()
             .is_some_and(|previous| previous.kind() == "else");
     }
-    if node.kind() == "elif_clause" {
+    if kind == "elif_clause" {
         return true;
     }
-    if !matches!(node.kind(), "if_statement" | "if_expression") {
+    if !matches!(kind, "if_statement" | "if_expression") {
         return false;
     }
     node.parent().is_some_and(|parent| {
@@ -870,14 +888,19 @@ fn has_if_child(node: Node<'_>) -> bool {
         .any(|child| matches!(child.kind(), "if_statement" | "if_expression"))
 }
 
-fn logical_operator(node: Node<'_>, language: Language, source: &[u8]) -> Option<LogicalOperator> {
+fn logical_operator(
+    node: Node<'_>,
+    kind: &str,
+    language: Language,
+    source: &[u8],
+) -> Option<LogicalOperator> {
     // `let_chain` is Rust's `if let A = x && let B = y`: its `&&` separators
     // are direct tokens of the chain, never `binary_expression` operators.
     // Python spells its logical operators as the keyword tokens inside a
     // dedicated `boolean_operator` node.
-    let python_boolean = language == Language::Python && node.kind() == "boolean_operator";
+    let python_boolean = language == Language::Python && kind == "boolean_operator";
     if !matches!(
-        node.kind(),
+        kind,
         "binary_expression" | "binary_expression2" | "let_chain"
     ) && !python_boolean
     {
@@ -1426,8 +1449,7 @@ fn python_is_method(node: Node<'_>) -> bool {
     false
 }
 
-fn is_logical_loc(node: Node<'_>, language: Language) -> bool {
-    let kind = node.kind();
+fn is_logical_loc(node: Node<'_>, kind: &str, language: Language) -> bool {
     matches!(
         kind,
         "expression_statement"
@@ -1659,26 +1681,26 @@ fn is_operator_leaf(kind: &str, language: Language) -> bool {
 /// named `boolean_literal` patterns, so both spellings count; every other
 /// language spells its literals as named nodes, which the `is_named` gate
 /// already covers.
-fn is_operand_leaf(node: Node<'_>, language: Language) -> bool {
+fn is_operand_leaf(node: Node<'_>, kind: &str, language: Language) -> bool {
     if matches!(language, Language::C | Language::Cpp)
-        && matches!(node.kind(), "number_literal" | "string_content")
+        && matches!(kind, "number_literal" | "string_content")
     {
         return node.is_named();
     }
     // Python wraps a literal in a `string` node whose leaf is
     // `string_content`, so the shared `string` entry never reaches this
     // check: the leaf is the operand.
-    if language == Language::Python && node.kind() == "string_content" {
+    if language == Language::Python && kind == "string_content" {
         return node.is_named();
     }
-    if !(is_operand(node.kind()) || (language == Language::Zig && is_zig_operand(node.kind()))) {
+    if !(is_operand(kind) || (language == Language::Zig && is_zig_operand(kind))) {
         return false;
     }
     node.is_named()
-        || (language == Language::Rust && matches!(node.kind(), "true" | "false"))
+        || (language == Language::Rust && matches!(kind, "true" | "false"))
         || (language == Language::Zig
             && matches!(
-                node.kind(),
+                kind,
                 "undefined"
                     | "unreachable"
                     | "anyframe"
