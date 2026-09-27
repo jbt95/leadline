@@ -3151,7 +3151,7 @@ fn tools_list_result() -> serde_json::Value {
                      `Promise.all` all work, so a multi-tool workflow is one round trip and \
                      intermediate results never enter your context. No filesystem, network, \
                      module, timer, or process access; at most 100 tool calls and 30s per run. \
-                     Each tool returns its JSON report; argument names are optional. \
+                     Each tool returns its JSON report; arguments marked `?` are optional. \
                      Available tools:\n{}",
                     tool_declarations()
                 ),
@@ -3170,10 +3170,10 @@ fn tools_list_result() -> serde_json::Value {
 
 /// One declaration line per tool, derived from [`tool_specs`].
 ///
-/// Only the callable name and its argument names are emitted: full JSON
-/// schemas and long descriptions would cost more context than the twenty
-/// tool entries they replace, and the tool handlers already reject unknown
-/// fields with the real message.
+/// Each argument carries its type and an optional `?`, so a model can compose
+/// a call from the declaration alone: a bare list of names makes it guess, and
+/// a wrong guess costs a round trip to a `-32602`. Descriptions stay out —
+/// they are the expensive part, and the handlers reject a bad type by name.
 fn tool_declarations() -> String {
     let specs = tool_specs();
     let Some(tools) = specs.get("tools").and_then(|t| t.as_array()) else {
@@ -3183,13 +3183,28 @@ fn tool_declarations() -> String {
         .iter()
         .filter_map(|spec| {
             let name = spec.get("name")?.as_str()?;
+            let schema = spec.get("inputSchema");
             let empty = serde_json::Map::new();
-            let properties = spec
-                .get("inputSchema")
+            let properties = schema
                 .and_then(|schema| schema.get("properties"))
                 .and_then(|p| p.as_object())
                 .unwrap_or(&empty);
-            let args: Vec<&str> = properties.keys().map(String::as_str).collect();
+            let required: Vec<&str> = schema
+                .and_then(|schema| schema.get("required"))
+                .and_then(|names| names.as_array())
+                .map(|names| names.iter().filter_map(|name| name.as_str()).collect())
+                .unwrap_or_default();
+            let args: Vec<String> = properties
+                .iter()
+                .map(|(key, value)| {
+                    let optional = if required.contains(&key.as_str()) {
+                        ""
+                    } else {
+                        "?"
+                    };
+                    format!("{key}{optional}: {}", declaration_type(value))
+                })
+                .collect();
             if args.is_empty() {
                 Some(format!("  {name}(): Promise<object>;"))
             } else {
@@ -3201,6 +3216,41 @@ fn tool_declarations() -> String {
         })
         .collect();
     lines.join("\n")
+}
+
+/// The JavaScript-facing type of one argument, read from its JSON schema.
+fn declaration_type(schema: &serde_json::Value) -> String {
+    if let Some(values) = schema.get("enum").and_then(|values| values.as_array()) {
+        let literals: Vec<String> = values
+            .iter()
+            .filter_map(|value| value.as_str())
+            .map(|value| format!("\"{value}\""))
+            .collect();
+        if !literals.is_empty() {
+            return literals.join(" | ");
+        }
+    }
+    // The sandbox has a single number type, so an integer reads as a number.
+    fn scalar(kind: &str) -> &str {
+        if kind == "integer" { "number" } else { kind }
+    }
+    match schema.get("type") {
+        Some(serde_json::Value::String(kind)) if kind == "array" => {
+            let item = schema
+                .get("items")
+                .map(declaration_type)
+                .unwrap_or_default();
+            format!("{item}[]")
+        }
+        Some(serde_json::Value::String(kind)) => scalar(kind).to_owned(),
+        Some(serde_json::Value::Array(kinds)) => kinds
+            .iter()
+            .filter_map(|kind| kind.as_str())
+            .map(scalar)
+            .collect::<Vec<_>>()
+            .join(" | "),
+        _ => "unknown".to_owned(),
+    }
 }
 
 /// The tool surface a script can call, one handler per tool name.
@@ -3461,6 +3511,39 @@ mod tests {
         // Arguments are listed too, otherwise a model cannot compose a call.
         assert!(declarations.contains("sort_by"), "arguments must be listed");
         assert!(declarations.lines().count() >= TOOL_NAMES.len());
+    }
+
+    #[test]
+    fn declarations_carry_argument_types_and_required_markers() {
+        let declarations = tool_declarations();
+        // A model composes a call from this text alone, so a wrong guess costs
+        // a round trip. Types and required-ness must both survive.
+        assert!(
+            declarations.contains("path?: string"),
+            "string type missing: {declarations}"
+        );
+        assert!(
+            declarations.contains("top?: number"),
+            "integer must read as number: {declarations}"
+        );
+        assert!(
+            declarations.contains("test_map?: string[]"),
+            "array type missing: {declarations}"
+        );
+        // `impact` declares `target` required; `path` is not.
+        assert!(
+            declarations.contains("impact({path?: string, target: string"),
+            "required argument not marked: {declarations}"
+        );
+        // Enums are the other guessable shape.
+        assert!(
+            declarations.contains("\"aggregate\" | \"include_authors\""),
+            "enum values missing: {declarations}"
+        );
+        assert!(
+            !declarations.contains("unknown"),
+            "every argument type must be renderable: {declarations}"
+        );
     }
 
     #[test]
