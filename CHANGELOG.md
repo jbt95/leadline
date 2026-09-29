@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.22.0 - 2026-09-29
+
 ### Changed (breaking)
 
 - The MCP server exposes its twenty analyzer tools directly instead of a single `execute` tool. `tools/list` returns each analyzer's own description, read-only annotations, and input schema, and `tools/call` routes a name straight to that analyzer; the twenty tool specs, results, per-tool error messages, and telemetry records are unchanged from what `execute` composed, so a caller that asks for `analyze`, `check`, or any other name by hand gets the same report it used to get back from a script; a tool failure now surfaces the tool's own message instead of wrapping it as `script error: <message>`. There is no code argument, no `tools` namespace, and no script route, so a multi-tool workflow is one call per tool. The QuickJS sandbox, the `rquickjs` dependency, and the 100-call / 30-second / 64 MB script budget are gone with it: each analyzer tool returns analysis data only and none accepts caller-supplied code, while filesystem access stays inside the reads the analysis path already performs and the only subprocess remains the fixed-argument `git` adapter. Each call is recorded in telemetry under its own tool name, as it already was when called from a script.
