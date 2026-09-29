@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 0.21.1 - 2026-09-29
+
 ### Fixed
 
 - The MCP server's `execute` prose taught `await` and `Promise.all` as though they were general rules, and a model carried them into a code string for a different MCP server in the same session whose sandbox is synchronous, where a top-level `await` is a parse error and the whole call is lost. The server instructions and the tool description now scope the rule to this sandbox and say outright that another server's sandbox may disagree. The sandbox itself is unchanged: the body is still a JavaScript async function body, `tools.<name>(args)` is still the only global, and the call budget, wall clock, and memory ceiling are untouched.
