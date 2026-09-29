@@ -9,55 +9,56 @@ fn request(method: &str, params: Value) -> String {
     serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string()
 }
 
-/// Call one analyzer tool from inside an `execute` script.
-///
-/// This is the only route a client has to the twenty tools, so every behavior
-/// test goes through the script sandbox too. `serde_json` renders arguments as
-/// compact JSON, which is also a valid JavaScript object literal.
+/// Advertisement order of `tools/list`, which returns `tool_specs()` as-is.
+/// This differs from `TOOL_NAMES` for one group: `tool_specs()` lists
+/// `vulnerabilities`, `sql_risks`, then `test_targets`.
+const MCP_TOOL_NAMES: [&str; 20] = [
+    "analyze",
+    "analyze_changed",
+    "analyze_function",
+    "check",
+    "explain_metric",
+    "repo_summary",
+    "security_findings",
+    "sql_plan",
+    "vulnerabilities",
+    "sql_risks",
+    "test_targets",
+    "dependencies",
+    "impact",
+    "coupling",
+    "hotspots",
+    "duplication",
+    "policy",
+    "risk",
+    "debt",
+    "project",
+];
+
 fn call_tool(name: &str, arguments: Value) -> Value {
-    let code = format!("return await tools.{name}({arguments});");
     let raw = request(
         "tools/call",
-        serde_json::json!({ "name": "execute", "arguments": { "code": code } }),
+        serde_json::json!({ "name": name, "arguments": arguments }),
     );
     let response = handle_request(&raw).expect("tools/call must respond");
     serde_json::from_str(&response).unwrap()
-}
-
-/// Run a raw script body through `execute`.
-fn execute_code(code: &str) -> Value {
-    let raw = request(
-        "tools/call",
-        serde_json::json!({ "name": "execute", "arguments": { "code": code } }),
-    );
-    let response = handle_request(&raw).expect("tools/call must respond");
-    serde_json::from_str(&response).unwrap()
-}
-
-/// The `execute` tool spec from `tools/list`.
-fn execute_spec() -> Value {
-    let response: Value = serde_json::from_str(
-        &handle_request(&request("tools/list", serde_json::json!({}))).unwrap(),
-    )
-    .unwrap();
-    let tools = result_of(&response)["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 1, "only `execute` is advertised: {tools:?}");
-    assert_eq!(tools[0]["name"], "execute");
-    tools[0].clone()
 }
 
 /// A `tools/list` response, for assertions that need the whole array.
-fn execute_list_response() -> Value {
+fn tools_list_response() -> Value {
     serde_json::from_str(&handle_request(&request("tools/list", serde_json::json!({}))).unwrap())
         .unwrap()
 }
 
-/// The generated declaration block inside `execute`'s description.
-fn execute_declarations() -> String {
-    execute_spec()["description"]
-        .as_str()
-        .expect("execute must carry a description")
-        .to_owned()
+/// One named tool spec from `tools/list`.
+fn tool_spec(name: &str) -> Value {
+    result_of(&tools_list_response())["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == name)
+        .unwrap_or_else(|| panic!("{name} must be advertised"))
+        .clone()
 }
 
 fn result_of(response: &Value) -> &Value {
@@ -160,123 +161,64 @@ fn initialize_and_tools_list() {
     .unwrap();
     assert_eq!(result_of(&response)["serverInfo"]["name"], "leadline");
 
-    // One advertised tool, not twenty: the analyzer surface reaches the model
-    // as the declaration block in `execute`'s description.
-    let spec = execute_spec();
-    assert_eq!(spec["inputSchema"]["required"][0], "code");
-    assert_eq!(spec["inputSchema"]["properties"]["code"]["type"], "string");
-
-    // The declaration block must be a real, non-trivial API listing. Which
-    // tools it contains is the crate's own invariant, covered by
-    // `mcp::tests::declarations_list_every_tool_with_its_arguments`; repeating
-    // the twenty names here would only create a second list to keep in sync.
-    let declarations = execute_declarations();
-    let callable = declarations
-        .lines()
-        .filter(|line| {
-            line.trim_start().starts_with("analyze(")
-                || line.trim_start().starts_with("check(")
-                || line.trim_start().starts_with("project(")
-                || line.trim_start().starts_with("repo_summary(")
-        })
-        .count();
-    assert_eq!(
-        callable, 4,
-        "declarations must be callable lines: {declarations}"
-    );
-    assert!(declarations.contains("Promise<object>"), "{declarations}");
-}
-
-#[test]
-fn direct_analyzer_call_is_rejected_with_a_redirect() {
-    for name in ["analyze", "check", "project"] {
-        let raw = request(
-            "tools/call",
-            serde_json::json!({ "name": name, "arguments": {} }),
+    let listed = tools_list_response();
+    let tools = result_of(&listed)["tools"].as_array().unwrap();
+    let names: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, MCP_TOOL_NAMES);
+    assert!(!names.contains(&"execute"));
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap();
+        assert!(tool["inputSchema"].is_object(), "{name} input schema");
+        assert!(
+            tool["description"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty()),
+            "{name} description"
         );
-        let response: Value = serde_json::from_str(&handle_request(&raw).unwrap()).unwrap();
-        let error = error_of(&response);
-        assert_eq!(error["code"], -32602, "{name}: {error}");
-        let message = error["message"].as_str().unwrap();
-        assert!(message.contains("execute"), "{name}: {message}");
+        assert_eq!(tool["annotations"]["readOnlyHint"], true, "{name}");
+        assert_eq!(tool["annotations"]["idempotentHint"], true, "{name}");
+        assert_eq!(tool["annotations"]["openWorldHint"], false, "{name}");
     }
 }
 
 #[test]
-fn execute_runs_a_script_over_several_tools() {
-    let dir = fixture_dir("function branch(x: boolean) { if (x) return 1; return 0; }\n");
-    let path = dir.to_str().unwrap();
-    // The whole point of the surface: one call, several tools, one result.
-    let response = execute_code(&format!(
-        "const [summary, risk] = await Promise.all([
-           tools.repo_summary({{ path: {path:?} }}),
-           tools.risk({{ path: {path:?} }}),
-         ]);
-         return {{ files: summary.totals.files, top: risk.risks[0].path }};"
-    ));
-    let result = result_of(&response);
-    assert_eq!(result["files"], 1);
-    assert_eq!(result["top"], "sample.ts");
+fn direct_analyzer_call_reaches_the_named_tool() {
+    let response = call_tool(
+        "explain_metric",
+        serde_json::json!({ "metric": "cognitive" }),
+    );
+    assert_eq!(result_of(&response)["metric"], "cognitive");
 }
 
 #[test]
-fn execute_reports_tool_failures_with_the_original_message() {
-    let response = execute_code("return await tools.explain_metric({ metric: \"vibes\" });");
+fn direct_call_reports_tool_failures_with_the_original_message() {
+    let response = call_tool("explain_metric", serde_json::json!({ "metric": "vibes" }));
     let error = error_of(&response);
     assert_eq!(error["code"], -32602);
     let message = error["message"].as_str().unwrap();
     assert!(message.contains("vibes"), "{message}");
-    assert!(message.contains("script error"), "{message}");
 }
 
 #[test]
-fn execute_denies_host_capabilities() {
-    // The script holds `tools` and nothing else: no require, no process, no
-    // fetch, no timers.
-    let response =
-        execute_code("return [typeof require, typeof process, typeof fetch, typeof setTimeout];");
-    assert_eq!(
-        result_of(&response),
-        &serde_json::json!(["undefined", "undefined", "undefined", "undefined"])
-    );
-}
-
-#[test]
-fn execute_enforces_the_tool_call_budget() {
-    let response = execute_code(
-        "for (let i = 0; i < 200; i++) { await tools.explain_metric({ metric: \"cognitive\" }); }
-         return \"unreachable\";",
-    );
-    let message = error_of(&response)["message"].as_str().unwrap().to_owned();
-    assert!(message.contains("tool call limit"), "{message}");
-}
-
-#[test]
-fn execute_requires_code_and_rejects_unknown_fields() {
-    for arguments in [serde_json::json!({}), serde_json::json!({ "code": 1 })] {
-        let raw = request(
-            "tools/call",
-            serde_json::json!({ "name": "execute", "arguments": arguments }),
-        );
-        let response: Value = serde_json::from_str(&handle_request(&raw).unwrap()).unwrap();
-        assert_eq!(error_of(&response)["code"], -32602, "{arguments}");
+fn direct_calls_normalize_omitted_and_null_arguments() {
+    for params in [
+        serde_json::json!({ "name": "explain_metric" }),
+        serde_json::json!({ "name": "explain_metric", "arguments": null }),
+    ] {
+        let response: Value = serde_json::from_str(
+            &handle_request(&request("tools/call", params)).expect("tools/call must respond"),
+        )
+        .unwrap();
+        assert_eq!(error_of(&response)["code"], -32602);
     }
-    let raw = request(
-        "tools/call",
-        serde_json::json!({
-            "name": "execute",
-            "arguments": { "code": "return 1;", "bogus": 1 }
-        }),
+    let response = call_tool(
+        "explain_metric",
+        serde_json::json!({ "metric": "cognitive", "bogus": 1 }),
     );
-    let response: Value = serde_json::from_str(&handle_request(&raw).unwrap()).unwrap();
     assert_eq!(error_of(&response)["code"], -32602);
-}
-
-#[test]
-fn execute_reports_a_javascript_syntax_error() {
-    let response = execute_code("const = ;");
-    let message = error_of(&response)["message"].as_str().unwrap();
-    assert!(message.contains("variable name expected"), "{message}");
 }
 
 #[test]
@@ -317,13 +259,15 @@ fn invalid_params_reports_invalid_params() {
     );
     assert_eq!(error_of(&response)["code"], -32602);
 
-    // Unknown tool name.
-    let raw = request(
-        "tools/call",
-        serde_json::json!({ "name": "rewrite_codebase", "arguments": {} }),
-    );
-    let response: Value = serde_json::from_str(&handle_request(&raw).unwrap()).unwrap();
-    assert_eq!(error_of(&response)["code"], -32602);
+    // Unknown tool name, and the deleted `execute` route.
+    for name in ["rewrite_codebase", "execute"] {
+        let raw = request(
+            "tools/call",
+            serde_json::json!({ "name": name, "arguments": {} }),
+        );
+        let response: Value = serde_json::from_str(&handle_request(&raw).unwrap()).unwrap();
+        assert_eq!(error_of(&response)["code"], -32602, "{name}");
+    }
 }
 
 #[test]
@@ -382,7 +326,7 @@ fn analyze_returns_compact_deterministic_envelope() {
 }
 
 #[test]
-fn analyze_accepts_coverage_through_a_script() {
+fn analyze_accepts_coverage_directly() {
     let dir = fixture_dir("function covered(x: boolean) { if (x) return 1; return 0; }\n");
     let file = dir.join("sample.ts");
     let lcov = dir.join("lcov.info");
@@ -747,8 +691,7 @@ fn check_rejects_regressions_without_base() {
 }
 
 #[test]
-fn execute_declarations_carry_every_tool_and_its_arguments() {
-    let declarations = execute_declarations();
+fn advertised_schemas_carry_every_tools_arguments() {
     for (name, argument) in [
         ("analyze", "sort_by"),
         ("analyze_changed", "min_delta"),
@@ -766,12 +709,14 @@ fn execute_declarations_carry_every_tool_and_its_arguments() {
         ("project", "test_map"),
     ] {
         assert!(
-            declarations.contains(&format!("{name}({{")) && declarations.contains(argument),
-            "{name} must be declared with {argument}, got: {declarations}"
+            tool_spec(name)["inputSchema"]["properties"][argument].is_object(),
+            "{name} must advertise {argument}"
         );
     }
-    // `explain_metric` takes no options beyond the metric itself.
-    assert!(declarations.contains("explain_metric({"), "{declarations}");
+    assert_eq!(
+        tool_spec("explain_metric")["inputSchema"]["required"],
+        serde_json::json!(["metric"])
+    );
 }
 
 #[test]
@@ -1058,9 +1003,8 @@ fn remaining_tools_reject_unknown_arguments() {
 
 #[test]
 fn graph_analytics_tools_are_reachable_and_named_in_instructions() {
-    let declarations = execute_declarations();
     for name in ["dependencies", "impact", "coupling"] {
-        assert!(declarations.contains(&format!("{name}(")), "{name} missing");
+        assert_eq!(tool_spec(name)["name"], name);
     }
     let instructions = handle_request(&request("initialize", serde_json::json!({}))).unwrap();
     for name in ["dependencies", "impact", "coupling"] {
@@ -1070,9 +1014,8 @@ fn graph_analytics_tools_are_reachable_and_named_in_instructions() {
 
 #[test]
 fn history_and_report_tools_are_reachable() {
-    let declarations = execute_declarations();
     for name in ["hotspots", "duplication", "policy"] {
-        assert!(declarations.contains(&format!("{name}(")), "{name} missing");
+        assert_eq!(tool_spec(name)["name"], name);
     }
 }
 
@@ -1275,17 +1218,19 @@ fn registered_tool_names(source: &str) -> Vec<String> {
 #[test]
 fn native_tool_names_do_not_collide_with_mcp_tool_names() {
     use std::collections::BTreeSet;
-    let mcp: BTreeSet<String> = result_of(&execute_list_response())["tools"]
+    let mcp: BTreeSet<String> = result_of(&tools_list_response())["tools"]
         .as_array()
         .unwrap()
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_owned())
         .collect();
-    // Only `execute` is advertised, so this is the single namespaced MCP name a
-    // host can shadow.
-    assert_eq!(mcp, BTreeSet::from(["execute".to_owned()]));
-    let namespaced: BTreeSet<String> = mcp.iter().map(|name| format!("leadline_{name}")).collect();
-    assert!(namespaced.contains("leadline_execute"));
+    assert_eq!(
+        mcp,
+        MCP_TOOL_NAMES
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect()
+    );
     // Harness MCP clients expose a server tool as `<server>_<tool>`, and the
     // leadline server is keyed `leadline`; a native tool with the same name is
     // silently shadowed, so the names must stay disjoint.
@@ -1491,30 +1436,32 @@ fn initialize_carries_usage_instructions() {
 }
 
 #[test]
-fn tools_list_marks_execute_read_only() {
-    let spec = execute_spec();
-    let name = spec["name"].as_str().unwrap();
-    assert!(
-        spec["annotations"]["title"].is_string(),
-        "{name} needs a title"
-    );
-    assert_eq!(
-        spec["annotations"]["readOnlyHint"], true,
-        "{name} readOnlyHint"
-    );
-    assert_eq!(
-        spec["annotations"]["idempotentHint"], true,
-        "{name} idempotentHint"
-    );
-    assert_eq!(
-        spec["annotations"]["openWorldHint"], false,
-        "{name} must advertise a closed world"
-    );
-    // The description must say when to reach for the surface, not just what it
-    // is: a model picks the tool from this text alone.
-    let description = spec["description"].as_str().unwrap();
-    assert!(description.contains("Promise.all"), "{description}");
-    assert!(description.contains("await"), "{description}");
+fn tools_list_marks_every_tool_read_only() {
+    for name in MCP_TOOL_NAMES {
+        let spec = tool_spec(name);
+        assert!(
+            spec["annotations"]["title"].is_string(),
+            "{name} needs a title"
+        );
+        assert_eq!(
+            spec["annotations"]["readOnlyHint"], true,
+            "{name} readOnlyHint"
+        );
+        assert_eq!(
+            spec["annotations"]["idempotentHint"], true,
+            "{name} idempotentHint"
+        );
+        assert_eq!(
+            spec["annotations"]["openWorldHint"], false,
+            "{name} must advertise a closed world"
+        );
+        assert!(
+            spec["description"]
+                .as_str()
+                .is_some_and(|description| !description.is_empty()),
+            "{name} description"
+        );
+    }
 }
 
 fn sql_plan_fixture(cost_current: f64, cost_baseline: f64) -> PathBuf {
@@ -1546,7 +1493,7 @@ fn sql_plan_fixture(cost_current: f64, cost_baseline: f64) -> PathBuf {
 
 #[test]
 fn sql_plan_is_reachable_and_named_in_instructions() {
-    let declarations = execute_declarations();
+    let spec = tool_spec("sql_plan");
     for key in [
         "current",
         "baseline",
@@ -1555,7 +1502,10 @@ fn sql_plan_is_reachable_and_named_in_instructions() {
         "max_estimate_error_ratio",
         "top",
     ] {
-        assert!(declarations.contains(key), "sql_plan must take {key}");
+        assert!(
+            spec["inputSchema"]["properties"][key].is_object(),
+            "sql_plan must take {key}"
+        );
     }
     let init: Value = serde_json::from_str(
         &handle_request(&request("initialize", serde_json::json!({}))).unwrap(),
@@ -1570,7 +1520,7 @@ fn sql_plan_is_reachable_and_named_in_instructions() {
 }
 
 #[test]
-fn sql_plan_compares_directories_through_a_script() {
+fn sql_plan_compares_directories_directly() {
     let root = sql_plan_fixture(150.0, 100.0);
     let current = root.join("current").to_str().unwrap().to_owned();
     let baseline = root.join("baseline").to_str().unwrap().to_owned();
@@ -1650,7 +1600,7 @@ fn security_findings_fixture() -> (Fixture, String, String) {
 
 #[test]
 fn security_findings_is_reachable_and_named_in_instructions() {
-    let declarations = execute_declarations();
+    let spec = tool_spec("security_findings");
     for key in [
         "path",
         "sarif",
@@ -1664,7 +1614,7 @@ fn security_findings_is_reachable_and_named_in_instructions() {
         "top",
     ] {
         assert!(
-            declarations.contains(key),
+            spec["inputSchema"]["properties"][key].is_object(),
             "security_findings must take {key}"
         );
     }
@@ -1681,7 +1631,7 @@ fn security_findings_is_reachable_and_named_in_instructions() {
 }
 
 #[test]
-fn security_findings_compares_through_a_script() {
+fn security_findings_compares_directly() {
     let (root, proj, sarif) = security_findings_fixture();
     let arguments =
         serde_json::json!({ "path": proj, "sarif": [sarif], "minimum_severity": "low" });
@@ -1786,7 +1736,7 @@ fn vulnerabilities_fixture() -> (PathBuf, String, String) {
 
 #[test]
 fn vulnerabilities_is_reachable_and_named_in_instructions() {
-    let declarations = execute_declarations();
+    let spec = tool_spec("vulnerabilities");
     for key in [
         "path",
         "osv",
@@ -1800,7 +1750,7 @@ fn vulnerabilities_is_reachable_and_named_in_instructions() {
         "top",
     ] {
         assert!(
-            declarations.contains(key),
+            spec["inputSchema"]["properties"][key].is_object(),
             "vulnerabilities must take {key}"
         );
     }
@@ -1817,7 +1767,7 @@ fn vulnerabilities_is_reachable_and_named_in_instructions() {
 }
 
 #[test]
-fn vulnerabilities_reports_import_evidence_through_a_script() {
+fn vulnerabilities_reports_import_evidence_directly() {
     let (root, proj, osv) = vulnerabilities_fixture();
     let arguments = serde_json::json!({ "path": proj, "osv": [osv], "minimum_severity": "low" });
     let response = call_tool("vulnerabilities", arguments);
@@ -1909,7 +1859,7 @@ fn sql_risks_fixture() -> (Fixture, String) {
 
 #[test]
 fn sql_risks_is_reachable_and_named_in_instructions() {
-    let declarations = execute_declarations();
+    let spec = tool_spec("sql_risks");
     for key in [
         "path",
         "large_offset",
@@ -1917,7 +1867,10 @@ fn sql_risks_is_reachable_and_named_in_instructions() {
         "minimum_severity",
         "top",
     ] {
-        assert!(declarations.contains(key), "sql_risks must take {key}");
+        assert!(
+            spec["inputSchema"]["properties"][key].is_object(),
+            "sql_risks must take {key}"
+        );
     }
     let init: Value = serde_json::from_str(
         &handle_request(&request("initialize", serde_json::json!({}))).unwrap(),
@@ -2372,7 +2325,7 @@ fn jsonrpc_rejects_invalid_requests_and_oversized_batches() {
     // answered.
     assert!(
         handle_request(
-            r#"{"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "execute", "arguments": {"code": "return await tools.explain_metric({ metric: \"crap\" });"}}}"#
+            r#"{"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "explain_metric", "arguments": {"metric": "crap"}}}"#
         )
         .is_none()
     );
@@ -2836,13 +2789,8 @@ fn mcp_records_sessions_methods_and_payloads() {
         &request(
             "tools/call",
             serde_json::json!({
-                "name": "execute",
-                "arguments": {
-                    "code": format!(
-                        "const s = await tools.repo_summary({{ path: {:?} }}); return s.totals;",
-                        fixture.to_str().unwrap()
-                    )
-                }
+                "name": "repo_summary",
+                "arguments": { "path": fixture.to_str().unwrap() }
             }),
         ),
     );

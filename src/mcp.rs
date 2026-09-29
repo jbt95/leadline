@@ -41,10 +41,9 @@ const MAX_STDIO_LINE: usize = MAX_HTTP_BODY;
 
 /// Usage guidance returned by `initialize`. Hosts may inject this into the
 /// system prompt, so it doubles as the server's self-advertisement.
-const SERVER_INSTRUCTIONS: &str = "Always use leadline for C, C++, Go, Java, JavaScript, Python, TypeScript, TSX, Rust, Zig questions about complexity, maintainability, risk, hotspots, or change impact: deterministic function-level metrics without executing code or touching the network. Metrics are evidence, not objectives, so never rewrite code to lower a number without improving the design. The server exposes one tool, execute, which runs a JavaScript async function body against a `tools` namespace: compose several analyzer calls in one round trip with loops, branching, `await`, and `Promise.all`, then return one JSON-serializable value. The body is async because THIS sandbox is; a different MCP server in the same session may expose a synchronous sandbox where a top-level `await` is a syntax error, so do not carry the keyword into a code string passed to another server's execute tool. Leadline tools cover repo_summary, project, risk, impact, coupling, and hotspots to find what to inspect; analyze, analyze_function, and analyze_changed to measure; check to gate thresholds or regressions (pass coverage so CRAP gates are meaningful); explain_metric before interpreting a number; dependencies, duplication, policy, debt, and test_targets for structure; and security_findings, vulnerabilities, sql_risks, and sql_plan for artifacts (needs pre-generated SARIF, OSV/Trivy, or EXPLAIN). All are read-only and never run scanners, databases, or network; secrets use native leadline_secret_check. The analyze and check tools accept an optional index directory and only ever read it. Start from repo_summary or project, then drill in; after editing, call analyze_changed against a base to spot regressions.";
+const SERVER_INSTRUCTIONS: &str = "Always use leadline for C, C++, Go, Java, JavaScript, Python, TypeScript, TSX, Rust, Zig questions about complexity, maintainability, risk, hotspots, or change impact: deterministic function-level metrics without executing code or touching the network. Metrics are evidence, not objectives, so never rewrite code to lower a number without improving the design. The server exposes its analyzer tools directly. Leadline tools cover repo_summary, project, risk, impact, coupling, and hotspots to find what to inspect; analyze, analyze_function, and analyze_changed to measure; check to gate thresholds or regressions (pass coverage so CRAP gates are meaningful); explain_metric before interpreting a number; dependencies, duplication, policy, debt, and test_targets for structure; and security_findings, vulnerabilities, sql_risks, and sql_plan for artifacts (needs pre-generated SARIF, OSV/Trivy, or EXPLAIN). All are read-only and never run scanners, databases, or network; secrets use native leadline_secret_check. The analyze and check tools accept an optional index directory and only ever read it. Start from repo_summary or project, then drill in; after editing, call analyze_changed against a base to spot regressions.";
 
-/// The twenty analyzer tools a script can call. This is the inner surface, not
-/// the advertised tool list: keep in sync with [`tool_specs`] and [`tool_table`].
+/// The twenty advertised analyzer tools. Keep in sync with [`tool_specs`].
 const TOOL_NAMES: [&str; 20] = [
     "analyze",
     "analyze_changed",
@@ -468,9 +467,6 @@ fn dispatch_method(
             .inspect_err(|_| {
                 crate::telemetry::record_mcp_error(transport(), "tool_error");
             }),
-        // There is no direct-tool-method extension: `execute` is the single
-        // route to the analyzer tools, so a host cannot skip the script
-        // sandbox or its call budget.
         _ => Err((-32601, "Method not found".to_owned())),
     }
 }
@@ -484,9 +480,9 @@ fn valid_id(id: &serde_json::Value) -> bool {
 }
 
 /// Wrap a tool payload in the MCP `CallToolResult` shape: a text content
-/// block for hosts that render text, plus `structuredContent` so code-mode
-/// style hosts can hand agents native JSON. Clients that receive neither
-/// surface a null result, so this envelope is required, not cosmetic.
+/// block for hosts that render text, plus `structuredContent` for clients that
+/// consume native JSON. Clients that receive neither surface a null result, so
+/// this envelope is required, not cosmetic.
 fn tool_result(payload: serde_json::Value) -> serde_json::Value {
     let text = match &payload {
         serde_json::Value::String(text) => text.clone(),
@@ -506,36 +502,14 @@ fn dispatch_tools_call(params: &serde_json::Value) -> Result<serde_json::Value, 
         .get("name")
         .and_then(serde_json::Value::as_str)
         .ok_or((-32602, "tools/call requires a string name".to_owned()))?;
-    if name != "execute" {
-        return Err((
-            -32602,
-            format!(
-                "unknown tool '{name}'; this server exposes only `execute`, which calls \
-                 leadline tools from a script"
-            ),
-        ));
+    if !TOOL_NAMES.contains(&name) {
+        return Err((-32602, format!("unknown tool '{name}'")));
     }
     let arguments = object
         .get("arguments")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    dispatch_tool(name, &arguments)
-}
-
-/// Host-facing entry: `execute` is the only name a client may call.
-fn dispatch_tool(
-    name: &str,
-    params: &serde_json::Value,
-) -> Result<serde_json::Value, (i64, String)> {
-    run_tool_call(name, || dispatch_tool_inner(name, params))
-}
-
-/// Script-facing entry: one analyzer tool, measured exactly like a direct call.
-fn analyzer_call(
-    name: &'static str,
-    params: &serde_json::Value,
-) -> Result<serde_json::Value, (i64, String)> {
-    run_tool_call(name, || dispatch_analyzer(name, params))
+    run_tool_call(name, || dispatch_analyzer(name, &arguments))
 }
 
 /// Inflight gauge, cost sampling, and outcome classification for one call.
@@ -591,20 +565,7 @@ impl Drop for Inflight {
     }
 }
 
-/// Host-facing dispatch. `execute` is the only routable name: the twenty
-/// analyzer tools are reached from a script, so a client cannot call them
-/// directly and bypass the script sandbox.
-fn dispatch_tool_inner(
-    name: &str,
-    params: &serde_json::Value,
-) -> Result<serde_json::Value, (i64, String)> {
-    match name {
-        "execute" => tool_execute(&arguments_or_empty(params)),
-        _ => Err((-32602, format!("unknown tool '{name}'"))),
-    }
-}
-
-/// Script-facing dispatch: the twenty analyzer tools, by name.
+/// Dispatch one of the twenty analyzer tools by name.
 fn dispatch_analyzer(
     name: &str,
     params: &serde_json::Value,
@@ -2800,11 +2761,7 @@ fn opt_plan_limit(params: &serde_json::Value, key: &str) -> Result<Option<f64>, 
     }
 }
 
-/// Specs for the twenty analyzer tools: descriptions and input schemas.
-///
-/// This is the source of truth for the `execute` declarations and for the
-/// inner dispatch table. It is not advertised: `tools/list` exposes only
-/// `execute`, so a host loads one tool instead of twenty.
+/// Specs for the twenty advertised analyzer tools.
 fn tool_specs() -> serde_json::Value {
     serde_json::json!({
         "tools": [
@@ -3134,152 +3091,9 @@ fn tool_specs() -> serde_json::Value {
     })
 }
 
-/// The advertised tool list: one `execute` tool.
-///
-/// The analyzer surface reaches the model as the generated declaration block
-/// in `execute`'s description, so the host loads a single tool and the model
-/// still sees every capability.
+/// The advertised tool list.
 fn tools_list_result() -> serde_json::Value {
-    serde_json::json!({
-        "tools": [
-            {
-                "name": "execute",
-                "description": format!(
-                    "Run a JavaScript async function body that orchestrates leadline tools. \
-                     The body sees only `tools`, one function per analyzer tool, and returns one \
-                     JSON-serializable value. Loops, branching, aggregation, `await`, and \
-                     `Promise.all` all work, so a multi-tool workflow is one round trip and \
-                     intermediate results never enter your context. The body is async because \
-                     THIS sandbox is; another MCP server in the same session can expose a \
-                     synchronous sandbox where a top-level `await` is a syntax error, so do not \
-                     carry the keyword into a code string you pass to a different server's \
-                     execute tool. No filesystem, network, \
-                     module, timer, or process access; at most 100 tool calls and 30s per run. \
-                     Each tool returns its JSON report; arguments marked `?` are optional. \
-                     Available tools:\n{}",
-                    tool_declarations()
-                ),
-                "annotations": { "title": "Execute leadline tools", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "code": { "type": "string", "description": "JavaScript async function body. Use `return` to produce the result." }
-                    },
-                    "required": ["code"]
-                }
-            }
-        ]
-    })
-}
-
-/// One declaration line per tool, derived from [`tool_specs`].
-///
-/// Each argument carries its type and an optional `?`, so a model can compose
-/// a call from the declaration alone: a bare list of names makes it guess, and
-/// a wrong guess costs a round trip to a `-32602`. Descriptions stay out —
-/// they are the expensive part, and the handlers reject a bad type by name.
-fn tool_declarations() -> String {
-    let specs = tool_specs();
-    let Some(tools) = specs.get("tools").and_then(|t| t.as_array()) else {
-        return String::new();
-    };
-    let lines: Vec<String> = tools
-        .iter()
-        .filter_map(|spec| {
-            let name = spec.get("name")?.as_str()?;
-            let schema = spec.get("inputSchema");
-            let empty = serde_json::Map::new();
-            let properties = schema
-                .and_then(|schema| schema.get("properties"))
-                .and_then(|p| p.as_object())
-                .unwrap_or(&empty);
-            let required: Vec<&str> = schema
-                .and_then(|schema| schema.get("required"))
-                .and_then(|names| names.as_array())
-                .map(|names| names.iter().filter_map(|name| name.as_str()).collect())
-                .unwrap_or_default();
-            let args: Vec<String> = properties
-                .iter()
-                .map(|(key, value)| {
-                    let optional = if required.contains(&key.as_str()) {
-                        ""
-                    } else {
-                        "?"
-                    };
-                    format!("{key}{optional}: {}", declaration_type(value))
-                })
-                .collect();
-            if args.is_empty() {
-                Some(format!("  {name}(): Promise<object>;"))
-            } else {
-                Some(format!(
-                    "  {name}({{{}}}): Promise<object>;",
-                    args.join(", ")
-                ))
-            }
-        })
-        .collect();
-    lines.join("\n")
-}
-
-/// The JavaScript-facing type of one argument, read from its JSON schema.
-fn declaration_type(schema: &serde_json::Value) -> String {
-    if let Some(values) = schema.get("enum").and_then(|values| values.as_array()) {
-        let literals: Vec<String> = values
-            .iter()
-            .filter_map(|value| value.as_str())
-            .map(|value| format!("\"{value}\""))
-            .collect();
-        if !literals.is_empty() {
-            return literals.join(" | ");
-        }
-    }
-    // The sandbox has a single number type, so an integer reads as a number.
-    fn scalar(kind: &str) -> &str {
-        if kind == "integer" { "number" } else { kind }
-    }
-    match schema.get("type") {
-        Some(serde_json::Value::String(kind)) if kind == "array" => {
-            let item = schema
-                .get("items")
-                .map(declaration_type)
-                .unwrap_or_default();
-            format!("{item}[]")
-        }
-        Some(serde_json::Value::String(kind)) => scalar(kind).to_owned(),
-        Some(serde_json::Value::Array(kinds)) => kinds
-            .iter()
-            .filter_map(|kind| kind.as_str())
-            .map(scalar)
-            .collect::<Vec<_>>()
-            .join(" | "),
-        _ => "unknown".to_owned(),
-    }
-}
-
-/// The tool surface a script can call, one handler per tool name.
-///
-/// Each handler goes through [`dispatch_tool`] so a tool called from a script
-/// keeps the same telemetry, inflight gauge, and `check` gate outcome it has
-/// when called directly.
-fn tool_table() -> crate::sandbox::ToolTable {
-    TOOL_NAMES
-        .iter()
-        .map(|&name| {
-            let handler: crate::sandbox::ToolHandler =
-                Arc::new(move |args| analyzer_call(name, &args));
-            (name, handler)
-        })
-        .collect()
-}
-
-/// Run a script against the tool surface and return its result.
-fn tool_execute(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
-    reject_unknown(params, "execute", &["code"])?;
-    let code = req_str(params, "code")?;
-    let sandbox = crate::sandbox::Sandbox::new().map_err(|e| (-32603, e))?;
-    let result = sandbox.run(code, &tool_table()).map_err(|e| (-32602, e))?;
-    Ok(result)
+    tool_specs()
 }
 
 fn success_response(id: serde_json::Value, result: serde_json::Value) -> serde_json::Value {
@@ -3394,8 +3208,11 @@ mod tests {
 
     #[test]
     fn tool_specs_cover_every_dispatchable_name() {
-        // Order is irrelevant to dispatch, so compare as sets: the specs and
-        // the name list are maintained separately and only membership holds.
+        // The two lists are maintained separately and only membership is
+        // checked here, because `tools/list` advertises `tool_specs()` order,
+        // which differs from `TOOL_NAMES`: it lists `vulnerabilities`,
+        // `sql_risks`, `test_targets` where `TOOL_NAMES` has `test_targets`
+        // first.
         let mut declared: Vec<String> = tool_specs()["tools"]
             .as_array()
             .unwrap()
@@ -3406,15 +3223,22 @@ mod tests {
         let mut names: Vec<String> = TOOL_NAMES.iter().map(|n| (*n).to_owned()).collect();
         names.sort();
         assert_eq!(names, declared);
-        let mut table: Vec<String> = tool_table().keys().map(|n| (*n).to_owned()).collect();
-        table.sort();
-        assert_eq!(table, names);
+        // Every advertised name must reach a handler: a name in both lists with
+        // no `dispatch_analyzer` arm would be advertised yet unroutable, and
+        // the name gate would be the only thing rejecting it. `__probe__` is
+        // no tool's argument, so every handler rejects it before doing work.
+        for name in TOOL_NAMES {
+            let error = dispatch_analyzer(name, &serde_json::json!({ "__probe__": null })).err();
+            assert_ne!(
+                error.map(|(_, message)| message),
+                Some(format!("unknown tool '{name}'")),
+                "{name} is advertised but unroutable"
+            );
+        }
     }
 
     #[test]
     fn tool_specs_keep_their_documented_arguments() {
-        // The twenty schemas are no longer advertised directly, so these
-        // guarantees live here rather than in the integration suite.
         for key in ["baseline", "regressions", "thresholds", "coverage"] {
             assert!(
                 spec("check")["inputSchema"]["properties"][key].is_object(),
@@ -3501,53 +3325,6 @@ mod tests {
                 "{name}"
             );
         }
-    }
-
-    #[test]
-    fn declarations_list_every_tool_with_its_arguments() {
-        let declarations = tool_declarations();
-        for name in TOOL_NAMES {
-            assert!(
-                declarations.contains(&format!("{name}({{")),
-                "{name} missing"
-            );
-        }
-        // Arguments are listed too, otherwise a model cannot compose a call.
-        assert!(declarations.contains("sort_by"), "arguments must be listed");
-        assert!(declarations.lines().count() >= TOOL_NAMES.len());
-    }
-
-    #[test]
-    fn declarations_carry_argument_types_and_required_markers() {
-        let declarations = tool_declarations();
-        // A model composes a call from this text alone, so a wrong guess costs
-        // a round trip. Types and required-ness must both survive.
-        assert!(
-            declarations.contains("path?: string"),
-            "string type missing: {declarations}"
-        );
-        assert!(
-            declarations.contains("top?: number"),
-            "integer must read as number: {declarations}"
-        );
-        assert!(
-            declarations.contains("test_map?: string[]"),
-            "array type missing: {declarations}"
-        );
-        // `impact` declares `target` required; `path` is not.
-        assert!(
-            declarations.contains("impact({path?: string, target: string"),
-            "required argument not marked: {declarations}"
-        );
-        // Enums are the other guessable shape.
-        assert!(
-            declarations.contains("\"aggregate\" | \"include_authors\""),
-            "enum values missing: {declarations}"
-        );
-        assert!(
-            !declarations.contains("unknown"),
-            "every argument type must be renderable: {declarations}"
-        );
     }
 
     #[test]

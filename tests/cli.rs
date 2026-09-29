@@ -166,21 +166,40 @@ fn mcp_serves_tool_list_over_stdio() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    // The server advertises one tool; the analyzer surface reaches the model
-    // through the declaration block in its description.
-    assert_eq!(names, vec!["execute"]);
-    let description = value["result"]["tools"][0]["description"].as_str().unwrap();
-    for name in [
-        "analyze",
-        "analyze_changed",
-        "check",
-        "explain_metric",
-        "repo_summary",
-    ] {
+    assert_eq!(
+        names,
+        vec![
+            "analyze",
+            "analyze_changed",
+            "analyze_function",
+            "check",
+            "explain_metric",
+            "repo_summary",
+            "security_findings",
+            "sql_plan",
+            "vulnerabilities",
+            "sql_risks",
+            "test_targets",
+            "dependencies",
+            "impact",
+            "coupling",
+            "hotspots",
+            "duplication",
+            "policy",
+            "risk",
+            "debt",
+            "project",
+        ]
+    );
+    for tool in value["result"]["tools"].as_array().unwrap() {
+        let name = tool["name"].as_str().unwrap();
         assert!(
-            description.contains(&format!("{name}(")),
-            "{name} must be declared"
+            tool["description"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty()),
+            "{name} description"
         );
+        assert!(tool["inputSchema"].is_object(), "{name} input schema");
     }
 }
 

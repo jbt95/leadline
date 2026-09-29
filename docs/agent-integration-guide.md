@@ -130,84 +130,94 @@ where language or runtime configuration decides the real target);
 evidence, not a dependency). Inspect both lists, then make the smallest
 diff that covers them.
 
-## MCP: one `execute` tool
+## MCP: twenty direct analyzer tools
 
-The MCP server advertises one read-only tool, `execute`. A script runs inside
-the server and calls the twenty analyzer tools from a `tools` namespace, so a
-multi-tool workflow costs one round trip instead of twenty and intermediate
-reports never enter the model's context. The server never writes files in the
-analyzed repository, runs hooks, or executes project code. When
-`LEADLINE_METRICS_DIR` is set, tool calls additionally update the opt-in
-local metrics store in that directory ([telemetry.md](telemetry.md)); keep
-that directory outside the analyzed repository so the repository itself
-stays write-free. Each tool called from a script records its own telemetry, and
-the outer `execute` call is recorded too.
+The MCP server advertises the twenty analyzer tools directly. `tools/list`
+returns each name with its own description, read-only annotations, and JSON
+Schema, and `tools/call` routes a name straight to that analyzer, so a host
+discovers the whole surface with a `tools/list` request, independently of
+`initialize`, and calls one tool per request.
+The server never writes files in the analyzed repository, runs hooks, or
+executes project code. When `LEADLINE_METRICS_DIR` is set, every tool call also
+updates the opt-in local metrics store in that directory
+([telemetry.md](telemetry.md)); keep that directory outside the analyzed
+repository so the repository itself stays write-free. Each call is recorded in
+telemetry under its own tool name, so `analyze` and `check` are counted and
+timed separately.
 
 The
-default transport is stdio (`leadline mcp`), matching every `command: leadline, args: [mcp]` harness config; `leadline mcp --port [N] [--host ADDR]` serves the same tool over HTTP (`POST /mcp`, `GET /health`). A bare `--port` means 3000, `0` asks the OS, and a taken port falls back to a free one with the actual address on stderr.
+default transport is stdio (`leadline mcp`), matching every `command: leadline, args: [mcp]` harness config; `leadline mcp --port [N] [--host ADDR]` serves the same tools over HTTP (`POST /mcp`, `GET /health`). A bare `--port` means 3000, `0` asks the OS, and a taken port falls back to a free one with the actual address on stderr.
 
 HTTP limits apply to every request: 32 MiB body, 64 KiB of headers, an 8 KiB line cap, a five-second whole-request read deadline, a ten-second whole-response write deadline, and 64 concurrent connections (excess connections get 503). At most 64 MiB of request bodies may be buffered across all connections; further declared bodies get 503 instead of multiplying memory. Only HTTP/1.1 is spoken (505 otherwise), malformed request lines and header lines are 400, `Transfer-Encoding` is 501, empty POST bodies are 400, and a request must carry exactly one `Host` and one `Content-Length`. Loopback-bound listeners only accept loopback authorities; browser `Origin`s must be loopback `http(s)` origins (scheme-less origins are rejected). JSON-RPC batches are capped at 64 …
 
-### The `code` argument
+### Calling a tool
 
-`execute` takes one argument, `code`: a JavaScript **async function body**, not
-an expression. Use `return` to produce the result. Top-level `await`, loops,
-branching, and `Promise.all` all work, and the returned value must be
-JSON-serializable. Inside a script, each tool is an async function taking that
-tool's argument object and returning its report unchanged.
+`tools/call` takes `name` and an optional `arguments` object; omitting
+`arguments` is the same as passing none. The result is the MCP
+`CallToolResult` envelope: a `content` array holding one `text` block with the
+report serialized as JSON, and the same report object under `structuredContent`
+for clients that consume native JSON. Every report also carries
+`schema_version`, `analyzer_version`, and `metric_specs`.
 
-Pre-edit triage in one call:
+Pre-edit triage is three calls, each with its own arguments:
 
-```js
-const [risk, blast, related] = await Promise.all([
-  tools.risk({ path: "src/payment.ts" }),
-  tools.impact({ target: "src/payment.ts" }),
-  tools.coupling({ target: "src/payment.ts" }),
-]);
-return {
-  score: risk.risks[0]?.score,
-  dependents: blast.blast_radius,
-  oftenChangedWith: related.related.map((row) => row.path),
-};
+```console
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"risk","arguments":{"path":"src/payment.ts"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"impact","arguments":{"target":"src/payment.ts"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"coupling","arguments":{"target":"src/payment.ts"}}}
 ```
 
-Batch a gate over several paths, or fold a result into a decision:
+A JSON-RPC batch array is accepted on one line, so several independent tools
+can share a round trip; a batch of notifications (requests without an `id`)
+draws no response.
 
-```js
-const targets = ["src/a.ts", "src/b.ts"];
-const reports = [];
-for (const path of targets) {
-  const gate = await tools.check({ path, thresholds: { cognitive: 15 } });
-  if (!gate.passed) reports.push({ path, violations: gate.violations });
-}
-return reports.length === 0 ? { ok: true } : { ok: false, reports };
+Gating after an edit is one call per path, and the report names only what
+failed:
+
+```console
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"check","arguments":{"path":"src/payment.ts","thresholds":{"cognitive":15}}}}
 ```
 
-### Limits and errors
+`check` requires at least one threshold, or `regressions` together with
+`base` or `baseline`; its `passed` field is the verdict, and each violation row
+carries a `reason` array holding the threshold names that failed, `regression`
+for a delta gate, or `crap_unavailable` when a CRAP gate found no coverage
+record.
 
-A script has no filesystem, network, module, timer, or process access. One run
-is capped at 100 tool calls, 30 seconds of wall clock, and 64 MB of script
-memory. A tool that fails makes the script fail with
-`script error: <message>`, carrying the tool's own message. A syntax error or
-a thrown error reports the JavaScript message. Unknown `code` fields are
-rejected as invalid parameters.
+### Errors and capabilities
 
-The twenty analyzer tools are reachable only from a script. A direct call to
-one of their names is rejected with `unknown tool '<name>'; this server exposes
-only \`execute\`, which calls leadline tools from a script`.
+A tool returns analysis data only and none accepts caller-supplied code, so
+the interface has no script and a caller cannot compose several tools into a
+new capability: each request names one analyzer and passes only that
+analyzer's declared arguments. Filesystem access stays inside the reads the
+analysis path already performs — source files, an optional coverage file,
+`leadline.toml`, the index, and checked-in artifact files — and the only
+subprocess is the fixed-argument `git` adapter described in
+[security-model.md](security-model.md), which several tools invoke.
 
-### Tools available inside a script
+An unknown tool name is rejected with `unknown tool '<name>'`; an unknown
+argument key is rejected with `unknown <tool> argument '<key>'`; and a wrong
+type, a missing required argument, or an unusable artifact is rejected with
+`-32602` and the tool's own message. A `top` above the maximum is rejected
+rather than silently trimmed: 200 for the list tools, 50 for `repo_summary`.
+A list that was cut to `top` reports `truncated` so it is never mistaken for
+a complete one; the row tools that report a total also carry `total`. `risk` is
+the exception: it truncates its list to `top` (default 10) and reports no
+`truncated` flag, so nothing signals that rows were dropped — ask for a larger
+`top` or narrow `path` if you need the full ranking.
+
+### The twenty tools
 
 | Tool | Mirrors | Input | Output |
 | --- | --- | --- | --- |
 | `analyze` | `leadline analyze` | `path?`, `coverage?`, `top?`, `sort_by?`, `min_crap?`, `index?` | Ranked function rows. |
-| `analyze_changed` | `leadline changed` | `base?`, `path?`, `target?`, `renames?`, `explain?`, budget flags | Before/after changed rows. |
+| `analyze_changed` | `leadline changed` | `base?`, `path?`, `target?`, `renames?`, `explain?`, `top?`, `sort_by?`, `min_crap?`, `min_delta?` | Before/after changed rows. |
 | `analyze_function` | `leadline function` | `path`, `function`, `explain?` | One-function report, contributions with `explain`. |
 | `check` | `leadline check` | `path?`, `base?`/`baseline?`, `coverage?`, `thresholds?`, `regressions?`, `index?` | Violations-only report. |
 | `explain_metric` | `docs/metrics.md` | `metric` | Definition of one metric. |
 | `repo_summary` | — | `path?`, `top?`, `coverage?` | Totals plus top functions per metric; the CRAP list needs `coverage`. |
 | `test_targets` | `leadline test-targets` | `path?`, `coverage` (required), `top?` | Uncovered decision lines by CRAP. |
-| `sql_plan` | `leadline sql-plan` | `current`, `baseline`, cost/row/estimate limits?, `top?` | Plan regressions in checked-in EXPLAIN artifacts. |
+| `sql_plan` | `leadline sql-plan` | `current`, `baseline`, `max_cost_increase_percent?`, `max_plan_rows_ratio?`, `max_estimate_error_ratio?`, `top?` | Plan regressions in checked-in EXPLAIN artifacts. |
 | `security_findings` | `leadline security` | `sarif`, `baseline_sarif?`, `path?`, `base?`/`staged?`/`target?`, `minimum_severity?`, `new_only?`, `changed_only?`, `top?` | Scanner findings with code context. |
 | `vulnerabilities` | `leadline vulnerabilities` | `osv?`/`trivy?`, `baseline_osv?`/`baseline_trivy?`, `path?`, `base?`/`staged?`/`target?`, `minimum_severity?`, `top?` | Vulnerable deps with changed-import evidence. |
 | `sql_risks` | `leadline sql` | `path?`, `large_offset?`, `migration_roots?`, `minimum_severity?`, `top?` | Static PostgreSQL query risks. |
@@ -219,7 +229,11 @@ only \`execute\`, which calls leadline tools from a script`.
 | `duplication` | `leadline duplication` | `path?`, `base?` | Token clones, or new/existing/resolved drift. |
 | `policy` | `leadline policy` | `path?`, `base?` | Architecture-rule violations or drift. |
 | `debt` | `leadline debt` | `path?`, `base?`, `target?`, `renames?`, `since?` | Threshold and risk-score changes against a base. |
-| `project` | `leadline project` | `path?`, `target?`, `since?`, `coverage?`, `ownership?`, mutation/test-map artifacts | Canonical project summary KPIs. |
+| `project` | `leadline project` | `path?`, `target?`, `since?`, `coverage?`, `ownership?`, `pit?`, `stryker?`, `test_map?`, `snapshots?` | Canonical project summary KPIs. |
+
+A `?` marks an optional argument. `tools/list` carries the full per-tool
+schema — types, defaults, enums, and required arguments — and that is the
+authority; this table is the quick index.
 
 The `analyze` and `check` tools accept an optional `index` directory pointing at a repository index built by `leadline index`. Repeated post-edit calls then reuse unchanged file metrics instead of recomputing them. The server only ever reads the index and will never create or modify one. When the argument is absent the configured `[index].path` is used, and an unusable or missing index silently degrades to a full analysis.
 
