@@ -23,6 +23,12 @@
   a live harness release. Until then, all rows above are architectural.
 - "Direct CLI" means the harness can run `leadline` as a shell command.
 - "MCP" means the harness can consume the `leadline mcp` server (stdio by default, HTTP with `--port`).
+- The MCP server ships the `secret_scan` tool, so every MCP-capable row above
+  has a secret gate on demand (`mode` `worktree` or `staged`) without a native
+  plugin. It needs an installed `gitleaks`; without one the call fails visibly
+  instead of reporting a clean scan. It does not run on an edit hook, so a row
+  whose Secret gate cell says `block` or `warn after edit` still needs its
+  adapter or hook for automatic gating.
 - Prefer MCP where supported, direct CLI where shell execution exists,
   reusable instructions everywhere, and a native plugin only when it
   materially improves UX (lower context use, automatic changed-code

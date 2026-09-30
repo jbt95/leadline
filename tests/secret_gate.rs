@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 mod common;
-use common::{temporary_directory, write_executable};
+use common::{temporary_directory, tool_available, write_executable};
 
 fn runner() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("integrations/common/leadline-secret-check.sh")
@@ -785,4 +785,396 @@ fn compatibility_matrix_names_secret_gate_mode() {
             "row must not hide behind vague supported text: {row}"
         );
     }
+}
+
+/// One JSON-RPC call against `leadline mcp` rooted at `repo`, returning the
+/// tool's structured result.
+fn mcp_call(repo: &Path, id: u64, name: &str, arguments: &str) -> serde_json::Value {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = common::leadline()
+        .arg("mcp")
+        .current_dir(repo)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(
+            format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/call\",\
+                  \"params\":{{\"name\":\"{name}\",\"arguments\":{arguments}}}}}\n"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "mcp server exited with a failure");
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stdout)));
+    response["result"]["structuredContent"].clone()
+}
+
+/// Commit `files`, then leave `changed` modified against HEAD.
+fn repository_with_change(name: &str, files: &[(&str, &str)], changed: &[(&str, &str)]) -> PathBuf {
+    let root = temporary_directory().join(name);
+    std::fs::create_dir_all(&root).unwrap();
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?} failed");
+    };
+    git(&["init", "-q"]);
+    // Only the committed state goes in first; `changed` lands after the
+    // commit, so it is a real modification against HEAD.
+    for (path, contents) in files {
+        let file = root.join(path);
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(file, contents).unwrap();
+    }
+    git(&["add", "-A", "--", "."]);
+    git(&[
+        "-c",
+        "user.name=leadline",
+        "-c",
+        "user.email=leadline@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "fixture",
+    ]);
+    for (path, contents) in changed {
+        std::fs::write(root.join(path), contents).unwrap();
+    }
+    root
+}
+
+/// A detectable key that needs no network and no real credential.
+///
+/// Assembled from fragments: a contiguous private-key header in this source
+/// file would trip leadline's own secret gate, which blocks commits for
+/// anyone who installs the pre-commit hook. What lands on disk is a real
+/// match, so the scan under test still has something to find.
+fn fake_secret() -> String {
+    let header = format!("{}RSA {}\n", "-----BEGIN ", "PRIVATE KEY-----");
+    let footer = format!("{}RSA {}\n", "-----END ", "PRIVATE KEY-----");
+    format!("{header}MIIEowIBAAKCAQEAx0Z0N1q2w3e4r5t6y7u8i9o0p1a2s3d4f5g6h7j8k9l0\n{footer}")
+}
+
+/// The same header, for asserting no secret material reached the caller.
+const KEY_MARKER: &str = "BEGIN RSA PRIVATE";
+
+#[test]
+fn mcp_secret_scan_reports_a_committed_secret_as_a_violation() {
+    if !tool_available("gitleaks") {
+        eprintln!("skipping: gitleaks is not installed");
+        return;
+    }
+    let root = repository_with_change(
+        "mcp-secret-found",
+        &[("app/config.txt", "placeholder = \"none\"\n")],
+        &[("app/config.txt", &fake_secret())],
+    );
+
+    let result = mcp_call(&root, 1, "secret_scan", "{}");
+    assert_eq!(result["tool"], "secret_scan", "{result}");
+    assert_eq!(result["mode"], "worktree", "{result}");
+    assert_eq!(result["status"], "findings", "{result}");
+    let violations = result["violations"].as_array().unwrap();
+    assert!(!violations.is_empty(), "{result}");
+    assert_eq!(violations[0]["path"], "app/config.txt", "{result}");
+    // The gate floors at low, and a gitleaks finding carries no severity of
+    // its own, so it must not fall through the floor unnoticed.
+    assert!(
+        ["low", "medium", "high", "critical"]
+            .contains(&violations[0]["severity"].as_str().unwrap()),
+        "{result}"
+    );
+    // No secret material reaches the caller: a finding is a location, never
+    // the matched text.
+    let serialized = result.to_string();
+    assert!(!serialized.contains(KEY_MARKER), "{serialized}");
+    assert!(
+        !serialized.contains("MIIEowIBAAKCAQEAx0Z0N1q2w3e4r5t6y7u8i9o0p1a2s3d4f5g6h7j8k9l0"),
+        "{serialized}"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn mcp_secret_scan_reports_a_clean_change_as_clean() {
+    if !tool_available("gitleaks") {
+        eprintln!("skipping: gitleaks is not installed");
+        return;
+    }
+    let root = repository_with_change(
+        "mcp-secret-clean",
+        &[("app/config.txt", "placeholder = \"none\"\n")],
+        &[("app/config.txt", "retired = true\n")],
+    );
+
+    let result = mcp_call(&root, 1, "secret_scan", "{}");
+    assert_eq!(result["status"], "clean", "{result}");
+    assert!(
+        result["violations"].as_array().unwrap().is_empty(),
+        "{result}"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn mcp_secret_scan_skips_the_scanner_on_an_unchanged_repository() {
+    let root = repository_with_change(
+        "mcp-secret-untouched",
+        &[("app/config.txt", "placeholder = \"none\"\n")],
+        &[],
+    );
+
+    // No changed paths, so no scanner is needed and none runs: this holds
+    // whether or not gitleaks is installed.
+    let result = mcp_call(&root, 1, "secret_scan", "{}");
+    assert_eq!(result["status"], "nothing_to_scan", "{result}");
+    assert!(
+        result["findings"].as_array().unwrap().is_empty(),
+        "{result}"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn mcp_secret_scan_fails_visibly_without_a_scanner() {
+    // A PATH holding git but not gitleaks: the change set is still listed, so
+    // the scan fails on the missing scanner rather than on missing git, and
+    // the call must fail rather than report a clean scan.
+    let root = repository_with_change(
+        "mcp-secret-no-scanner",
+        &[("app/config.txt", "placeholder = \"none\"\n")],
+        &[("app/config.txt", &fake_secret())],
+    );
+    let child = {
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut child = common::leadline()
+            .arg("mcp")
+            .current_dir(&root)
+            .env("PATH", git_directory())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\
+                  \"params\":{\"name\":\"secret_scan\",\"arguments\":{}}}\n",
+            )
+            .unwrap();
+        drop(child.stdin.take());
+        child
+    };
+    let output = child.wait_with_output().unwrap();
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let error = &response["error"];
+    assert_eq!(error["code"], -32603, "{response}");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("gitleaks not found"),
+        "{response}"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+/// The index against `HEAD` in a repository with a single commit: the case
+/// that used to fail with `bad revision 'HEAD~1'`.
+fn mcp_secret_scan_gates_the_staged_set() {
+    if !tool_available("gitleaks") {
+        eprintln!("skipping: gitleaks is not installed");
+        return;
+    }
+    let root = repository_with_change(
+        "mcp-secret-staged",
+        &[("app/config.txt", "placeholder = \"none\"\n")],
+        &[],
+    );
+    let staged = root.join("app/config.txt");
+    std::fs::write(&staged, fake_secret()).unwrap();
+    let git = Command::new("git")
+        .args(["add", "--", "app/config.txt"])
+        .current_dir(&root)
+        .status()
+        .unwrap();
+    assert!(git.success());
+
+    let result = mcp_call(&root, 1, "secret_scan", r#"{"mode":"staged"}"#);
+    assert_eq!(result["mode"], "staged", "{result}");
+    assert_eq!(result["status"], "findings", "{result}");
+    let violations = result["violations"].as_array().unwrap();
+    assert!(!violations.is_empty(), "{result}");
+    assert_eq!(violations[0]["path"], "app/config.txt", "{result}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn mcp_secret_scan_staged_reports_paths_outside_a_subdirectory_cwd() {
+    if !tool_available("gitleaks") {
+        eprintln!("skipping: gitleaks is not installed");
+        return;
+    }
+    let root = repository_with_change(
+        "mcp-secret-staged-subdir",
+        &[
+            ("app/config.txt", "placeholder = \"none\"\n"),
+            ("app/keep.txt", "keep\n"),
+        ],
+        &[],
+    );
+    // The key sits outside the directory the server is started in.
+    std::fs::create_dir_all(root.join("elsewhere")).unwrap();
+    std::fs::write(root.join("elsewhere/secret.txt"), fake_secret()).unwrap();
+    let git = Command::new("git")
+        .args(["add", "-A", "--", "."])
+        .current_dir(&root)
+        .status()
+        .unwrap();
+    assert!(git.success());
+
+    let result = mcp_call(&root.join("app"), 1, "secret_scan", r#"{"mode":"staged"}"#);
+    // The whole index is scanned, so a finding outside the working directory
+    // is still a finding: it must not be narrowed away into a clean scan.
+    assert_eq!(result["status"], "findings", "{result}");
+    let violations = result["violations"].as_array().unwrap();
+    assert_eq!(violations[0]["path"], "elsewhere/secret.txt", "{result}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn mcp_secret_scan_scans_a_changed_file_whose_name_looks_like_a_flag() {
+    if !tool_available("gitleaks") {
+        eprintln!("skipping: gitleaks is not installed");
+        return;
+    }
+    // `-r` is gitleaks' own short flag for --report-path. Passed bare it
+    // would consume the next argument and the file would never be scanned,
+    // which would read as a clean result.
+    let root = repository_with_change(
+        "mcp-secret-flag-name",
+        &[("keep.txt", "keep\n")],
+        &[("-r", &fake_secret())],
+    );
+
+    let result = mcp_call(&root, 1, "secret_scan", "{}");
+    assert_eq!(result["status"], "findings", "{result}");
+    assert_eq!(result["violations"][0]["path"], "-r", "{result}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn mcp_secret_scan_reports_a_deletions_only_change_as_nothing_to_scan() {
+    let root = repository_with_change(
+        "mcp-secret-deletions",
+        &[("app/config.txt", "placeholder = \"none\"\n")],
+        &[],
+    );
+    let removed = root.join("app/config.txt");
+    std::fs::remove_file(&removed).unwrap();
+
+    // A deletion cannot leak, so nothing is scannable and the scanner never
+    // runs. That is not the same claim as "scanned and clean".
+    let result = mcp_call(&root, 1, "secret_scan", "{}");
+    assert_eq!(result["status"], "nothing_to_scan", "{result}");
+    assert!(
+        result["violations"].as_array().unwrap().is_empty(),
+        "{result}"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn mcp_secret_scan_never_reports_a_temporary_path() {
+    if !tool_available("gitleaks") {
+        eprintln!("skipping: gitleaks is not installed");
+        return;
+    }
+    let root = repository_with_change(
+        "mcp-secret-no-temp-path",
+        &[("app/config.txt", "placeholder = \"none\"\n")],
+        &[("app/config.txt", &fake_secret())],
+    );
+
+    let result = mcp_call(&root, 1, "secret_scan", "{}");
+    // Provenance carries the report file name, never the private directory
+    // that held it, so a result cannot point at a path that no longer exists
+    // or reveal where reports are written.
+    let report_ids = result["violations"][0]["report_ids"].as_array().unwrap();
+    assert_eq!(
+        report_ids,
+        &vec![serde_json::json!("report.0.sarif")],
+        "{result}"
+    );
+    assert!(
+        !result.to_string().contains("leadline-secrets-"),
+        "{result}"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn the_shared_runner_gates_the_first_commit_of_a_repository() {
+    if !tool_available("gitleaks") {
+        eprintln!("skipping: gitleaks is not installed");
+        return;
+    }
+    // One commit, then a secret staged for the next. The runner resolved the
+    // index against HEAD~1, so here it skipped the gate: a repository's first
+    // secret-bearing commit was never checked.
+    let root = repository_with_change(
+        "runner-first-commit",
+        &[("app/config.txt", "placeholder = \"none\"\n")],
+        &[],
+    );
+    let secret = root.join("app/config.txt");
+    std::fs::write(&secret, fake_secret()).unwrap();
+    let git = Command::new("git")
+        .args(["add", "--", "app/config.txt"])
+        .current_dir(&root)
+        .status()
+        .unwrap();
+    assert!(git.success());
+
+    let output = Command::new("sh")
+        .arg(runner())
+        .current_dir(&root)
+        .env("LEADLINE_SECRET_MODE", "staged")
+        .env("LEADLINE_BIN", env!("CARGO_BIN_EXE_leadline"))
+        .env_remove("LEADLINE_METRICS_DIR")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the gate must fail on a staged secret: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("app/config.txt"),
+        "the finding must name the file: {stdout:?} {stderr:?}"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
 }

@@ -79,7 +79,7 @@ leadline changed --base origin/main --format agent-json
    "before": {"cognitive": 12}, "after": {"cognitive": 24}}]}
 ```
 
-**MCP server** (read-only; stdio by default, HTTP with `--port`). The server advertises the twenty analyzer tools directly: `tools/list` returns each name with its own JSON Schema, and `tools/call` routes a name straight to its analyzer. The tools are `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `security_findings`, `sql_plan`, `vulnerabilities`, `sql_risks`, `test_targets`, `dependencies`, `impact`, `coupling`, `hotspots`, `duplication`, `policy`, `risk`, `debt`, and `project`. Each returns analysis data only and none accepts caller-supplied code, so no script can compose them; filesystem access stays inside the reads the analysis path already performs, and the only subprocess is the fixed-argument `git` adapter. Its only writes are the opt-in local metrics store ([docs/telemetry.md](docs/telemetry.md)):
+**MCP server** (read-only; stdio by default, HTTP with `--port`). The server advertises the twenty-one analyzer tools directly: `tools/list` returns each name with its own JSON Schema, and `tools/call` routes a name straight to its analyzer. The tools are `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `secret_scan`, `security_findings`, `sql_plan`, `vulnerabilities`, `sql_risks`, `test_targets`, `dependencies`, `impact`, `coupling`, `hotspots`, `duplication`, `policy`, `risk`, `debt`, and `project`. Each returns analysis data only and none accepts caller-supplied code, so no script can compose them; filesystem access stays inside the reads the analysis path already performs, and the only subprocess is the fixed-argument `git` adapter — except `secret_scan`, which runs an installed `gitleaks` (always `--redact`) to scan the changed paths for secrets. Its only writes are the opt-in local metrics store ([docs/telemetry.md](docs/telemetry.md)) and `secret_scan`'s private temporary report directory:
 
 ```console
 leadline mcp
@@ -104,7 +104,7 @@ parameters, so a typo never runs as a default. Before editing a file, `risk`,
 and what usually changes with it; after editing, `check` gates the changed
 code and names only what failed. Every call is recorded in the metrics store
 under its own tool name. See
-[docs/agent-integration-guide.md](docs/agent-integration-guide.md#mcp-twenty-direct-analyzer-tools)
+[docs/agent-integration-guide.md](docs/agent-integration-guide.md#mcp-twenty-one-direct-analyzer-tools)
 for the full interface and the per-tool arguments.
 
 **Local metrics server.** `leadline stats` analyzes once and serves the page and the canonical `Project` JSON over loopback. The page covers the quality gate, measures, complexity distributions, hotspots, coupling, trends, policy violations, and live telemetry — sorting and filtering canonical values only, and naming the reason when a section has no data to show. Read-only with respect to the repository, and the URL goes to stderr so stdout stays clean:
@@ -140,7 +140,7 @@ leadline check . --cognitive 15 --cyclomatic 10 --max-nesting 4
 flowchart TD
     CLI["CLI: analyze, function, changed, check, hotspots, risk, project, security, vulnerabilities, sql, sql-plan, ..."]
     CLI --> Human["Humans and CI: terminal, JSON, SARIF, exit codes 0-5"]
-    CLI --> MCP["MCP server, read-only stdio or HTTP: twenty direct analyzer tools"]
+    CLI --> MCP["MCP server, read-only stdio or HTTP: twenty-one direct analyzer tools"]
     MCP --> Harnesses["Claude Code, Pi, OMP, OpenCode, Codex, Gemini, Cursor, Cline, Windsurf, Copilot"]
     CLI --> Stats["Local metrics server, read-only loopback page: stats"]
     Stats --> Human
@@ -204,6 +204,12 @@ installed `gitleaks`, always redacted):
 
 ```console
 cp integrations/git-hooks/pre-commit .git/hooks/pre-commit
+```
+
+Any MCP host can run the same gate as a tool, with no native plugin:
+
+```console
+leadline mcp   # then tools/call secret_scan with mode "worktree" or "staged"
 ```
 
 For refactors without useful Git history, pin a snapshot and gate against it:

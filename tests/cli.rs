@@ -175,6 +175,7 @@ fn mcp_serves_tool_list_over_stdio() {
             "check",
             "explain_metric",
             "repo_summary",
+            "secret_scan",
             "security_findings",
             "sql_plan",
             "vulnerabilities",

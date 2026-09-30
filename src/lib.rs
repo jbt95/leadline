@@ -28,6 +28,7 @@ pub mod render;
 pub mod report;
 pub mod risk;
 pub mod sarif;
+pub mod secrets;
 pub mod security;
 pub mod snapshots;
 pub mod source_snapshot;

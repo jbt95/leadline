@@ -130,15 +130,19 @@ where language or runtime configuration decides the real target);
 evidence, not a dependency). Inspect both lists, then make the smallest
 diff that covers them.
 
-## MCP: twenty direct analyzer tools
+## MCP: twenty-one direct analyzer tools
 
-The MCP server advertises the twenty analyzer tools directly. `tools/list`
+The MCP server advertises the twenty-one analyzer tools directly. `tools/list`
 returns each name with its own description, read-only annotations, and JSON
 Schema, and `tools/call` routes a name straight to that analyzer, so a host
 discovers the whole surface with a `tools/list` request, independently of
 `initialize`, and calls one tool per request.
 The server never writes files in the analyzed repository, runs hooks, or
-executes project code. When `LEADLINE_METRICS_DIR` is set, every tool call also
+executes project code. `secret_scan` is the one tool that runs a subprocess —
+an installed `gitleaks`, described under
+[Secret gating operational limits](#secret-gating-operational-limits) — and
+its reports live in a private temporary directory outside the repository.
+When `LEADLINE_METRICS_DIR` is set, every tool call also
 updates the opt-in local metrics store in that directory
 ([telemetry.md](telemetry.md)); keep that directory outside the analyzed
 repository so the repository itself stays write-free. Each call is recorded in
@@ -206,7 +210,7 @@ the exception: it truncates its list to `top` (default 10) and reports no
 `truncated` flag, so nothing signals that rows were dropped — ask for a larger
 `top` or narrow `path` if you need the full ranking.
 
-### The twenty tools
+### The twenty-one tools
 
 | Tool | Mirrors | Input | Output |
 | --- | --- | --- | --- |
@@ -219,6 +223,7 @@ the exception: it truncates its list to `top` (default 10) and reports no
 | `test_targets` | `leadline test-targets` | `path?`, `coverage` (required), `top?` | Uncovered decision lines by CRAP. |
 | `sql_plan` | `leadline sql-plan` | `current`, `baseline`, `max_cost_increase_percent?`, `max_plan_rows_ratio?`, `max_estimate_error_ratio?`, `top?` | Plan regressions in checked-in EXPLAIN artifacts. |
 | `security_findings` | `leadline security` | `sarif`, `baseline_sarif?`, `path?`, `base?`/`staged?`/`target?`, `minimum_severity?`, `new_only?`, `changed_only?`, `top?` | Scanner findings with code context. |
+| `secret_scan` | shared secret gate | `mode?` (`worktree`, `staged`) | `status` (`findings`, `clean`, `nothing_to_scan`), gated findings and violations. Runs `gitleaks`. |
 | `vulnerabilities` | `leadline vulnerabilities` | `osv?`/`trivy?`, `baseline_osv?`/`baseline_trivy?`, `path?`, `base?`/`staged?`/`target?`, `minimum_severity?`, `top?` | Vulnerable deps with changed-import evidence. |
 | `sql_risks` | `leadline sql` | `path?`, `large_offset?`, `migration_roots?`, `minimum_severity?`, `top?` | Static PostgreSQL query risks. |
 | `hotspots` | `leadline hotspots` | `path?`, `top?`, `since?`, `coverage?` | Churn/complexity/CRAP hotspot rows. |
@@ -288,7 +293,24 @@ ln -s ../../integrations/git-hooks/pre-commit .git/hooks/pre-commit
 
 Leadline itself never detects secrets: the shared runner delegates detection
 to an installed `gitleaks` binary (a prerequisite; a missing binary fails
-visibly, never silently). The pre-commit hook scans staged content and blocks
+visibly, never silently). The MCP server exposes the same gate as the
+`secret_scan` tool, so any MCP host can run it without a native plugin: it
+lists the paths changed against `HEAD` (untracked files count), hands them to
+`gitleaks` with a fixed argument vector and `--redact`, and gates the SARIF
+the scanner writes with the same floor the runner uses (`low`, narrowed to the
+scanned paths). `status` is `findings` when the gate has violations, `clean`
+when the scan ran and found none, and `nothing_to_scan` when no changed path
+was scannable — nothing changed, or only deletions — so an unscanned call
+never reads as a clean one. It takes `mode` only (`worktree`, the default, or
+`staged`), scans the server's working directory, and returns findings as
+locations, never matched text. `staged` scans the whole index and is gated at
+the repository root against `HEAD`, so a server started in a subdirectory
+still reports findings elsewhere in the repository. A missing `gitleaks`, a
+scanner failure, or a missing report is an error.
+The tool needs gitleaks 8.19 or newer, where `gitleaks dir` accepts a file as
+well as a directory; the shared runner's older `gitleaks detect` form keeps
+working on earlier scanners.
+The pre-commit hook scans staged content and blocks
 the commit on findings; agent adapters scan the worktree at the earliest
 supported lifecycle event, scoped to files changed against HEAD (untracked
 files count; an empty change set skips the scan). Warn/block capability by
