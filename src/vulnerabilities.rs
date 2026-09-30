@@ -230,18 +230,7 @@ pub fn assemble(request: &VulnerabilityRequest) -> crate::Result<VulnerabilityOu
     let (imports, available) = match &request.comparison {
         None => (Vec::new(), false),
         Some(comparison) => {
-            let (base, target) = match comparison {
-                crate::security::ChangeComparison::Base(base) => {
-                    (base.clone(), crate::diff::ComparisonTarget::Worktree)
-                }
-                crate::security::ChangeComparison::Staged => {
-                    ("HEAD~1".to_owned(), crate::diff::ComparisonTarget::Index)
-                }
-                crate::security::ChangeComparison::Target(revision) => (
-                    "HEAD~1".to_owned(),
-                    crate::diff::ComparisonTarget::Revision(revision.clone()),
-                ),
-            };
+            let (base, target) = comparison.options();
             let options = crate::diff::ChangeOptions {
                 base,
                 target,

@@ -2733,3 +2733,67 @@ fn unused_reports_unreachable_files_through_the_cli() {
 
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn security_staged_gates_the_index_against_head_in_a_single_commit_repository() {
+    // `--staged` resolves the index against HEAD. It used to resolve HEAD~1,
+    // which does not exist here: the gate failed with `bad revision` instead
+    // of reporting the staged finding, so the first commit of a repository
+    // escaped the shared secret gate entirely.
+    let (root, current, baseline) = security_repo();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "Test"]);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "only", "-q"]);
+    let args = [
+        "security",
+        root.to_str().unwrap(),
+        "--sarif",
+        current.to_str().unwrap(),
+        "--baseline-sarif",
+        baseline.to_str().unwrap(),
+        "--fail-on-severity",
+        "high",
+        "--changed-only",
+        "--staged",
+        "--json",
+    ];
+    // Nothing staged: the single commit is HEAD, so the index matches it.
+    let output = common::leadline().args(args).output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Stage the finding's file: the same gate now fails.
+    std::fs::write(
+        root.join("src/auth.ts"),
+        "function outer(x: number): number {\n  function login(y: number): number {\n    if (y > 0) { return 2; }\n    return 0;\n  }\n  return login(x);\n}\n",
+    )
+    .unwrap();
+    git(&root, &["add", "src/auth.ts"]);
+    let output = common::leadline().args(args).output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["findings"][0]["changed"], true, "{report}");
+
+    // Commit it. The secret is now in HEAD, so it is not what the next commit
+    // adds and must not gate it: HEAD~1 would have kept re-reporting it.
+    git(&root, &["commit", "-m", "second", "-q"]);
+    let output = common::leadline().args(args).output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an already committed finding must not gate the next commit: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

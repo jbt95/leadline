@@ -309,6 +309,27 @@ pub enum ChangeComparison {
     Target(String),
 }
 
+impl ChangeComparison {
+    /// The base revision and comparison target this request means.
+    ///
+    /// `Staged` is the index against `HEAD`: what a commit is about to add.
+    /// It used to resolve the index against `HEAD~1`, which failed outright in
+    /// a repository with a single commit and, where it did resolve, reported
+    /// findings from the previous commit as changed. `--staged` cannot be
+    /// paired with an explicit base, so the base is fixed here rather than
+    /// defaulted from the `HEAD~1` that `changed` and `diff` default to.
+    pub fn options(&self) -> (String, crate::diff::ComparisonTarget) {
+        match self {
+            Self::Base(base) => (base.clone(), crate::diff::ComparisonTarget::Worktree),
+            Self::Staged => ("HEAD".to_owned(), crate::diff::ComparisonTarget::Index),
+            Self::Target(revision) => (
+                "HEAD~1".to_owned(),
+                crate::diff::ComparisonTarget::Revision(revision.clone()),
+            ),
+        }
+    }
+}
+
 /// One assembled security request shared by the CLI, `check`, and MCP.
 ///
 /// `gate` of `None` keeps the command informational: findings still render
@@ -375,18 +396,7 @@ pub fn assemble(request: &SecurityRequest) -> Result<SecurityOutcome, SecurityEr
     let changed = match &request.comparison {
         None => None,
         Some(comparison) => {
-            let (base, target) = match comparison {
-                ChangeComparison::Base(base) => {
-                    (base.clone(), crate::diff::ComparisonTarget::Worktree)
-                }
-                ChangeComparison::Staged => {
-                    ("HEAD~1".to_owned(), crate::diff::ComparisonTarget::Index)
-                }
-                ChangeComparison::Target(revision) => (
-                    "HEAD~1".to_owned(),
-                    crate::diff::ComparisonTarget::Revision(revision.clone()),
-                ),
-            };
+            let (base, target) = comparison.options();
             let options = crate::diff::ChangeOptions {
                 base,
                 target,

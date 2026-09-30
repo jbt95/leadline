@@ -4,6 +4,10 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Fixed
+
+- `security --staged` and `vulnerabilities --staged` no longer resolve the index against `HEAD~1`. `--staged` now compares `HEAD` against the index, which is what a pre-commit gate means. The old base failed outright in a repository with a single commit (`fatal: bad revision 'HEAD~1'`), so the shared secret gate skipped the check on the first commit of a repository and the MCP `secret_scan` tool with `mode: "staged"` returned that git error instead of a result; where it did resolve, it also reported findings from the previous commit as changed, re-warning about secrets that were already committed. `--staged` cannot be combined with an explicit `--base`, so this changes what that flag reports and overrides no explicit request: `changed`, `diff`, and `debt` keep their documented `HEAD~1` default base. The comparison now resolves through one shared definition instead of two copies.
+
 ## 0.22.0 - 2026-09-29
 
 ### Changed (breaking)
