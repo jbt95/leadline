@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 1.0.0 - 2026-10-03
+
 ### Removed
 
 - Secret scanning, in every form, and with it leadline's only dependency on an external
