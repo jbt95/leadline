@@ -31,7 +31,7 @@ authorities are rejected, as are files over 64 MiB, aggregate input over
 value, then the SARIF `level` (`note`/`warning`/`error` map to
 `low`/`medium`/`high`). A gitleaks result carrying none of those defaults to
 `high` — gitleaks emits no severity signal, and a detected secret is a
-concrete credential exposure the shared secret gate must block. Labels map
+concrete credential exposure. Labels map
 case-insensitively (`moderate` is `medium`);
 numeric 0–10 scores map `<4` low, `<7` medium, `<9` high, `>=9` critical.
 Otherwise missing or unparseable severity stays `unknown`, which sits below

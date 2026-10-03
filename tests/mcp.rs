@@ -12,14 +12,13 @@ fn request(method: &str, params: Value) -> String {
 /// Advertisement order of `tools/list`, which returns `tool_specs()` as-is.
 /// This differs from `TOOL_NAMES` for one group: `tool_specs()` lists
 /// `vulnerabilities`, `sql_risks`, then `test_targets`.
-const MCP_TOOL_NAMES: [&str; 21] = [
+const MCP_TOOL_NAMES: [&str; 20] = [
     "analyze",
     "analyze_changed",
     "analyze_function",
     "check",
     "explain_metric",
     "repo_summary",
-    "secret_scan",
     "security_findings",
     "sql_plan",
     "vulnerabilities",
@@ -1240,7 +1239,6 @@ fn native_tool_names_do_not_collide_with_mcp_tool_names() {
         "leadline_changed".to_owned(),
         "leadline_function".to_owned(),
         "leadline_gate".to_owned(),
-        "leadline_secret_check".to_owned(),
     ]);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     for plugin in [
@@ -1258,7 +1256,7 @@ fn native_tool_names_do_not_collide_with_mcp_tool_names() {
         }
         assert_eq!(
             names, expected,
-            "{plugin} must register the same four native tools"
+            "{plugin} must register the same three native tools"
         );
     }
 }
@@ -2839,54 +2837,5 @@ fn mcp_records_sessions_methods_and_payloads() {
     assert!(
         text.contains(r#"leadline_mcp_inflight_calls{transport="http"} 0"#),
         "{text}"
-    );
-}
-
-#[test]
-fn secret_scan_advertises_its_mode_and_nothing_else() {
-    let spec = tool_spec("secret_scan");
-    assert_eq!(spec["annotations"]["readOnlyHint"], true);
-    assert_eq!(spec["annotations"]["openWorldHint"], false);
-    let mode = &spec["inputSchema"]["properties"]["mode"];
-    assert_eq!(mode["type"], "string");
-    assert_eq!(mode["default"], "worktree");
-    assert_eq!(mode["enum"], serde_json::json!(["worktree", "staged"]));
-    // Nothing else is accepted: the scan root is the server's working
-    // directory, and no caller argument reaches the scanner.
-    assert_eq!(
-        spec["inputSchema"]["properties"].as_object().unwrap().len(),
-        1
-    );
-    assert!(spec["inputSchema"].get("required").is_none());
-}
-
-#[test]
-fn secret_scan_rejects_an_unknown_mode_before_scanning() {
-    // No scan runs: the mode is rejected first, so this needs no gitleaks.
-    let response = call_tool("secret_scan", serde_json::json!({ "mode": "index" }));
-    let error = error_of(&response);
-    assert_eq!(error["code"], -32602, "{response}");
-    assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("expected 'worktree' or 'staged'"),
-        "{response}"
-    );
-}
-
-#[test]
-fn secret_scan_rejects_an_unknown_argument() {
-    // `path` is deliberately not a parameter: a caller cannot point the scan
-    // somewhere else, and cannot pass code either.
-    let response = call_tool("secret_scan", serde_json::json!({ "path": "." }));
-    let error = error_of(&response);
-    assert_eq!(error["code"], -32602, "{response}");
-    assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("unknown secret_scan argument 'path'"),
-        "{response}"
     );
 }

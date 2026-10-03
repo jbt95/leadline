@@ -795,8 +795,7 @@ pub(crate) fn severity_from_score(score: f64) -> SecuritySeverity {
 /// is present, otherwise gitleaks detections default to high. Gitleaks
 /// emits neither `level` nor `security-severity`, and a detected secret is
 /// a concrete credential exposure; without this default its findings stay
-/// unknown, unknown severities sit below every gate threshold, and the
-/// secret gate can flag but never block.
+/// unknown, and unknown severities sit below every gate threshold.
 fn tool_default_severity(tool: &str, result: &serde_json::Value) -> SecuritySeverity {
     let level = level_severity(result.get("level").and_then(|level| level.as_str()));
     if level != SecuritySeverity::Unknown {

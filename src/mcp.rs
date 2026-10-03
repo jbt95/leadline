@@ -41,17 +41,16 @@ const MAX_STDIO_LINE: usize = MAX_HTTP_BODY;
 
 /// Usage guidance returned by `initialize`. Hosts may inject this into the
 /// system prompt, so it doubles as the server's self-advertisement.
-const SERVER_INSTRUCTIONS: &str = "Always use leadline for C, C++, Go, Java, JavaScript, Python, TypeScript, TSX, Rust, Zig questions about complexity, maintainability, risk, hotspots, or change impact: deterministic function-level metrics without executing code or touching the network. Metrics are evidence, not objectives, so never rewrite code to lower a number without improving the design. The server exposes its analyzer tools directly. Leadline tools cover repo_summary, project, risk, impact, coupling, and hotspots to find what to inspect; analyze, analyze_function, and analyze_changed to measure; check to gate thresholds or regressions (pass coverage so CRAP gates are meaningful); explain_metric before interpreting a number; dependencies, duplication, policy, debt, and test_targets for structure; security_findings, vulnerabilities, sql_risks, and sql_plan for artifacts (needs pre-generated SARIF, OSV/Trivy, or EXPLAIN); and secret_scan to scan changed paths for committed secrets. All are read-only and never touch the network or a database; secret_scan is the one tool that runs an external scanner, an installed gitleaks that must be on PATH or the call fails visibly instead of reporting clean. The analyze and check tools accept an optional index directory and only ever read it. Start from repo_summary or project, then drill in; after editing, call analyze_changed against a base to spot regressions.";
+const SERVER_INSTRUCTIONS: &str = "Always use leadline for C, C++, Go, Java, JavaScript, Python, TypeScript, TSX, Rust, Zig questions about complexity, maintainability, risk, hotspots, or change impact: deterministic function-level metrics without executing code or touching the network. Metrics are evidence, not objectives, so never rewrite code to lower a number without improving the design. The server exposes its analyzer tools directly. Leadline tools cover repo_summary, project, risk, impact, coupling, and hotspots to find what to inspect; analyze, analyze_function, and analyze_changed to measure; check to gate thresholds or regressions (pass coverage so CRAP gates are meaningful); explain_metric before interpreting a number; dependencies, duplication, policy, debt, and test_targets for structure; security_findings, vulnerabilities, sql_risks, and sql_plan for artifacts (needs pre-generated SARIF, OSV/Trivy, or EXPLAIN). All are read-only and never touch the network or a database. The analyze and check tools accept an optional index directory and only ever read it. Start from repo_summary or project, then drill in; after editing, call analyze_changed against a base to spot regressions.";
 
-/// The twenty-one advertised analyzer tools. Keep in sync with [`tool_specs`].
-const TOOL_NAMES: [&str; 21] = [
+/// The twenty advertised analyzer tools. Keep in sync with [`tool_specs`].
+const TOOL_NAMES: [&str; 20] = [
     "analyze",
     "analyze_changed",
     "analyze_function",
     "check",
     "explain_metric",
     "repo_summary",
-    "secret_scan",
     "security_findings",
     "sql_plan",
     "test_targets",
@@ -579,7 +578,6 @@ fn dispatch_analyzer(
         "check" => tool_check(params),
         "explain_metric" => tool_explain_metric(params),
         "repo_summary" => tool_repo_summary(params),
-        "secret_scan" => tool_secret_scan(params),
         "sql_plan" => tool_sql_plan(params),
         "security_findings" => tool_security_findings(params),
         "vulnerabilities" => tool_vulnerabilities(params),
@@ -2385,108 +2383,6 @@ fn artifact_path(tool: &str, key: &str, path: &str) -> Result<PathBuf, (i64, Str
 ///
 /// Artifact arguments stay root-relative; absolute paths, unknown fields,
 /// non-array inputs, bad severities, and over-limit `top` are rejected.
-/// Scan the changed paths for committed secrets and gate the findings.
-///
-/// The gate matches the shell runner: minimum `low`, narrowed to the paths
-/// the mode compares, so an MCP caller and a pre-commit hook agree. A missing
-/// `gitleaks` is an error, never a clean result.
-fn tool_secret_scan(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
-    reject_unknown(params, "secret_scan", &["mode"])?;
-    let mode = match opt_str(params, "mode")? {
-        None => crate::secrets::SecretMode::Worktree,
-        Some(raw) => crate::secrets::SecretMode::parse(raw).ok_or((
-            -32602,
-            format!("unknown mode '{raw}': expected 'worktree' or 'staged'"),
-        ))?,
-    };
-    let path = match mode {
-        crate::secrets::SecretMode::Worktree => PathBuf::from("."),
-        // `gitleaks git --staged` scans the whole index and reports
-        // repository-root paths, so the gate has to be assembled at the
-        // repository root: a server started in a subdirectory would drop
-        // every finding outside it and answer "clean".
-        crate::secrets::SecretMode::Staged => crate::git::repo_root(Path::new("."))
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| PathBuf::from(".")),
-    };
-    let Some(scan) = crate::secrets::scan(&path, mode).map_err(secret_scan_error)? else {
-        return secret_scan_result(
-            mode,
-            "nothing_to_scan",
-            &serde_json::json!([]),
-            &serde_json::json!([]),
-            false,
-        );
-    };
-    if scan.reports().is_empty() {
-        // Paths changed, but none was scannable — a deletions-only change set.
-        // Reporting that as clean would claim a scan that never ran.
-        return secret_scan_result(
-            mode,
-            "nothing_to_scan",
-            &serde_json::json!([]),
-            &serde_json::json!([]),
-            false,
-        );
-    }
-    let outcome = crate::security::assemble(&crate::security::SecurityRequest {
-        path,
-        sarif: scan.reports().to_vec(),
-        baseline_sarif: Vec::new(),
-        comparison: Some(mode.comparison()),
-        gate: Some(crate::security::SecurityGate {
-            minimum: crate::security::SecuritySeverity::Low,
-            new_only: false,
-            changed_only: true,
-        }),
-    })
-    .map_err(|error| (-32602, error.message().to_owned()))?;
-    let top = crate::security::AGENT_DEFAULT_TOP;
-    let agent = crate::security::agent_json(&outcome.report, top);
-    let findings = agent
-        .get("findings")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!([]));
-    let (violations, violations_truncated) = cap_violations(&outcome.violations, top)?;
-    let truncated = agent
-        .get("truncated")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-        || violations_truncated;
-    let status = if outcome.violations.is_empty() {
-        "clean"
-    } else {
-        "findings"
-    };
-    secret_scan_result(mode, status, &findings, &violations, truncated)
-}
-
-/// Envelope for one secret scan. `status` says whether the scanner ran, so a
-/// caller never reads an unscanned call as a clean one.
-fn secret_scan_result(
-    mode: crate::secrets::SecretMode,
-    status: &str,
-    findings: &serde_json::Value,
-    violations: &serde_json::Value,
-    truncated: bool,
-) -> Result<serde_json::Value, (i64, String)> {
-    let mut fields = serde_json::Map::new();
-    fields.insert("tool".to_owned(), serde_json::json!("secret_scan"));
-    fields.insert("mode".to_owned(), serde_json::json!(mode.name()));
-    fields.insert("status".to_owned(), serde_json::json!(status));
-    fields.insert("findings".to_owned(), findings.clone());
-    fields.insert("violations".to_owned(), violations.clone());
-    fields.insert("truncated".to_owned(), serde_json::Value::from(truncated));
-    envelope(fields)
-}
-
-/// A missing scanner and a failed scan are both internal errors here; the
-/// message is what tells them apart, and it must never read as a clean scan.
-fn secret_scan_error(error: crate::secrets::SecretError) -> (i64, String) {
-    (-32603, error.message().to_owned())
-}
-
 fn tool_security_findings(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     reject_unknown(
         params,
@@ -2975,17 +2871,6 @@ fn tool_specs() -> serde_json::Value {
                         "path": { "type": "string", "default": "." },
                         "top": { "type": "integer", "minimum": 1, "maximum": 50, "default": 5, "description": "Functions kept per metric list." },
                         "coverage": { "type": "string", "description": "Coverage file path (.info for LCOV, .xml for JaCoCo) enabling the CRAP list." },
-                    },
-                },
-            },
-            {
-                "name": "secret_scan",
-                "description": "Scan the changed paths for committed secrets with an installed gitleaks 8.19+, always redacted, and gate what it finds. `status` is 'findings' (gate violations), 'clean' (scanned, none found), or 'nothing_to_scan' (no scannable changed path, so gitleaks never ran). Needs the gitleaks binary: without it the call fails instead of reporting clean. Scans the server's working directory, except `staged`, which scans the whole index and gates it against HEAD.",
-                "annotations": { "title": "Scan changed code for secrets", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "mode": { "type": "string", "enum": ["worktree", "staged"], "default": "worktree", "description": "Scan paths changed against HEAD, or the staged set." },
                     },
                 },
             },

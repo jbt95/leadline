@@ -21,14 +21,13 @@ MCP-capable harnesses.
 
 ## Option B — Native plugin for OpenCode V1
 
-Load `plugin/leadline.ts` as an OpenCode V1 plugin. It registers four
+Load `plugin/leadline.ts` as an OpenCode V1 plugin. It registers three
 stable tools that delegate to the shared adapter core and shell out to the
-same binary (the same four tools the V2 plugin and Pi register):
+same binary (the same three tools the V2 plugin and Pi register):
 
 - `leadline_changed` — changed functions vs git base
 - `leadline_function` — one function by file and name
 - `leadline_gate` — quality-gate check (warn mode)
-- `leadline_secret_check` — shared secret gate (warn mode, on demand)
 
 MCP on V2 uses a nested shape (`mcp.servers`); the local-stdio
 equivalent of Option A is:

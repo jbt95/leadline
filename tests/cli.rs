@@ -175,7 +175,6 @@ fn mcp_serves_tool_list_over_stdio() {
             "check",
             "explain_metric",
             "repo_summary",
-            "secret_scan",
             "security_findings",
             "sql_plan",
             "vulnerabilities",
@@ -2740,7 +2739,7 @@ fn security_staged_gates_the_index_against_head_in_a_single_commit_repository() 
     // `--staged` resolves the index against HEAD. It used to resolve HEAD~1,
     // which does not exist here: the gate failed with `bad revision` instead
     // of reporting the staged finding, so the first commit of a repository
-    // escaped the shared secret gate entirely.
+    // escaped the gate entirely.
     let (root, current, baseline) = security_repo();
     git(&root, &["init"]);
     git(&root, &["config", "user.email", "test@example.com"]);

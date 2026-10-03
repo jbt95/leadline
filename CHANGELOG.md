@@ -4,6 +4,24 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Removed
+
+- Secret scanning, in every form, and with it leadline's only dependency on an external
+  secret-detection binary. The `secret_scan` MCP tool, the shared shell runner
+  (`integrations/common/leadline-secret-check.sh`) and its Claude Code and Gemini wrappers,
+  the versioned `integrations/git-hooks/pre-commit` hook, and the native
+  `leadline_secret_check` tools on Pi, OMP, and OpenCode V1/V2 are all gone, so `gitleaks`
+  is no longer invoked, required, or documented. Detection was never leadline's own: every
+  one of those surfaces delegated to an installed scanner, and a missing scanner had to fail
+  loudly so an unscanned repository never read as a clean one. That guarantee only holds
+  while something actually runs the scan, so removing the gate removes the risk instead of
+  leaving a gate that can silently stop scanning. Leadline stays parse-only: it still never
+  executes project code and never detects secrets. Secret detection belongs to a dedicated
+  scanner in the commit pipeline; `security`, `check`, and `vulnerabilities` are unchanged and
+  still triage the SARIF, OSV, and Trivy artifacts such a scanner produces. SARIF triage
+  keeps its `gitleaks` severity fallback (a result with no severity and no rule severity
+  defaults to `high`), because a scanner report can still arrive from outside leadline.
+
 ## 0.23.0 - 2026-09-30
 
 ### Fixed

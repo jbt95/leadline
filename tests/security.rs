@@ -454,7 +454,7 @@ fn gitleaks_findings_without_severity_default_to_high() {
     .unwrap();
     assert_eq!(report.findings.len(), 1);
     assert_eq!(report.findings[0].severity, SecuritySeverity::High);
-    // The secret gate must trip: unknown severities never violate, so
+    // The gate must trip: unknown severities never violate, so
     // without this default the gate could flag but never block.
     let gate = SecurityGate {
         minimum: SecuritySeverity::Low,

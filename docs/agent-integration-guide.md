@@ -130,19 +130,15 @@ where language or runtime configuration decides the real target);
 evidence, not a dependency). Inspect both lists, then make the smallest
 diff that covers them.
 
-## MCP: twenty-one direct analyzer tools
+## MCP: twenty direct analyzer tools
 
-The MCP server advertises the twenty-one analyzer tools directly. `tools/list`
+The MCP server advertises the twenty analyzer tools directly. `tools/list`
 returns each name with its own description, read-only annotations, and JSON
 Schema, and `tools/call` routes a name straight to that analyzer, so a host
 discovers the whole surface with a `tools/list` request, independently of
 `initialize`, and calls one tool per request.
 The server never writes files in the analyzed repository, runs hooks, or
-executes project code. `secret_scan` is the one tool that runs a subprocess —
-an installed `gitleaks`, described under
-[Secret gating operational limits](#secret-gating-operational-limits) — and
-its reports live in a private temporary directory outside the repository.
-When `LEADLINE_METRICS_DIR` is set, every tool call also
+executes project code. When `LEADLINE_METRICS_DIR` is set, every tool call also
 updates the opt-in local metrics store in that directory
 ([telemetry.md](telemetry.md)); keep that directory outside the analyzed
 repository so the repository itself stays write-free. Each call is recorded in
@@ -210,7 +206,7 @@ the exception: it truncates its list to `top` (default 10) and reports no
 `truncated` flag, so nothing signals that rows were dropped — ask for a larger
 `top` or narrow `path` if you need the full ranking.
 
-### The twenty-one tools
+### The twenty tools
 
 | Tool | Mirrors | Input | Output |
 | --- | --- | --- | --- |
@@ -223,7 +219,6 @@ the exception: it truncates its list to `top` (default 10) and reports no
 | `test_targets` | `leadline test-targets` | `path?`, `coverage` (required), `top?` | Uncovered decision lines by CRAP. |
 | `sql_plan` | `leadline sql-plan` | `current`, `baseline`, `max_cost_increase_percent?`, `max_plan_rows_ratio?`, `max_estimate_error_ratio?`, `top?` | Plan regressions in checked-in EXPLAIN artifacts. |
 | `security_findings` | `leadline security` | `sarif`, `baseline_sarif?`, `path?`, `base?`/`staged?`/`target?`, `minimum_severity?`, `new_only?`, `changed_only?`, `top?` | Scanner findings with code context. |
-| `secret_scan` | shared secret gate | `mode?` (`worktree`, `staged`) | `status` (`findings`, `clean`, `nothing_to_scan`), gated findings and violations. Runs `gitleaks`. |
 | `vulnerabilities` | `leadline vulnerabilities` | `osv?`/`trivy?`, `baseline_osv?`/`baseline_trivy?`, `path?`, `base?`/`staged?`/`target?`, `minimum_severity?`, `top?` | Vulnerable deps with changed-import evidence. |
 | `sql_risks` | `leadline sql` | `path?`, `large_offset?`, `migration_roots?`, `minimum_severity?`, `top?` | Static PostgreSQL query risks. |
 | `hotspots` | `leadline hotspots` | `path?`, `top?`, `since?`, `coverage?` | Churn/complexity/CRAP hotspot rows. |
@@ -268,74 +263,7 @@ network-free. See `integrations/typesafe-triage/README.md`.
 ## Hooks
 
 The agent lifecycle hooks that report complexity default to warn-not-gate:
-they post findings as warnings and always exit `0`; the secret gates are the
-exception (see below). Enable quality gating by passing explicit thresholds to
-`leadline check` in your pipeline (violations exit `1`), not by default.
+they post findings as warnings and always exit `0`. Enable quality gating by
+passing explicit thresholds to `leadline check` in your pipeline (violations
+exit `1`), not by default.
 
-## Secret gating pre-commit hook
-
-`integrations/git-hooks/pre-commit` delegates to the shared
-`integrations/common/leadline-secret-check.sh` runner in staged mode and
-blocks the commit when findings fail the gate. Install it manually (Leadline
-does not install hooks automatically):
-
-```sh
-cp integrations/git-hooks/pre-commit .git/hooks/pre-commit
-```
-
-or symlink it:
-
-```sh
-ln -s ../../integrations/git-hooks/pre-commit .git/hooks/pre-commit
-```
-
-## Secret gating operational limits
-
-Leadline itself never detects secrets: the shared runner delegates detection
-to an installed `gitleaks` binary (a prerequisite; a missing binary fails
-visibly, never silently). The MCP server exposes the same gate as the
-`secret_scan` tool, so any MCP host can run it without a native plugin: it
-lists the paths changed against `HEAD` (untracked files count), hands them to
-`gitleaks` with a fixed argument vector and `--redact`, and gates the SARIF
-the scanner writes with the same floor the runner uses (`low`, narrowed to the
-scanned paths). `status` is `findings` when the gate has violations, `clean`
-when the scan ran and found none, and `nothing_to_scan` when no changed path
-was scannable — nothing changed, or only deletions — so an unscanned call
-never reads as a clean one. It takes `mode` only (`worktree`, the default, or
-`staged`), scans the server's working directory, and returns findings as
-locations, never matched text. `staged` scans the whole index and is gated at
-the repository root against `HEAD`, so a server started in a subdirectory
-still reports findings elsewhere in the repository. A missing `gitleaks`, a
-scanner failure, or a missing report is an error.
-The tool needs gitleaks 8.19 or newer, where `gitleaks dir` accepts a file as
-well as a directory; the shared runner's older `gitleaks detect` form keeps
-working on earlier scanners.
-The pre-commit hook scans staged content and blocks
-the commit on findings; agent adapters scan the worktree at the earliest
-supported lifecycle event, scoped to files changed against HEAD (untracked
-files count; an empty change set skips the scan). Warn/block capability by
-host: the Git hook, the Gemini checkpoint, and Pi's explicit
-`leadline_secret_check` tool block; the Claude Code `Stop` hook runs checks
-only (the per-turn secret scan was removed: a whole-tree scan on every turn
-while the gate only evaluates changed paths); Cline's `secretGate` runs the
-same shared wrapper (whether Cline honors exit `2` as blocking is
-unverified); Pi's and Cline's post-edit hooks only warn; and the OpenCode
-`leadline_secret_check` tool runs on demand in warn mode. Claude and Gemini
-only block on exit `2`, so the shared wrapper maps findings to exit `2` with
-the runner's redacted diagnostics on stderr;
-an unavailable scanner or runner, a scan failure, a bad mode, or a missing
-git comparison target exits `1` (visible to the user, non-blocking) so an
-environment miss cannot loop a Stop hook. Worktree mode checks the git HEAD
-it needs to diff against before scanning: a directory that is not a
-repository, or a repository with no commits, skips the gate without running
-gitleaks and reports exit `3` through the same visible, non-blocking path.
-The wrapper resolves
-`integrations/common/leadline-secret-check.sh` from the packaged extension
-(a vendored `common/` copy ships with the Claude Code plugin), from the
-checkout, from the host project directory
-(`GEMINI_PROJECT_DIR`/`CLAUDE_PROJECT_DIR`), or from
-`LEADLINE_SECRET_RUNNER`. Every invocation passes
-`--redact`, prints only fixed diagnostics (never SARIF, diffs, or secret
-values), and cleans its private temporary files via trap. To bypass,
-intentionally disable the installed hook or integration — there is no
-pass-through flag.

@@ -79,7 +79,7 @@ leadline changed --base origin/main --format agent-json
    "before": {"cognitive": 12}, "after": {"cognitive": 24}}]}
 ```
 
-**MCP server** (read-only; stdio by default, HTTP with `--port`). The server advertises the twenty-one analyzer tools directly: `tools/list` returns each name with its own JSON Schema, and `tools/call` routes a name straight to its analyzer. The tools are `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `secret_scan`, `security_findings`, `sql_plan`, `vulnerabilities`, `sql_risks`, `test_targets`, `dependencies`, `impact`, `coupling`, `hotspots`, `duplication`, `policy`, `risk`, `debt`, and `project`. Each returns analysis data only and none accepts caller-supplied code, so no script can compose them; filesystem access stays inside the reads the analysis path already performs, and the only subprocess is the fixed-argument `git` adapter — except `secret_scan`, which runs an installed `gitleaks` (always `--redact`) to scan the changed paths for secrets. Its only writes are the opt-in local metrics store ([docs/telemetry.md](docs/telemetry.md)) and `secret_scan`'s private temporary report directory:
+**MCP server** (read-only; stdio by default, HTTP with `--port`). The server advertises the twenty analyzer tools directly: `tools/list` returns each name with its own JSON Schema, and `tools/call` routes a name straight to its analyzer. The tools are `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `security_findings`, `sql_plan`, `vulnerabilities`, `sql_risks`, `test_targets`, `dependencies`, `impact`, `coupling`, `hotspots`, `duplication`, `policy`, `risk`, `debt`, and `project`. Each returns analysis data only and none accepts caller-supplied code, so no script can compose them; filesystem access stays inside the reads the analysis path already performs, and the only subprocess is the fixed-argument `git` adapter. Its only writes are the opt-in local metrics store ([docs/telemetry.md](docs/telemetry.md)):
 
 ```console
 leadline mcp
@@ -197,19 +197,6 @@ Gate scanner findings with code context (never runs scanners):
 
 ```console
 leadline security . --sarif findings.sarif --fail-on-severity high --new-only
-```
-
-Stop staged or agent-produced secrets before they leave the loop (delegates to
-installed `gitleaks`, always redacted):
-
-```console
-cp integrations/git-hooks/pre-commit .git/hooks/pre-commit
-```
-
-Any MCP host can run the same gate as a tool, with no native plugin:
-
-```console
-leadline mcp   # then tools/call secret_scan with mode "worktree" or "staged"
 ```
 
 For refactors without useful Git history, pin a snapshot and gate against it:

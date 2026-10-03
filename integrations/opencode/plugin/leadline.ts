@@ -2,23 +2,20 @@
 // adapter core: binary discovery, argument building, decoding, and
 // formatting all live in ../../agent-adapter-ts/core/index.js, so the V1 and
 // V2 tools behave identically. The `leadline` binary owns every metric.
-// Tool names are stable: leadline_changed, leadline_function, leadline_gate,
-// leadline_secret_check. `leadline_gate` (not `leadline_check`) because MCP
-// clients expose the `leadline` server's `check` tool as `leadline_check`,
-// and that namespaced tool silently shadows a native tool with the same name.
+// Tool names are stable: leadline_changed, leadline_function, leadline_gate.
+// `leadline_gate` (not `leadline_check`) because MCP clients expose the
+// `leadline` server's `check` tool as `leadline_check`, and that namespaced
+// tool silently shadows a native tool with the same name.
 import {
   runChanged,
   runCheck,
   runFunction,
-  runSecretGate,
-  secretGateMessage,
 } from "../../agent-adapter-ts/core/index.js";
 
 interface LeadlineArgs {
   base?: string;
   path?: string;
   name?: string;
-  mode?: string;
 }
 
 /// Failures surface as text so the model sees the analyzer error instead of a
@@ -55,16 +52,6 @@ export const tools = [
     parameters: {},
     execute() {
       return text(() => runCheck({}));
-    },
-  },
-  {
-    name: "leadline_secret_check",
-    description: "Call only when asked to scan for secrets; checks worktree or staged files via the shared gate (warn mode, never blocks).",
-    parameters: { mode: "worktree|staged, default worktree" },
-    execute({ mode = "worktree" }: LeadlineArgs) {
-      return text(() =>
-        runSecretGate(".", mode === "staged" ? "staged" : "worktree").then(secretGateMessage),
-      );
     },
   },
 ];

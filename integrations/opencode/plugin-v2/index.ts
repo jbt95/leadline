@@ -6,12 +6,12 @@
 //
 // Thin wrapper over the shared adapter core: the `leadline` binary owns all
 // metrics and formatting. Tool names stay stable:
-// leadline_changed, leadline_function, leadline_gate, leadline_secret_check.
+// leadline_changed, leadline_function, leadline_gate.
 // `leadline_gate` (not `leadline_check`) because MCP clients expose the
 // `leadline` server's `check` tool as `leadline_check`, and a native tool
 // with the same name is silently shadowed by that namespaced tool.
 import { Plugin } from "@opencode/plugin";
-import { DEFAULT_BASE, postEditFeedback, runChanged, runCheck, runFunction, runSecretGate, secretGateMessage } from "../../agent-adapter-ts/core/index.js";
+import { DEFAULT_BASE, postEditFeedback, runChanged, runCheck, runFunction } from "../../agent-adapter-ts/core/index.js";
 
 interface ChangedInput {
   base?: string;
@@ -114,29 +114,6 @@ export default Plugin.define({
         execute: async (_input, context) => {
           const directory = await directoryFor(context.sessionID);
           return textResult(() => runCheck({}, directory));
-        },
-      });
-      editor.add({
-        name: "leadline_secret_check",
-        description: "Call only when asked to scan for secrets; checks worktree or staged files via the shared gate (warn mode, never blocks).",
-        input: {
-          type: "object",
-          properties: {
-            mode: { type: "string", description: "scan scope: worktree or staged, default worktree" },
-          },
-          additionalProperties: false,
-        },
-        output: { type: "string" },
-        execute: async (input, context) => {
-          const { mode } = input as { mode?: string };
-          const directory = await directoryFor(context.sessionID);
-          return textResult(async () => {
-            const result = await runSecretGate(
-              directory ?? ".",
-              mode === "staged" ? "staged" : "worktree",
-            );
-            return secretGateMessage(result);
-          });
         },
       });
     });

@@ -8,12 +8,6 @@
             "type": "command",
             "command": "\"${extensionPath}/hooks/leadline-after-tool.sh\"",
             "timeout": 60000
-          },
-          {
-            "name": "leadline-secret-gate",
-            "type": "command",
-            "command": "\"${extensionPath}/hooks/leadline-secret-check.sh\"",
-            "timeout": 60000
           }
         ]
       }

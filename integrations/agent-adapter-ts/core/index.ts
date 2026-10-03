@@ -9,7 +9,6 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { isJsonObject } from "./json.js";
 import type { JsonObject, JsonValue } from "./json.js";
@@ -460,84 +459,6 @@ export async function runCheck(input: CheckInput, cwd?: string): Promise<string>
   const path = input.path !== undefined && input.path.length > 0 ? input.path : ".";
   const args = ["check", path, "--format", AGENT_FORMAT];
   return formatAnalysis(decodeAnalysis(await runCheckWithThresholds(args, cwd)));
-}
-
-// --- Shared secret gate (scanner via the versioned shell runner) ---
-//
-// The shell runner owns scanner invocation and redacted report handoff;
-// this module executes it with a fixed empty argument list and maps its
-// exit codes. No detection patterns live here.
-
-export type SecretGateMode = "worktree" | "staged";
-
-export type SecretGateStatus = "clean" | "findings" | "unavailable";
-
-export interface AdapterResult {
-  status: SecretGateStatus;
-  detail: string;
-}
-
-const SECRET_RUNNER_RELATIVE = ["..", "..", "common", "leadline-secret-check.sh"];
-
-function secretRunnerPath(): string {
-  const override = process.env.LEADLINE_SECRET_RUNNER;
-  if (override !== undefined && override.length > 0) {
-    return override;
-  }
-  return join(fileURLToPath(new URL(".", import.meta.url)), ...SECRET_RUNNER_RELATIVE);
-}
-
-function capDetail(text: string): string {
-  return capLines(text.split("\n")).join("\n");
-}
-
-export async function runSecretGate(root: string, mode: SecretGateMode): Promise<AdapterResult> {
-  const runner = secretRunnerPath();
-  try {
-    await execFileAsync(runner, [], {
-      cwd: root,
-      env: { ...process.env, LEADLINE_SECRET_MODE: mode },
-      maxBuffer: MAX_BUFFER_BYTES,
-    });
-    return { status: "clean", detail: "" };
-  } catch (error) {
-    const failure = error as { code?: string | number; stdout?: string; stderr?: string };
-    if (failure.code === "ENOENT") {
-      return { status: "unavailable", detail: "secret gate runner not found" };
-    }
-    const code = typeof failure.code === "number" ? failure.code : -1;
-    const stdout = typeof failure.stdout === "string" ? failure.stdout : "";
-    const stderr = typeof failure.stderr === "string" ? failure.stderr : "";
-    if (code === 1) {
-      return { status: "findings", detail: capDetail(stdout) };
-    }
-    if (code === 127) {
-      const hint = stderr.trim().length > 0 ? stderr.trim() : "secret scanner unavailable";
-      return { status: "unavailable", detail: capDetail(hint) };
-    }
-    // Exit 3 is the runner's "no git comparison target": the worktree gate
-    // skipped before scanning, so report it like any other environment miss.
-    if (code === 3) {
-      const hint = stderr.trim().length > 0 ? stderr.trim() : "no git comparison target";
-      return { status: "unavailable", detail: capDetail(hint) };
-    }
-    const detail = stderr.trim().length > 0 ? stderr.trim() : `secret gate failed with exit ${code}`;
-    throw new Error(capDetail(detail));
-  }
-}
-
-/// One-line status for an explicit secret-check tool call.
-///
-/// `unavailable` must never read as clean: a missing runner or scanner means
-/// the repository was not scanned, so the caller has to say so.
-export function secretGateMessage(result: AdapterResult): string {
-  if (result.status === "findings") {
-    return `leadline secret gate: possible secrets detected\n${result.detail}`;
-  }
-  if (result.status === "unavailable") {
-    return `leadline secret gate unavailable: ${result.detail}`;
-  }
-  return "leadline secret gate: clean";
 }
 
 // Post-edit feedback runs in warn mode only: it returns null (stays silent)
