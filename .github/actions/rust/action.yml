@@ -1,0 +1,33 @@
+name: Rust toolchain
+description: >-
+  Check out the repository and install the pinned stable Rust toolchain,
+  optionally with clippy and rustfmt for the lint job.
+
+inputs:
+  clippy-rustfmt:
+    description: Add clippy and rustfmt on top of the base toolchain.
+    required: false
+    default: "false"
+  fetch-depth:
+    description: History depth to check out; 0 is the full history.
+    required: false
+    default: "1"
+  ref:
+    description: Revision to check out; empty is the default checkout.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc7cc4b7b6c09 # v5
+      with:
+        ref: ${{ inputs.ref }}
+        fetch-depth: ${{ inputs.fetch-depth }}
+    - name: Install Rust
+      shell: bash
+      run: rustup update stable --no-self-update
+    - name: Install lint tools
+      if: inputs.clippy-rustfmt == 'true'
+      shell: bash
+      run: rustup component add clippy rustfmt

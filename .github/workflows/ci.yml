@@ -26,12 +26,9 @@ jobs:
           - windows-2025
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Install Rust
-        run: rustup update stable --no-self-update
-      - name: Install lint tools
-        if: matrix.runner == 'ubuntu-24.04'
-        run: rustup component add clippy rustfmt
+      - uses: ./.github/actions/rust
+        with:
+          clippy-rustfmt: ${{ matrix.runner == 'ubuntu-24.04' }}
       - name: Check formatting
         if: matrix.runner == 'ubuntu-24.04'
         run: cargo fmt --check
@@ -42,7 +39,9 @@ jobs:
         run: cargo test --locked
       - name: Compile benchmarks
         if: matrix.runner == 'ubuntu-24.04'
-        run: cargo bench --bench analyzer --bench history --no-run --locked
+        # Every declared bench, not a subset: a type error in one the analyzer
+        # job does not reach would otherwise pass the whole pull request.
+        run: cargo bench --no-run --locked
       - name: Build release binary
         run: cargo build --release --locked
 
@@ -50,7 +49,7 @@ jobs:
     name: Rust 1.90 compatibility
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc7cc4b7b6c09 # v5
       - run: rustup toolchain install 1.90 --profile minimal
       - run: rustup run 1.90 cargo check --locked
 
@@ -61,11 +60,9 @@ jobs:
     # on network flakiness; pull request and push runs are strict.
     continue-on-error: ${{ github.event_name == 'schedule' }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Install Rust
-        run: rustup update stable --no-self-update
+      - uses: ./.github/actions/rust
       - name: Audit dependencies
-        uses: rustsec/audit-check@v2
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check licenses and sources
@@ -78,10 +75,7 @@ jobs:
     name: Typecheck TS adapters
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "22"
+      - uses: ./.github/actions/node
       - name: Install pinned typecheck deps
         working-directory: integrations/agent-adapter-ts
         run: npm install --no-audit --no-fund
@@ -89,14 +83,26 @@ jobs:
         working-directory: integrations/agent-adapter-ts
         run: npm run check
 
+  opencode-v2-check:
+    name: Typecheck OpenCode V2 plugin
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: ./.github/actions/node
+      # This is the package the root `exports` points at, so it is what a
+      # consumer of `leadline/server` actually loads. The check deps are local:
+      # the host that loads the entry point resolves `@opencode/plugin` itself.
+      - name: Install plugin deps
+        working-directory: integrations/opencode/plugin-v2
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck
+        working-directory: integrations/opencode/plugin-v2
+        run: npm run check
+
   triage-checks:
     name: Triage companion checks
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "22"
+      - uses: ./.github/actions/node
       - name: Install pinned lint and typecheck deps
         working-directory: integrations/typesafe-triage
         run: npm ci --no-audit --no-fund

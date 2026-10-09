@@ -72,3 +72,12 @@ harness = false
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# `cargo bench` inherits release by default, which strips symbols from the
+# bench binaries and serializes codegen for no gain: profiling a Criterion
+# run needs symbols, and the benches are measured in bulk.
+[profile.bench]
+lto = false
+codegen-units = 256
+debug = true
+strip = false

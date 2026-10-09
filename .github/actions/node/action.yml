@@ -1,0 +1,27 @@
+name: Node toolchain
+description: Check out the repository and install the pinned Node runtime.
+
+inputs:
+  fetch-depth:
+    description: History depth to check out; 0 is the full history.
+    required: false
+    default: "1"
+  node-version:
+    description: Node major version to install.
+    required: false
+    default: "22"
+  ref:
+    description: Revision to check out; empty is the default checkout.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc7cc4b7b6c09 # v5
+      with:
+        ref: ${{ inputs.ref }}
+        fetch-depth: ${{ inputs.fetch-depth }}
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: ${{ inputs.node-version }}

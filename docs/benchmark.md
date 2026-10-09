@@ -51,6 +51,21 @@ in-memory entries, and `snapshot_dependencies` measures
 `analyze_dependencies_from_sources` over the same entries — the two stages
 a source snapshot runs without touching Git or the filesystem.
 
+Run the index-refresh benchmark:
+
+```console
+cargo bench --bench index
+```
+
+The index is the warm path `analyze --index DIR` and `check --index DIR`
+take, so the interesting number is not cold analysis but how much of it a
+second run avoids. The suite stages one repository index outside the timed
+loop, then compares a full cold `analyze_path` against a refresh that the
+index serves entirely from cached file metrics. Both stages measure the same
+workload, so the gap between them is the refresh saving rather than a
+change of units. The warm-refresh budget is recorded in
+`docs/performance-methodology.md`.
+
 Run an end-to-end repository measurement with platform tools:
 
 ```console

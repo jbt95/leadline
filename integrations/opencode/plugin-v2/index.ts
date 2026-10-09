@@ -83,6 +83,11 @@ export default Plugin.define({
         },
         output: { type: "string" },
         execute: async (input, context) => {
+          // The host validates `input` against the schema declared above before
+          // `execute` runs, so the shape is already checked at that boundary:
+          // `additionalProperties: false` rejects unknown keys and both
+          // properties are declared `string`. This assertion carries that
+          // invariant, which the compiler cannot see through the V2 API.
           const { base, path } = input as ChangedInput;
           const directory = await directoryFor(context.sessionID);
           return textResult(() => runChanged({ base, path }, directory));
@@ -135,13 +140,16 @@ export default Plugin.define({
       }
       const prior = event.result.content;
       const text = `leadline:\n${note}`;
-      if (typeof prior === "string") {
-        event.result.content = `${prior}\n${text}`;
-        return;
-      }
-      if (Array.isArray(prior)) {
-        event.result.content = [...prior, { type: "text" as const, text }];
-      }
+      // `Tool.Result` declares `content` readonly and the `execute.after`
+      // callback returns `void`, so the note attaches by replacing the whole
+      // result object with a fresh one that carries the original content.
+      event.result = {
+        ...event.result,
+        content:
+          typeof prior === "string"
+            ? `${prior}\n${text}`
+            : [...(prior ?? []), { type: "text" as const, text }],
+      };
     });
   },
 });
