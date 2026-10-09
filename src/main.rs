@@ -3507,6 +3507,14 @@ impl CommonOptions {
                 "--format sarif is only supported on analyze and check, not {command}"
             )));
         }
+        // `ci_format` is shaped by the scanner commands, not by analysis, so a
+        // command that never reads it must reject the value instead of
+        // silently printing the terminal report it would otherwise produce.
+        if ci_format.is_some() && command != "check" {
+            return Err(CliError::usage(format!(
+                "--format <ci-format> is only supported on check, not {command}"
+            )));
+        }
         if has_budget && !agent_json {
             return Err(CliError::usage(
                 "budget flags (--top, --sort-by, --min-crap) require --format agent-json",
