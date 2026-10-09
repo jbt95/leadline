@@ -1718,13 +1718,16 @@ fn security_findings_rejects_empty_sarif() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-fn vulnerabilities_fixture() -> (PathBuf, String, String) {
+fn vulnerabilities_fixture() -> (Fixture, String, String) {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    // Root-relative artifacts under the package root, cleaned up afterwards.
-    // Note: not under target/, which discovery excludes via .gitignore.
-    let root = PathBuf::from(format!("leadline-mcp-vuln-{}-{id}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    // Root-relative artifacts under the package root; `Fixture` removes them
+    // even when an assertion fails. Note: not under target/, which discovery
+    // excludes via .gitignore.
+    let root = Fixture::create(PathBuf::from(format!(
+        "leadline-mcp-vuln-{}-{id}",
+        std::process::id()
+    )));
     std::fs::create_dir_all(root.join("proj/src")).unwrap();
     std::fs::write(root.join("proj/src/app.ts"), "import _ from 'lodash';\n").unwrap();
     std::fs::write(root.join("osv.json"), r#"{"results": [{"source": {"path": "package-lock.json"}, "packages": [{"package": {"name": "lodash", "version": "4.17.20", "ecosystem": "npm"}, "vulnerabilities": [{"id": "GHSA-xxxx-yyyy-zzzz", "details": "SENTINEL", "database_specific": {"severity": "HIGH"}, "affected": [{"ranges": [{"type": "SEMVER", "events": [{"fixed": "4.17.21"}]}]}]}]}]}]}"#).unwrap();
@@ -1767,7 +1770,7 @@ fn vulnerabilities_is_reachable_and_named_in_instructions() {
 
 #[test]
 fn vulnerabilities_reports_import_evidence_directly() {
-    let (root, proj, osv) = vulnerabilities_fixture();
+    let (_root, proj, osv) = vulnerabilities_fixture();
     let arguments = serde_json::json!({ "path": proj, "osv": [osv], "minimum_severity": "low" });
     let response = call_tool("vulnerabilities", arguments);
     assert!(
@@ -1782,12 +1785,11 @@ fn vulnerabilities_reports_import_evidence_directly() {
     assert_eq!(result["truncated"], false);
     assert!(!result["violations"].as_array().unwrap().is_empty());
     assert!(!serde_json::to_string(&result).unwrap().contains("SENTINEL"));
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn vulnerabilities_uses_configured_minimum_severity() {
-    let (root, proj, osv) = vulnerabilities_fixture();
+    let (_root, proj, osv) = vulnerabilities_fixture();
     // `[vulnerabilities] minimum_severity` is the CLI's default gate and must
     // apply over MCP too, without repeating it in every call.
     std::fs::write(
@@ -1808,12 +1810,11 @@ fn vulnerabilities_uses_configured_minimum_severity() {
         !result["violations"].as_array().unwrap().is_empty(),
         "{result}"
     );
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn vulnerabilities_rejects_bad_arguments() {
-    let (root, proj, osv) = vulnerabilities_fixture();
+    let (_root, proj, osv) = vulnerabilities_fixture();
     let good = serde_json::json!({ "path": proj, "osv": [osv] });
     let mut bad = good.clone();
     bad["osv"] = serde_json::json!("osv.json");
@@ -1839,7 +1840,64 @@ fn vulnerabilities_rejects_bad_arguments() {
     let mut bad = good.clone();
     bad["minimum_severity"] = serde_json::json!("bogus");
     assert!(call_tool("vulnerabilities", bad).get("error").is_some());
-    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// `base`, `staged`, and `target` all answer the same question, so two at once
+/// is ambiguous rather than a merge. Both gated scanner tools enforce that
+/// through one shared helper, and the three error messages are the contract.
+#[test]
+fn gated_tools_reject_two_comparison_selectors_at_once() {
+    let (_root, proj, osv) = vulnerabilities_fixture();
+    let base = serde_json::json!({
+        "path": proj,
+        "osv": [osv],
+        "base": "HEAD",
+        "staged": true,
+    });
+    let staged_target = serde_json::json!({
+        "path": proj,
+        "osv": [osv],
+        "staged": true,
+        "target": "HEAD",
+    });
+    let base_target = serde_json::json!({
+        "path": proj,
+        "osv": [osv],
+        "base": "HEAD",
+        "target": "HEAD",
+    });
+    for (label, arguments, message) in [
+        ("base+staged", base, "base and staged are exclusive"),
+        (
+            "staged+target",
+            staged_target,
+            "staged and target are exclusive",
+        ),
+        ("base+target", base_target, "base and target are exclusive"),
+    ] {
+        for tool in ["vulnerabilities", "security_findings"] {
+            let mut arguments = arguments.clone();
+            // security_findings needs its own required artifact argument.
+            if tool == "security_findings" {
+                arguments["sarif"] = serde_json::json!(["x.sarif"]);
+                arguments.as_object_mut().unwrap().remove("osv");
+            }
+            let response = call_tool(tool, arguments);
+            assert_eq!(
+                error_of(&response)["code"].as_i64(),
+                Some(-32602),
+                "{tool} {label} must be an invalid-params error"
+            );
+            assert_eq!(
+                error_of(&response)["message"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_default(),
+                message,
+                "{tool} {label} must name the conflicting pair"
+            );
+        }
+    }
 }
 
 fn sql_risks_fixture() -> (Fixture, String) {

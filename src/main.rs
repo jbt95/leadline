@@ -164,6 +164,17 @@ fn cli_operation(raw: &str) -> &str {
     }
 }
 
+/// Every analysis command refuses to print an empty report: no supported files
+/// under PATH is an incomplete analysis (exit 3), not a clean tree.
+fn no_supported_files(path: &Path) -> CliError {
+    CliError::incomplete(format!("no supported files found under {}", path.display()))
+}
+
+/// One unknown-option message for every command, so the wording cannot drift.
+fn unknown_option(command: &str, value: &str) -> CliError {
+    CliError::usage(format!("unknown {command} option '{value}'"))
+}
+
 /// Coarse outcome label for local metrics, mirroring the exit-code contract.
 fn outcome_label(result: &Result<ExitCode, CliError>) -> &'static str {
     match result {
@@ -294,7 +305,7 @@ fn index_command(args: &[String]) -> Result<ExitCode, CliError> {
             "--verify" => verify = true,
             "--json" => json = true,
             value if !value.starts_with('-') && path.is_none() => path = Some(value.to_owned()),
-            value => return Err(CliError::usage(format!("unknown index option '{value}'"))),
+            value => return Err(unknown_option("index", value)),
         }
         position += 1;
     }
@@ -343,11 +354,7 @@ fn index_command(args: &[String]) -> Result<ExitCode, CliError> {
         }
     });
     if json {
-        println!(
-            "{}",
-            serde_json::to_string(&payload)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&payload, false)?;
     } else {
         let row = &payload["index"];
         println!(
@@ -366,10 +373,7 @@ fn index_command(args: &[String]) -> Result<ExitCode, CliError> {
 fn analyze_command(args: &[String]) -> Result<ExitCode, CliError> {
     let options = CommonOptions::parse(args, "analyze")?;
     let config = load_config_for(&options.path)?;
-    let excludes: &[String] = config
-        .as_ref()
-        .map(|selected| selected.analysis_excludes.as_slice())
-        .unwrap_or(&[]);
+    let excludes = analysis_excludes(config.as_ref());
     let index_dir = resolve_index_dir(&options.path, options.index_dir.as_deref(), config.as_ref());
     let report = analyze_with_index(
         &options.path,
@@ -378,10 +382,7 @@ fn analyze_command(args: &[String]) -> Result<ExitCode, CliError> {
         index_dir.as_deref(),
     )?;
     if report.files.is_empty() {
-        return Err(CliError::incomplete(format!(
-            "no supported files found under {}",
-            options.path.display()
-        )));
+        return Err(no_supported_files(&options.path));
     }
     options.print_report(&report, &config_thresholds(&config))?;
     Ok(ExitCode::SUCCESS)
@@ -425,10 +426,7 @@ fn function_command(args: &[String]) -> Result<ExitCode, CliError> {
     if explain && options.agent_json {
         let mut value = leadline::agent::analyze_agent_json_budgeted(&report, &options.budget);
         inject_contributions(&mut value, &report);
-        println!(
-            "{}",
-            serde_json::to_string(&value).map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&&value, false)?;
     } else {
         options.print_report(&report, &Thresholds::default())?;
     }
@@ -566,7 +564,7 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
                 base = Some(value.to_owned());
             }
             value => {
-                return Err(CliError::usage(format!("unknown changed option '{value}'")));
+                return Err(unknown_option("changed", value));
             }
         }
         index += 1;
@@ -594,19 +592,12 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     budget.explain = explain;
     if agent_json {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::agent::changed_agent_json_budgeted(
-                &report, &budget
-            ))
-            .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(
+            &leadline::agent::changed_agent_json_budgeted(&report, &budget),
+            false,
+        )?;
     } else if json {
-        println!(
-            "{}",
-            serde_json::to_string(&report)
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&report, false)?;
     } else {
         let terminal = leadline::report::terminal_changed(&report);
         if terminal.is_empty() {
@@ -670,9 +661,7 @@ fn parse_ranked_args(args: &[String], command: &str) -> Result<RankedArgs, CliEr
                 has_path = true;
             }
             value => {
-                return Err(CliError::usage(format!(
-                    "unknown {command} option '{value}'"
-                )));
+                return Err(unknown_option(command, value));
             }
         }
         index += 1;
@@ -717,16 +706,13 @@ fn analyze_ranked(
         )
     };
     if analysis.files.is_empty() {
-        return Err(CliError::incomplete(format!(
-            "no supported files found under {}",
-            path.display()
-        )));
+        return Err(no_supported_files(path));
     }
     Ok((analysis, scope))
 }
 
-/// Config plus its analysis excludes for the ranked commands.
-fn ranked_excludes(config: Option<&Config>) -> &[String] {
+/// Config plus its analysis excludes, for every command that analyzes code.
+fn analysis_excludes(config: Option<&Config>) -> &[String] {
     config
         .map(|selected| selected.analysis_excludes.as_slice())
         .unwrap_or(&[])
@@ -736,17 +722,13 @@ fn ranked_excludes(config: Option<&Config>) -> &[String] {
 fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
     let parsed = parse_ranked_args(args, "hotspots")?;
     let config = load_config_for(&parsed.path)?;
-    let excludes = ranked_excludes(config.as_ref());
+    let excludes = analysis_excludes(config.as_ref());
     let (analysis, scope) = analyze_ranked(&parsed.path, parsed.coverage.as_ref(), excludes)?;
     let history = leadline::history::analyze_history(&scope)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     let report = leadline::hotspots::build(&analysis, &history, parsed.window, parsed.limit);
     if parsed.agent_json {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::agent::hotspots_agent_json(&report))
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&leadline::agent::hotspots_agent_json(&report), false)?;
     } else if parsed.json {
         print_json(&report, true)?;
     } else {
@@ -759,18 +741,14 @@ fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
 fn risk_command(args: &[String]) -> Result<ExitCode, CliError> {
     let parsed = parse_ranked_args(args, "risk")?;
     let config = load_config_for(&parsed.path)?;
-    let excludes = ranked_excludes(config.as_ref());
+    let excludes = analysis_excludes(config.as_ref());
     let (analysis, _) = analyze_ranked(&parsed.path, parsed.coverage.as_ref(), excludes)?;
     let mut report =
         leadline::analytics::analyze_risk(&analysis, &parsed.path, excludes, parsed.window)
             .map_err(|error| CliError::incomplete(error.to_string()))?;
     if parsed.agent_json {
         report.risks.truncate(parsed.limit);
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::agent::risk_agent_json(&report))
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&leadline::agent::risk_agent_json(&report), false)?;
     } else if parsed.json {
         print_json(&report, true)?;
     } else {
@@ -794,11 +772,7 @@ fn project_command(args: &[String]) -> Result<ExitCode, CliError> {
     let report = leadline::analytics::build(&parsed.request)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     if parsed.agent_json {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::agent::project_agent_json(&report))
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&leadline::agent::project_agent_json(&report), false)?;
     } else if parsed.json {
         print_json(&report, true)?;
     } else {
@@ -952,9 +926,7 @@ fn parse_project_args(args: &[String], command: &str) -> Result<ProjectArgs, Cli
                 has_path = true;
             }
             value => {
-                return Err(CliError::usage(format!(
-                    "unknown {command} option '{value}'"
-                )));
+                return Err(unknown_option(command, value));
             }
         }
         index += 1;
@@ -1060,7 +1032,7 @@ fn debt_command(args: &[String]) -> Result<ExitCode, CliError> {
                 );
             }
             value => {
-                return Err(CliError::usage(format!("unknown debt option '{value}'")));
+                return Err(unknown_option("debt", value));
             }
         }
         index += 1;
@@ -1078,11 +1050,7 @@ fn debt_command(args: &[String]) -> Result<ExitCode, CliError> {
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     leadline::telemetry::record_debt("cli", &report.summary);
     if agent_json {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::agent::debt_agent_json(&report))
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&leadline::agent::debt_agent_json(&report), false)?;
     } else if json {
         print_json(&report, true)?;
     } else {
@@ -1143,9 +1111,7 @@ fn snapshot_command(args: &[String]) -> Result<ExitCode, CliError> {
                 has_path = true;
             }
             value => {
-                return Err(CliError::usage(format!(
-                    "unknown snapshot option '{value}'"
-                )));
+                return Err(unknown_option("snapshot", value));
             }
         }
         index += 1;
@@ -1200,9 +1166,7 @@ fn mutation_command(args: &[String]) -> Result<ExitCode, CliError> {
                 has_path = true;
             }
             value => {
-                return Err(CliError::usage(format!(
-                    "unknown mutation option '{value}'"
-                )));
+                return Err(unknown_option("mutation", value));
             }
         }
         index += 1;
@@ -1257,9 +1221,7 @@ fn duplication_command(args: &[String]) -> Result<ExitCode, CliError> {
                 has_path = true;
             }
             value => {
-                return Err(CliError::usage(format!(
-                    "unknown duplication option '{value}'"
-                )));
+                return Err(unknown_option("duplication", value));
             }
         }
         index += 1;
@@ -1316,7 +1278,7 @@ fn policy_command(args: &[String]) -> Result<ExitCode, CliError> {
                 has_path = true;
             }
             value => {
-                return Err(CliError::usage(format!("unknown policy option '{value}'")));
+                return Err(unknown_option("policy", value));
             }
         }
         index += 1;
@@ -1407,9 +1369,7 @@ fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
                 top = Some(parse_top(args.get(index), "--top")?);
             }
             value => {
-                return Err(CliError::usage(format!(
-                    "unknown sql-plan option '{value}'"
-                )));
+                return Err(unknown_option("sql-plan", value));
             }
         }
         index += 1;
@@ -1427,14 +1387,13 @@ fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
     )
     .map_err(|error| CliError::input(error.to_string()))?;
     if agent_json {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::pg_plan::agent_json(
+        print_json(
+            &leadline::pg_plan::agent_json(
                 &report,
-                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP)
-            ))
-            .map_err(|error| CliError::internal(error.to_string()))?
-        );
+                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP),
+            ),
+            false,
+        )?;
     } else if let Some(format) = ci_format {
         let document = serde_json::json!({ "sql_violations": &report.violations });
         print_ci_document(
@@ -1444,11 +1403,7 @@ fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
             format,
         )?;
     } else if sarif {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::sarif::pg_plan_to_sarif(&report))
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&leadline::sarif::pg_plan_to_sarif(&report), false)?;
     } else if json {
         print_json(&report, true)?;
     } else {
@@ -1538,9 +1493,7 @@ fn security_command(args: &[String]) -> Result<ExitCode, CliError> {
                 has_path = true;
             }
             value => {
-                return Err(CliError::usage(format!(
-                    "unknown security option '{value}'"
-                )));
+                return Err(unknown_option("security", value));
             }
         }
         index += 1;
@@ -1570,14 +1523,13 @@ fn security_command(args: &[String]) -> Result<ExitCode, CliError> {
     })?;
     let report = outcome.report;
     if agent_json {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::security::agent_json(
+        print_json(
+            &leadline::security::agent_json(
                 &report,
-                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP)
-            ))
-            .map_err(|error| CliError::internal(error.to_string()))?
-        );
+                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP),
+            ),
+            false,
+        )?;
     } else if let Some(format) = ci_format {
         let document = serde_json::json!({ "security_violations": &report.findings });
         print_ci_document(
@@ -1587,13 +1539,10 @@ fn security_command(args: &[String]) -> Result<ExitCode, CliError> {
             format,
         )?;
     } else if sarif {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::sarif::security_findings_to_sarif(
-                &report.findings,
-            ))
-            .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(
+            &leadline::sarif::security_findings_to_sarif(&report.findings),
+            false,
+        )?;
     } else if json {
         print_json(&report, true)?;
     } else {
@@ -1823,9 +1772,7 @@ fn vulnerabilities_command(args: &[String]) -> Result<ExitCode, CliError> {
                 has_path = true;
             }
             value => {
-                return Err(CliError::usage(format!(
-                    "unknown vulnerabilities option '{value}'"
-                )));
+                return Err(unknown_option("vulnerabilities", value));
             }
         }
         index += 1;
@@ -1854,14 +1801,13 @@ fn vulnerabilities_command(args: &[String]) -> Result<ExitCode, CliError> {
         .map_err(|error| CliError::input(error.to_string()))?;
     let report = outcome.report;
     if agent_json {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::vulnerabilities::agent_json(
+        print_json(
+            &leadline::vulnerabilities::agent_json(
                 &report,
-                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP)
-            ))
-            .map_err(|error| CliError::internal(error.to_string()))?
-        );
+                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP),
+            ),
+            false,
+        )?;
     } else if let Some(format) = ci_format {
         let document = serde_json::json!({ "vulnerability_violations": &report.findings });
         print_ci_document(
@@ -1871,13 +1817,10 @@ fn vulnerabilities_command(args: &[String]) -> Result<ExitCode, CliError> {
             format,
         )?;
     } else if sarif {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::sarif::vulnerability_findings_to_sarif(
-                &report.findings,
-            ))
-            .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(
+            &leadline::sarif::vulnerability_findings_to_sarif(&report.findings),
+            false,
+        )?;
     } else if json {
         print_json(&report, true)?;
     } else {
@@ -1951,7 +1894,7 @@ fn sql_command(args: &[String]) -> Result<ExitCode, CliError> {
                 has_path = true;
             }
             value => {
-                return Err(CliError::usage(format!("unknown sql option '{value}'")));
+                return Err(unknown_option("sql", value));
             }
         }
         index += 1;
@@ -1968,21 +1911,17 @@ fn sql_command(args: &[String]) -> Result<ExitCode, CliError> {
     if let Some(roots) = migration_roots {
         sql_config.migration_roots = roots;
     }
-    let excludes: &[String] = config
-        .as_ref()
-        .map(|selected| selected.analysis_excludes.as_slice())
-        .unwrap_or(&[]);
+    let excludes = analysis_excludes(config.as_ref());
     let report = leadline::sql::analyze_sql_path(&path, &sql_config, excludes)
         .map_err(|error| CliError::input(error.to_string()))?;
     if agent_json {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::sql::agent_json(
+        print_json(
+            &leadline::sql::agent_json(
                 &report,
-                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP)
-            ))
-            .map_err(|error| CliError::internal(error.to_string()))?
-        );
+                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP),
+            ),
+            false,
+        )?;
     } else if let Some(format) = ci_format {
         let document = serde_json::json!({ "sql_violations": &report.findings });
         print_ci_document(
@@ -1992,11 +1931,10 @@ fn sql_command(args: &[String]) -> Result<ExitCode, CliError> {
             format,
         )?;
     } else if sarif {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::sarif::sql_findings_to_sarif(&report.findings))
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(
+            &leadline::sarif::sql_findings_to_sarif(&report.findings),
+            false,
+        )?;
     } else if json {
         print_json(&report, true)?;
     } else {
@@ -2056,9 +1994,7 @@ fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
                 target = Some(value.to_owned());
             }
             value => {
-                return Err(CliError::usage(format!(
-                    "unknown coupling option '{value}'"
-                )));
+                return Err(unknown_option("coupling", value));
             }
         }
         index += 1;
@@ -2084,11 +2020,7 @@ fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
     let report = leadline::coupling::analyze_coupling(&root, &key, &options)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     if agent_json {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::agent::coupling_agent_json(&report))
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&leadline::agent::coupling_agent_json(&report), false)?;
     } else if json {
         print_json(&report, true)?;
     } else {
@@ -2131,17 +2063,14 @@ fn unused_command(args: &[String]) -> Result<ExitCode, CliError> {
                 has_path = true;
             }
             value => {
-                return Err(CliError::usage(format!("unknown unused option '{value}'")));
+                return Err(unknown_option("unused", value));
             }
         }
         index += 1;
     }
     check_output_format(json, agent_json, false, None)?;
     let config = load_config_for(&path)?;
-    let excludes: &[String] = config
-        .as_ref()
-        .map(|selected| selected.analysis_excludes.as_slice())
-        .unwrap_or(&[]);
+    let excludes = analysis_excludes(config.as_ref());
     let mut unused_config = config
         .as_ref()
         .map(|selected| selected.unused.clone())
@@ -2152,17 +2081,10 @@ fn unused_command(args: &[String]) -> Result<ExitCode, CliError> {
     let report = leadline::unused::analyze_unused(&path, excludes, &entries, &unused_config)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     if report.files_analyzed == 0 {
-        return Err(CliError::incomplete(format!(
-            "no supported files found under {}",
-            path.display()
-        )));
+        return Err(no_supported_files(&path));
     }
     if agent_json {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::agent::unused_agent_json(&report))
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&leadline::agent::unused_agent_json(&report), false)?;
     } else if json {
         print_json(&report, true)?;
     } else {
@@ -2219,7 +2141,7 @@ fn report_command(args: &[String]) -> Result<ExitCode, CliError> {
                 limits.crap = Some(parse_floor(args.get(index), "--crap")?);
             }
             value => {
-                return Err(CliError::usage(format!("unknown report option '{value}'")));
+                return Err(unknown_option("report", value));
             }
         }
         index += 1;
@@ -2258,33 +2180,21 @@ fn dependencies_command(args: &[String]) -> Result<ExitCode, CliError> {
                 has_path = true;
             }
             value => {
-                return Err(CliError::usage(format!(
-                    "unknown dependencies option '{value}'"
-                )));
+                return Err(unknown_option("dependencies", value));
             }
         }
         index += 1;
     }
     check_output_format(json, agent_json, false, None)?;
     let config = load_config_for(&path)?;
-    let excludes: &[String] = config
-        .as_ref()
-        .map(|selected| selected.analysis_excludes.as_slice())
-        .unwrap_or(&[]);
+    let excludes = analysis_excludes(config.as_ref());
     let report = leadline::graph::analyze_dependencies(&path, excludes)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     if report.files.is_empty() {
-        return Err(CliError::incomplete(format!(
-            "no supported files found under {}",
-            path.display()
-        )));
+        return Err(no_supported_files(&path));
     }
     if agent_json {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::agent::dependencies_agent_json(&report))
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&leadline::agent::dependencies_agent_json(&report), false)?;
     } else if json {
         print_json(&report, true)?;
     } else {
@@ -2324,7 +2234,7 @@ fn impact_command(args: &[String]) -> Result<ExitCode, CliError> {
                 target = Some(value.to_owned());
             }
             value => {
-                return Err(CliError::usage(format!("unknown impact option '{value}'")));
+                return Err(unknown_option("impact", value));
             }
         }
         index += 1;
@@ -2344,10 +2254,7 @@ fn impact_command(args: &[String]) -> Result<ExitCode, CliError> {
         other => CliError::usage(other.to_string()),
     })?;
     let config = load_config_for(&root)?;
-    let excludes: &[String] = config
-        .as_ref()
-        .map(|selected| selected.analysis_excludes.as_slice())
-        .unwrap_or(&[]);
+    let excludes = analysis_excludes(config.as_ref());
     let graph = leadline::graph::analyze_dependencies(&root, excludes)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     let Some(report) = leadline::impact::analyze_impact(&graph, &key, top) else {
@@ -2357,11 +2264,7 @@ fn impact_command(args: &[String]) -> Result<ExitCode, CliError> {
         )));
     };
     if agent_json {
-        println!(
-            "{}",
-            serde_json::to_string(&leadline::agent::impact_agent_json(&report))
-                .map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&leadline::agent::impact_agent_json(&report), false)?;
     } else if json {
         print_json(&report, true)?;
     } else {
@@ -2812,7 +2715,7 @@ fn check_report(
     config: Option<&Config>,
     scanners: &CheckScanners,
 ) -> Result<ExitCode, CliError> {
-    let excludes = ranked_excludes(config);
+    let excludes = analysis_excludes(config);
     let index_dir = resolve_index_dir(&options.path, options.index_dir.as_deref(), config);
     let mut report = analyze_with_index(
         &options.path,
@@ -2821,10 +2724,7 @@ fn check_report(
         index_dir.as_deref(),
     )?;
     if report.files.is_empty() {
-        return Err(CliError::incomplete(format!(
-            "no supported files found under {}",
-            options.path.display()
-        )));
+        return Err(no_supported_files(&options.path));
     }
     report.files.retain_mut(|file| {
         file.functions
@@ -2986,10 +2886,7 @@ fn check_baseline(
     let baseline = leadline::baseline::Baseline::read(Path::new(baseline_path))
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     let config = load_config_for(&options.path)?;
-    let excludes: &[String] = config
-        .as_ref()
-        .map(|selected| selected.analysis_excludes.as_slice())
-        .unwrap_or(&[]);
+    let excludes = analysis_excludes(config.as_ref());
     let index_dir = resolve_index_dir(&options.path, options.index_dir.as_deref(), config.as_ref());
     // The warm path is scoped to analyze and check in this phase.
     let report = analyze_with_index(
@@ -2999,10 +2896,7 @@ fn check_baseline(
         index_dir.as_deref(),
     )?;
     if report.files.is_empty() {
-        return Err(CliError::incomplete(format!(
-            "no supported files found under {}",
-            options.path.display()
-        )));
+        return Err(no_supported_files(&options.path));
     }
     let regressions = match regression_limits {
         Some(limits) => baseline.compare(&report, limits),
@@ -3096,9 +2990,7 @@ fn baseline_command(args: &[String]) -> Result<ExitCode, CliError> {
                 seen_path = true;
             }
             value => {
-                return Err(CliError::usage(format!(
-                    "unknown baseline option '{value}'"
-                )));
+                return Err(unknown_option("baseline", value));
             }
         }
         index += 1;
@@ -3107,17 +2999,11 @@ fn baseline_command(args: &[String]) -> Result<ExitCode, CliError> {
         return Err(CliError::usage("baseline requires --output FILE"));
     };
     let config = load_config_for(&path)?;
-    let excludes: &[String] = config
-        .as_ref()
-        .map(|selected| selected.analysis_excludes.as_slice())
-        .unwrap_or(&[]);
+    let excludes = analysis_excludes(config.as_ref());
     // The warm path is scoped to analyze and check in this phase.
     let report = analyze_with_index(&path, has_coverage.then_some(&coverage), excludes, None)?;
     if report.files.is_empty() {
-        return Err(CliError::incomplete(format!(
-            "no supported files found under {}",
-            path.display()
-        )));
+        return Err(no_supported_files(&path));
     }
     let baseline = leadline::baseline::Baseline::from_report(&report);
     let count = baseline.functions.len();
@@ -3165,9 +3051,7 @@ fn test_targets_command(args: &[String]) -> Result<ExitCode, CliError> {
                 seen_path = true;
             }
             value => {
-                return Err(CliError::usage(format!(
-                    "unknown test-targets option '{value}'"
-                )));
+                return Err(unknown_option("test-targets", value));
             }
         }
         index += 1;
@@ -3178,17 +3062,11 @@ fn test_targets_command(args: &[String]) -> Result<ExitCode, CliError> {
         ));
     }
     let config = load_config_for(&path)?;
-    let excludes: &[String] = config
-        .as_ref()
-        .map(|selected| selected.analysis_excludes.as_slice())
-        .unwrap_or(&[]);
+    let excludes = analysis_excludes(config.as_ref());
     // The warm path is scoped to analyze and check in this phase.
     let report = analyze_with_index(&path, Some(&coverage), excludes, None)?;
     if report.files.is_empty() {
-        return Err(CliError::incomplete(format!(
-            "no supported files found under {}",
-            path.display()
-        )));
+        return Err(no_supported_files(&path));
     }
     let targets = leadline::test_targets::test_targets(&report, &coverage);
     let total = targets.len();
@@ -3206,10 +3084,7 @@ fn test_targets_command(args: &[String]) -> Result<ExitCode, CliError> {
             "truncated": truncated,
             "total": total,
         });
-        println!(
-            "{}",
-            serde_json::to_string(&value).map_err(|error| CliError::internal(error.to_string()))?
-        );
+        print_json(&&value, false)?;
     } else if kept.is_empty() {
         println!("No test targets: no known-zero-hit decision lines.");
     } else {
@@ -3242,7 +3117,7 @@ fn doctor_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut seen_path = false;
     for arg in args {
         if arg.starts_with('-') {
-            return Err(CliError::usage(format!("unknown doctor option '{arg}'")));
+            return Err(unknown_option("doctor", arg));
         }
         if seen_path {
             return Err(CliError::usage("doctor takes at most one path"));
@@ -3381,9 +3256,7 @@ fn update_command(args: &[String]) -> Result<ExitCode, CliError> {
         match argument.as_str() {
             "--integrations" => integrations = true,
             _ => {
-                return Err(CliError::usage(format!(
-                    "unknown update option '{argument}'"
-                )));
+                return Err(unknown_option("update", argument));
             }
         }
     }
@@ -3623,9 +3496,7 @@ impl CommonOptions {
                     has_path = true;
                 }
                 value => {
-                    return Err(CliError::usage(format!(
-                        "unknown {command} option '{value}'"
-                    )));
+                    return Err(unknown_option(command, value));
                 }
             }
             index += 1;

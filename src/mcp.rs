@@ -654,6 +654,94 @@ fn merge_agent_fields(
     }
 }
 
+/// The `tool`/`path` header plus the named agent-json fields, versioned.
+fn agent_envelope(
+    tool: &str,
+    path: &str,
+    agent: &serde_json::Value,
+    keys: &[&str],
+) -> Result<serde_json::Value, (i64, String)> {
+    let mut fields = serde_json::Map::new();
+    fields.insert("tool".to_owned(), serde_json::json!(tool));
+    fields.insert("path".to_owned(), serde_json::json!(path));
+    merge_agent_fields(&mut fields, agent, keys);
+    envelope(fields)
+}
+
+/// Mutually exclusive comparison selectors, shared by the gated scanner tools.
+fn change_comparion(
+    params: &serde_json::Value,
+    tool: &str,
+) -> Result<Option<crate::security::ChangeComparison>, (i64, String)> {
+    let base = opt_str(params, "base")?;
+    let staged = opt_flag(params, "staged", tool)?;
+    let target = opt_str(params, "target")?;
+    match (base.is_some(), staged, target.is_some()) {
+        (true, true, _) => {
+            return Err((-32602, "base and staged are exclusive".to_owned()));
+        }
+        (_, true, true) => {
+            return Err((-32602, "staged and target are exclusive".to_owned()));
+        }
+        (true, _, true) => {
+            return Err((-32602, "base and target are exclusive".to_owned()));
+        }
+        _ => {}
+    }
+    Ok(match (base, staged, target) {
+        (Some(revision), false, None) => {
+            Some(crate::security::ChangeComparison::Base(revision.to_owned()))
+        }
+        (None, true, None) => Some(crate::security::ChangeComparison::Staged),
+        (None, false, Some(revision)) => Some(crate::security::ChangeComparison::Target(
+            revision.to_owned(),
+        )),
+        (None, false, None) => None,
+        _ => unreachable!("exclusive comparison flags are rejected above"),
+    })
+}
+
+/// One `minimum_severity` gate floor, or an invalid-params error naming the choices.
+fn opt_gate_severity(
+    params: &serde_json::Value,
+) -> Result<Option<crate::security::SecuritySeverity>, (i64, String)> {
+    Ok(match opt_str(params, "minimum_severity")? {
+        None => None,
+        Some(raw) => Some(crate::security::parse_gate_severity(raw).ok_or((
+            -32602,
+            format!(
+                "unknown minimum_severity '{raw}': expected 'low', 'medium', 'high', or 'critical'"
+            ),
+        ))?),
+    })
+}
+
+/// Truncated when the report or the violation cap dropped rows.
+fn merged_truncated(agent: &serde_json::Value, violations_truncated: bool) -> serde_json::Value {
+    serde_json::Value::from(
+        agent
+            .get("truncated")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            || violations_truncated,
+    )
+}
+
+/// One agent-json field copied into the envelope, or an empty value.
+fn agent_field(agent: &serde_json::Value, key: &str) -> serde_json::Value {
+    agent.get(key).cloned().unwrap_or_default()
+}
+
+/// Optional coverage file, auto-detected by extension.
+fn optional_coverage(
+    params: &serde_json::Value,
+) -> Result<Option<crate::coverage::CoverageMap>, (i64, String)> {
+    opt_str(params, "coverage")?
+        .map(load_coverage_file)
+        .transpose()
+        .map_err(|message| (-32602, message))
+}
+
 // ---------------------------------------------------------------------------
 // Compact rows
 // ---------------------------------------------------------------------------
@@ -764,23 +852,7 @@ fn parse_tool_budget(
     params: &serde_json::Value,
     allow_min_delta: bool,
 ) -> Result<ToolBudget, (i64, String)> {
-    let top = match params.get("top") {
-        None | Some(serde_json::Value::Null) => None,
-        Some(value) => {
-            let count = value
-                .as_u64()
-                .ok_or((-32602, "top must be a positive integer".to_owned()))?;
-            let count =
-                usize::try_from(count).map_err(|_| (-32602, "top must fit in usize".to_owned()))?;
-            if count == 0 {
-                return Err((-32602, "top must be at least 1".to_owned()));
-            }
-            if count > MAX_ENTRIES {
-                return Err((-32602, format!("top must be at most {MAX_ENTRIES}")));
-            }
-            Some(count)
-        }
-    };
+    let top = Some(parse_top_param(params, MAX_ENTRIES)?);
     let sort_by = match opt_str(params, "sort_by")? {
         None => None,
         Some(value) => Some(SortKey::parse(value).ok_or((
@@ -914,11 +986,7 @@ fn tool_analyze(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
     )?;
     let path = opt_str(params, "path")?.unwrap_or(".");
     let budget = parse_tool_budget(params, false)?;
-    let coverage_path = opt_str(params, "coverage")?;
-    let coverage = coverage_path
-        .map(load_coverage_file)
-        .transpose()
-        .map_err(|message| (-32602, message))?;
+    let coverage = optional_coverage(params)?;
     let config = load_config(path)?;
     let excludes = config_excludes(config.as_ref());
     let (report, reuse) =
@@ -1255,10 +1323,7 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
     if let Some(config) = config.as_ref() {
         fill_thresholds(&mut thresholds, config);
     }
-    let coverage = opt_str(params, "coverage")?
-        .map(load_coverage_file)
-        .transpose()
-        .map_err(|message| (-32602, message))?;
+    let coverage = optional_coverage(params)?;
     let excludes = config_excludes(config.as_ref());
     let CheckRows {
         mut rows,
@@ -1548,10 +1613,7 @@ fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i
             count
         }
     };
-    let coverage = opt_str(params, "coverage")?
-        .map(load_coverage_file)
-        .transpose()
-        .map_err(|message| (-32602, message))?;
+    let coverage = optional_coverage(params)?;
     let report = {
         let config = load_config(path)?;
         let excludes = config_excludes(config.as_ref());
@@ -1658,11 +1720,9 @@ fn tool_dependencies(params: &serde_json::Value) -> Result<serde_json::Value, (i
         return Err((-32602, format!("no supported files found under {path}")));
     }
     let agent = crate::agent::dependencies_agent_json(&report);
-    let mut fields = serde_json::Map::new();
-    fields.insert("tool".to_owned(), serde_json::json!("dependencies"));
-    fields.insert("path".to_owned(), serde_json::json!(path));
-    merge_agent_fields(
-        &mut fields,
+    agent_envelope(
+        "dependencies",
+        path,
         &agent,
         &[
             "summary",
@@ -1672,8 +1732,7 @@ fn tool_dependencies(params: &serde_json::Value) -> Result<serde_json::Value, (i
             "unresolved",
             "truncated",
         ],
-    );
-    envelope(fields)
+    )
 }
 
 fn tool_impact(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
@@ -1698,11 +1757,9 @@ fn tool_impact(params: &serde_json::Value) -> Result<serde_json::Value, (i64, St
         ));
     };
     let agent = crate::agent::impact_agent_json(&report);
-    let mut fields = serde_json::Map::new();
-    fields.insert("tool".to_owned(), serde_json::json!("impact"));
-    fields.insert("path".to_owned(), serde_json::json!(path));
-    merge_agent_fields(
-        &mut fields,
+    agent_envelope(
+        "impact",
+        path,
         &agent,
         &[
             "model",
@@ -1717,8 +1774,7 @@ fn tool_impact(params: &serde_json::Value) -> Result<serde_json::Value, (i64, St
             "cycles",
             "truncated",
         ],
-    );
-    envelope(fields)
+    )
 }
 
 fn tool_coupling(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
@@ -1756,11 +1812,9 @@ fn tool_coupling(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
     let report = crate::coupling::analyze_coupling(root, &key, &options)
         .map_err(|error| (-32602, error.to_string()))?;
     let agent = crate::agent::coupling_agent_json(&report);
-    let mut fields = serde_json::Map::new();
-    fields.insert("tool".to_owned(), serde_json::json!("coupling"));
-    fields.insert("path".to_owned(), serde_json::json!(path));
-    merge_agent_fields(
-        &mut fields,
+    agent_envelope(
+        "coupling",
+        path,
         &agent,
         &[
             "target",
@@ -1769,8 +1823,7 @@ fn tool_coupling(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
             "related",
             "truncated",
         ],
-    );
-    envelope(fields)
+    )
 }
 
 fn tool_hotspots(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
@@ -1783,11 +1836,9 @@ fn tool_hotspots(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
         .map_err(|error| (-32602, error.to_string()))?;
     let report = crate::hotspots::build(&analysis, &history, window, top);
     let agent = crate::agent::hotspots_agent_json(&report);
-    let mut fields = serde_json::Map::new();
-    fields.insert("tool".to_owned(), serde_json::json!("hotspots"));
-    fields.insert("path".to_owned(), serde_json::json!(path));
-    merge_agent_fields(
-        &mut fields,
+    agent_envelope(
+        "hotspots",
+        path,
         &agent,
         &[
             "model",
@@ -1797,8 +1848,7 @@ fn tool_hotspots(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
             "hotspots",
             "truncated",
         ],
-    );
-    envelope(fields)
+    )
 }
 
 fn tool_duplication(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
@@ -1849,25 +1899,19 @@ fn tool_risk(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Stri
         .map_err(|error| (-32602, error.to_string()))?;
     report.risks.truncate(top);
     let agent = crate::agent::risk_agent_json(&report);
-    let mut fields = serde_json::Map::new();
-    fields.insert("tool".to_owned(), serde_json::json!("risk"));
-    fields.insert("path".to_owned(), serde_json::json!(path));
-    merge_agent_fields(
-        &mut fields,
+    agent_envelope(
+        "risk",
+        path,
         &agent,
         &["model", "window", "git_available", "summary", "risks"],
-    );
-    envelope(fields)
+    )
 }
 
 fn analyze_optional_coverage(
     params: &serde_json::Value,
     path: &str,
 ) -> Result<(crate::core::AnalysisReport, Vec<String>), (i64, String)> {
-    let coverage = opt_str(params, "coverage")?
-        .map(load_coverage_file)
-        .transpose()
-        .map_err(|message| (-32602, message))?;
+    let coverage = optional_coverage(params)?;
     let config = load_config(path)?;
     let excludes = config_excludes(config.as_ref());
     let analysis = crate::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
@@ -1945,10 +1989,7 @@ fn tool_project(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
         Some(revision) => crate::source_snapshot::SnapshotTarget::Revision(revision.to_owned()),
     };
     let window = parse_since(params, crate::history::HistoryWindow::Days90)?;
-    let coverage = opt_str(params, "coverage")?
-        .map(load_coverage_file)
-        .transpose()
-        .map_err(|message| (-32602, message))?;
+    let coverage = optional_coverage(params)?;
     let ownership_mode = match opt_str(params, "ownership")? {
         None | Some("aggregate") => crate::ownership::OwnershipMode::AggregateOnly,
         Some("include_authors") => crate::ownership::OwnershipMode::IncludeAuthors,
@@ -1985,11 +2026,9 @@ fn tool_project(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
     })
     .map_err(|error| (-32602, error.to_string()))?;
     let agent = crate::agent::project_agent_json(&report);
-    let mut fields = serde_json::Map::new();
-    fields.insert("tool".to_owned(), serde_json::json!("project"));
-    fields.insert("path".to_owned(), serde_json::json!(path));
-    merge_agent_fields(
-        &mut fields,
+    agent_envelope(
+        "project",
+        path,
         &agent,
         &[
             "generated_from",
@@ -1999,8 +2038,7 @@ fn tool_project(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
             "risk",
             "truncated",
         ],
-    );
-    envelope(fields)
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -2409,51 +2447,20 @@ fn tool_security_findings(params: &serde_json::Value) -> Result<serde_json::Valu
         ));
     }
     let baseline_sarif = artifact_paths(params, "security_findings", "baseline_sarif", false)?;
-    let base = opt_str(params, "base")?;
-    let staged = opt_flag(params, "staged", "security_findings")?;
-    let target = opt_str(params, "target")?;
-    match (base.is_some(), staged, target.is_some()) {
-        (true, true, _) => {
-            return Err((-32602, "base and staged are exclusive".to_owned()));
-        }
-        (_, true, true) => {
-            return Err((-32602, "staged and target are exclusive".to_owned()));
-        }
-        (true, _, true) => {
-            return Err((-32602, "base and target are exclusive".to_owned()));
-        }
-        _ => {}
-    }
+    let comparison = change_comparion(params, "security_findings")?;
     let new_only = opt_flag(params, "new_only", "security_findings")?;
     let changed_only = opt_flag(params, "changed_only", "security_findings")?;
-    let comparison = match (base, staged, target) {
-        (Some(revision), false, None) => {
-            Some(crate::security::ChangeComparison::Base(revision.to_owned()))
-        }
-        (None, true, None) => Some(crate::security::ChangeComparison::Staged),
-        (None, false, Some(revision)) => Some(crate::security::ChangeComparison::Target(
-            revision.to_owned(),
-        )),
-        (None, false, None) => None,
-        _ => unreachable!("exclusive comparison flags are rejected above"),
-    };
     if changed_only && comparison.is_none() {
         return Err((
             -32602,
             "changed_only requires base, staged, or target".to_owned(),
         ));
     }
-    let gate = match opt_str(params, "minimum_severity")? {
-        None => None,
-        Some(raw) => Some(crate::security::SecurityGate {
-            minimum: crate::security::parse_gate_severity(raw).ok_or((
-                -32602,
-                format!("unknown minimum_severity '{raw}': expected 'low', 'medium', 'high', or 'critical'"),
-            ))?,
-            new_only,
-            changed_only,
-        }),
-    };
+    let gate = opt_gate_severity(params)?.map(|minimum| crate::security::SecurityGate {
+        minimum,
+        new_only,
+        changed_only,
+    });
     let top = parse_top_param(params, crate::security::AGENT_DEFAULT_TOP)?;
     let outcome = crate::security::assemble(&crate::security::SecurityRequest {
         path: PathBuf::from(path),
@@ -2468,20 +2475,11 @@ fn tool_security_findings(params: &serde_json::Value) -> Result<serde_json::Valu
     let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("security_findings"));
     fields.insert("path".to_owned(), serde_json::json!(path));
-    fields.insert(
-        "findings".to_owned(),
-        agent.get("findings").cloned().unwrap_or_default(),
-    );
+    fields.insert("findings".to_owned(), agent_field(&agent, "findings"));
     fields.insert("violations".to_owned(), violations);
     fields.insert(
         "truncated".to_owned(),
-        serde_json::Value::from(
-            agent
-                .get("truncated")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-                || violations_truncated,
-        ),
+        merged_truncated(&agent, violations_truncated),
     );
     envelope(fields)
 }
@@ -2519,40 +2517,10 @@ fn tool_vulnerabilities(params: &serde_json::Value) -> Result<serde_json::Value,
     }
     let baseline_osv = artifact_paths(params, "vulnerabilities", "baseline_osv", false)?;
     let baseline_trivy = artifact_paths(params, "vulnerabilities", "baseline_trivy", false)?;
-    let base = opt_str(params, "base")?;
-    let staged = opt_flag(params, "staged", "vulnerabilities")?;
-    let target = opt_str(params, "target")?;
-    match (base.is_some(), staged, target.is_some()) {
-        (true, true, _) => {
-            return Err((-32602, "base and staged are exclusive".to_owned()));
-        }
-        (_, true, true) => {
-            return Err((-32602, "staged and target are exclusive".to_owned()));
-        }
-        (true, _, true) => {
-            return Err((-32602, "base and target are exclusive".to_owned()));
-        }
-        _ => {}
-    }
-    let comparison = match (base, staged, target) {
-        (Some(revision), false, None) => {
-            Some(crate::security::ChangeComparison::Base(revision.to_owned()))
-        }
-        (None, true, None) => Some(crate::security::ChangeComparison::Staged),
-        (None, false, Some(revision)) => Some(crate::security::ChangeComparison::Target(
-            revision.to_owned(),
-        )),
-        (None, false, None) => None,
-        _ => unreachable!("exclusive comparison flags are rejected above"),
-    };
+    let comparison = change_comparion(params, "vulnerabilities")?;
     let config = load_config(path)?;
-    let gate = match opt_str(params, "minimum_severity")? {
-        Some(raw) => Some(crate::security::parse_gate_severity(raw).ok_or((
-            -32602,
-            format!(
-                "unknown minimum_severity '{raw}': expected 'low', 'medium', 'high', or 'critical'"
-            ),
-        ))?),
+    let gate = match opt_gate_severity(params)? {
+        Some(minimum) => Some(minimum),
         None => config
             .as_ref()
             .and_then(|selected| selected.vulnerabilities.minimum_severity),
@@ -2573,20 +2541,11 @@ fn tool_vulnerabilities(params: &serde_json::Value) -> Result<serde_json::Value,
     let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("vulnerabilities"));
     fields.insert("path".to_owned(), serde_json::json!(path));
-    fields.insert(
-        "findings".to_owned(),
-        agent.get("findings").cloned().unwrap_or_default(),
-    );
+    fields.insert("findings".to_owned(), agent_field(&agent, "findings"));
     fields.insert("violations".to_owned(), violations);
     fields.insert(
         "truncated".to_owned(),
-        serde_json::Value::from(
-            agent
-                .get("truncated")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-                || violations_truncated,
-        ),
+        merged_truncated(&agent, violations_truncated),
     );
     fields.insert(
         "reachability_model".to_owned(),
@@ -2642,15 +2601,7 @@ fn tool_sql_risks(params: &serde_json::Value) -> Result<serde_json::Value, (i64,
             })
             .collect::<Result<Vec<_>, _>>()?,
     };
-    let gate = match opt_str(params, "minimum_severity")? {
-        None => None,
-        Some(raw) => Some(crate::security::parse_gate_severity(raw).ok_or((
-            -32602,
-            format!(
-                "unknown minimum_severity '{raw}': expected 'low', 'medium', 'high', or 'critical'"
-            ),
-        ))?),
-    };
+    let gate = opt_gate_severity(params)?;
     let top = parse_top_param(params, crate::security::AGENT_DEFAULT_TOP)?;
     let excludes = config_excludes(config.as_ref());
     let report = crate::sql::analyze_sql_path(
@@ -2673,20 +2624,11 @@ fn tool_sql_risks(params: &serde_json::Value) -> Result<serde_json::Value, (i64,
         "schema_evidence_available".to_owned(),
         serde_json::json!(outcome.report.schema_evidence_available),
     );
-    fields.insert(
-        "findings".to_owned(),
-        agent.get("findings").cloned().unwrap_or_default(),
-    );
+    fields.insert("findings".to_owned(), agent_field(&agent, "findings"));
     fields.insert("violations".to_owned(), violations);
     fields.insert(
         "truncated".to_owned(),
-        serde_json::Value::from(
-            agent
-                .get("truncated")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-                || violations_truncated,
-        ),
+        merged_truncated(&agent, violations_truncated),
     );
     envelope(fields)
 }
@@ -2724,20 +2666,11 @@ fn tool_sql_plan(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
     fields.insert("tool".to_owned(), serde_json::json!("sql_plan"));
     fields.insert("current".to_owned(), serde_json::json!(current));
     fields.insert("baseline".to_owned(), serde_json::json!(baseline));
-    fields.insert(
-        "queries".to_owned(),
-        agent.get("queries").cloned().unwrap_or_default(),
-    );
+    fields.insert("queries".to_owned(), agent_field(&agent, "queries"));
     fields.insert("violations".to_owned(), violations);
     fields.insert(
         "truncated".to_owned(),
-        serde_json::Value::from(
-            agent
-                .get("truncated")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-                || violations_truncated,
-        ),
+        merged_truncated(&agent, violations_truncated),
     );
     envelope(fields)
 }
@@ -2761,7 +2694,7 @@ fn opt_plan_limit(params: &serde_json::Value, key: &str) -> Result<Option<f64>, 
     }
 }
 
-/// Specs for the twenty-one advertised analyzer tools.
+/// Specs for the twenty advertised analyzer tools, in `tools/list` order.
 fn tool_specs() -> serde_json::Value {
     serde_json::json!({
         "tools": [

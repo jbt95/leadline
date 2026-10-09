@@ -334,8 +334,7 @@ fn validate_rule_pattern(rule: &str, pattern: &str) -> Result<(), ConfigError> {
     if pattern.ends_with('/') {
         return reject("may not be directory-only");
     }
-    let bytes = pattern.as_bytes();
-    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+    if has_drive_prefix(pattern) {
         return reject("may not use a drive prefix");
     }
     let mut depth = 0i64;
@@ -440,105 +439,130 @@ pub fn parse_str(text: &str) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-fn read_analysis(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
-    let table = value
+/// One `[section]` table; every key inside is validated by its reader.
+fn section_table<'a>(section: &str, value: &'a Value) -> Result<&'a toml::Table, ConfigError> {
+    value
         .as_table()
-        .ok_or_else(|| ConfigError::new("expected table for [analysis]".to_string()))?;
+        .ok_or_else(|| ConfigError::new(format!("expected table for [{section}]")))
+}
+
+/// Rejects an unrecognized key inside `[section]`.
+fn unknown_key(section: &str, key: &str) -> ConfigError {
+    ConfigError::new(format!("unknown key `{key}` in [{section}]"))
+}
+
+/// One `[section]` array of plain strings.
+fn string_array(key: &str, value: &Value) -> Result<Vec<String>, ConfigError> {
+    let array = value.as_array().ok_or_else(|| {
+        ConfigError::new(format!(
+            "expected array for `{key}`, got {}",
+            value.type_str()
+        ))
+    })?;
+    array
+        .iter()
+        .map(|entry| {
+            entry.as_str().map(str::to_owned).ok_or_else(|| {
+                ConfigError::new(format!(
+                    "expected string in `{key}` array, got {}",
+                    entry.type_str()
+                ))
+            })
+        })
+        .collect()
+}
+
+/// One quoted string field, named `key` in the error message.
+fn read_string(key: &str, value: &Value) -> Result<String, ConfigError> {
+    value.as_str().map(str::to_owned).ok_or_else(|| {
+        ConfigError::new(format!(
+            "expected quoted string for `{key}`, got {}",
+            value.type_str()
+        ))
+    })
+}
+
+/// A non-negative finite score. `label` names the setting, so the threshold
+/// and regression messages stay distinct while sharing one parser.
+fn read_score(label: &str, value: &Value) -> Result<f64, ConfigError> {
+    let score = match value {
+        Value::Integer(n) => *n as f64,
+        Value::Float(n) => *n,
+        _ => {
+            return Err(ConfigError::new(format!(
+                "{label} must be >= 0, got `{value}`"
+            )));
+        }
+    };
+    if score.is_finite() && score >= 0.0 {
+        Ok(score)
+    } else {
+        Err(ConfigError::new(format!(
+            "{label} must be >= 0, got `{value}`"
+        )))
+    }
+}
+
+/// A non-negative `u32` count, `label` naming the setting as [`read_score`] does.
+fn read_limit(label: &str, value: &Value) -> Result<u32, ConfigError> {
+    match value {
+        Value::Integer(n) if (0..=i64::from(u32::MAX)).contains(n) => Ok(*n as u32),
+        _ => Err(ConfigError::new(format!(
+            "{label} must be >= 0, got `{value}`"
+        ))),
+    }
+}
+
+fn read_analysis(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
+    let table = section_table("analysis", value)?;
     for (key, item) in table {
         match key.as_str() {
-            "exclude" => {
-                let array = item.as_array().ok_or_else(|| {
-                    ConfigError::new(format!(
-                        "expected array for `exclude`, got {}",
-                        item.type_str()
-                    ))
-                })?;
-                let mut excludes = Vec::with_capacity(array.len());
-                for entry in array {
-                    match entry.as_str() {
-                        Some(pattern) => excludes.push(pattern.to_string()),
-                        None => {
-                            return Err(ConfigError::new(format!(
-                                "expected string in `exclude` array, got {}",
-                                entry.type_str()
-                            )));
-                        }
-                    }
-                }
-                config.analysis_excludes = excludes;
-            }
-            _ => {
-                return Err(ConfigError::new(format!(
-                    "unknown key `{key}` in [analysis]"
-                )));
-            }
+            "exclude" => config.analysis_excludes = string_array(key, item)?,
+            _ => return Err(unknown_key("analysis", key)),
         }
     }
     Ok(())
 }
 
 fn read_metrics(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
-    let table = value
-        .as_table()
-        .ok_or_else(|| ConfigError::new("expected table for [metrics]".to_string()))?;
+    let table = section_table("metrics", value)?;
     for (key, item) in table {
         match key.as_str() {
             "cyclomatic_profile" | "cognitive_profile" => {
-                let profile = item.as_str().ok_or_else(|| {
-                    ConfigError::new(format!(
-                        "expected quoted string for `{key}`, got {}",
-                        item.type_str()
-                    ))
-                })?;
+                let profile = read_string(key, item)?;
                 if key == "cyclomatic_profile" {
-                    config.cyclomatic_profile = profile.to_string();
+                    config.cyclomatic_profile = profile;
                 } else {
-                    config.cognitive_profile = profile.to_string();
+                    config.cognitive_profile = profile;
                 }
             }
-            _ => {
-                return Err(ConfigError::new(format!(
-                    "unknown key `{key}` in [metrics]"
-                )));
-            }
+            _ => return Err(unknown_key("metrics", key)),
         }
     }
     Ok(())
 }
+
 fn read_vulnerabilities(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
-    let table = value
-        .as_table()
-        .ok_or_else(|| ConfigError::new("expected table for [vulnerabilities]".to_string()))?;
+    let table = section_table("vulnerabilities", value)?;
     for (key, item) in table {
         match key.as_str() {
             "minimum_severity" => {
-                let raw = item.as_str().ok_or_else(|| {
-                    ConfigError::new(format!(
-                        "expected quoted string for `minimum_severity`, got {}",
-                        item.type_str()
-                    ))
-                })?;
-                let severity = crate::security::parse_gate_severity(raw).ok_or_else(|| {
+                let raw = read_string(key, item)?;
+                let severity = crate::security::parse_gate_severity(&raw).ok_or_else(|| {
                     ConfigError::new(format!(
                         "unknown minimum_severity '{raw}': expected 'low', 'medium', 'high', or 'critical'"
                     ))
                 })?;
                 config.vulnerabilities.minimum_severity = Some(severity);
             }
-            _ => {
-                return Err(ConfigError::new(format!(
-                    "unknown key `{key}` in [vulnerabilities]"
-                )));
-            }
+            _ => return Err(unknown_key("vulnerabilities", key)),
         }
     }
     Ok(())
 }
 
 fn read_sql(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
-    let table = value
-        .as_table()
-        .ok_or_else(|| ConfigError::new("expected table for [sql]".to_string()))?;
+    let table = section_table("sql", value)?;
     for (key, item) in table {
         match key.as_str() {
             "large_offset" => match item {
@@ -552,20 +576,19 @@ fn read_sql(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
             "migration_roots" => {
                 let array = item.as_array().ok_or_else(|| {
                     ConfigError::new(format!(
-                        "expected array for `migration_roots`, got {}",
+                        "expected array for `{key}`, got {}",
                         item.type_str()
                     ))
                 })?;
                 let mut roots = Vec::with_capacity(array.len());
                 let mut seen = std::collections::BTreeSet::new();
                 for entry in array {
-                    let raw = entry.as_str().ok_or_else(|| {
+                    let root = normalize_migration_root(entry.as_str().ok_or_else(|| {
                         ConfigError::new(format!(
-                            "expected string in `migration_roots` array, got {}",
+                            "expected string in `{key}` array, got {}",
                             entry.type_str()
                         ))
-                    })?;
-                    let root = normalize_migration_root(raw)?;
+                    })?)?;
                     if !seen.insert(root.clone()) {
                         return Err(ConfigError::new(format!(
                             "duplicate migration root `{root}`"
@@ -575,9 +598,7 @@ fn read_sql(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
                 }
                 config.sql.migration_roots = roots;
             }
-            _ => {
-                return Err(ConfigError::new(format!("unknown key `{key}` in [sql]")));
-            }
+            _ => return Err(unknown_key("sql", key)),
         }
     }
     Ok(())
@@ -680,99 +701,57 @@ fn normalize_index_path(raw: &str) -> Result<String, ConfigError> {
 }
 
 fn read_regressions(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
-    let table = value
-        .as_table()
-        .ok_or_else(|| ConfigError::new("expected table for [regressions]".to_string()))?;
+    let table = section_table("regressions", value)?;
     for (key, item) in table {
+        let label = format!("regression `{key}` delta");
         match key.as_str() {
-            "cognitive" => config.regressions.cognitive = read_regression_limit(key, item)?,
-            "cyclomatic" => config.regressions.cyclomatic = read_regression_limit(key, item)?,
-            "max_nesting" => config.regressions.max_nesting = read_regression_limit(key, item)?,
-            "crap" => config.regressions.crap = read_regression_score(item)?,
-            _ => {
-                return Err(ConfigError::new(format!(
-                    "unknown key `{key}` in [regressions]"
-                )));
-            }
+            "cognitive" => config.regressions.cognitive = read_limit(&label, item)?,
+            "cyclomatic" => config.regressions.cyclomatic = read_limit(&label, item)?,
+            "max_nesting" => config.regressions.max_nesting = read_limit(&label, item)?,
+            "crap" => config.regressions.crap = read_score(&label, item)?,
+            _ => return Err(unknown_key("regressions", key)),
         }
     }
     Ok(())
 }
 
-fn read_regression_limit(key: &str, value: &Value) -> Result<u32, ConfigError> {
-    match value {
-        Value::Integer(n) if (0..=i64::from(u32::MAX)).contains(n) => Ok(*n as u32),
-        _ => Err(ConfigError::new(format!(
-            "regression `{key}` delta must be >= 0, got `{value}`"
-        ))),
-    }
-}
-
-fn read_regression_score(value: &Value) -> Result<f64, ConfigError> {
-    let score = match value {
-        Value::Integer(n) => *n as f64,
-        Value::Float(n) => *n,
-        _ => {
-            return Err(ConfigError::new(format!(
-                "regression `crap` delta must be >= 0, got `{value}`"
-            )));
-        }
-    };
-    if score.is_finite() && score >= 0.0 {
-        Ok(score)
-    } else {
-        Err(ConfigError::new(format!(
-            "regression `crap` delta must be >= 0, got `{value}`"
-        )))
-    }
-}
-
 fn read_thresholds(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
-    let table = value
-        .as_table()
-        .ok_or_else(|| ConfigError::new("expected table for [thresholds]".to_string()))?;
+    let table = section_table("thresholds", value)?;
     for (key, item) in table {
         match key.as_str() {
             "function" => {
-                let inner = item.as_table().ok_or_else(|| {
-                    ConfigError::new("expected table for [thresholds.function]".to_string())
-                })?;
+                let inner = section_table("thresholds.function", item)?;
                 for (name, limit) in inner {
                     match name.as_str() {
                         "cognitive" => {
-                            config.thresholds.cognitive = Some(read_limit(name, limit)?);
+                            config.thresholds.cognitive =
+                                Some(read_limit(&format!("threshold `{name}`"), limit)?);
                         }
                         "cyclomatic" => {
-                            config.thresholds.cyclomatic = Some(read_limit(name, limit)?);
+                            config.thresholds.cyclomatic =
+                                Some(read_limit(&format!("threshold `{name}`"), limit)?);
                         }
                         "max_nesting" => {
-                            config.thresholds.max_nesting = Some(read_limit(name, limit)?);
+                            config.thresholds.max_nesting =
+                                Some(read_limit(&format!("threshold `{name}`"), limit)?);
                         }
                         "crap" => {
-                            config.thresholds.crap = Some(read_score(limit)?);
+                            config.thresholds.crap = Some(read_score("threshold `crap`", limit)?);
                         }
                         _ => {
-                            return Err(ConfigError::new(format!(
-                                "unknown key `{name}` in [thresholds.function]"
-                            )));
+                            return Err(unknown_key("thresholds.function", name));
                         }
                     }
                 }
             }
-            _ => {
-                return Err(ConfigError::new(format!(
-                    "unknown key `{key}` in [thresholds]"
-                )));
-            }
+            _ => return Err(unknown_key("thresholds", key)),
         }
     }
     Ok(())
 }
 
 fn read_duplication(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
-    let table = value
-        .as_table()
-        .ok_or_else(|| ConfigError::new("expected table for [duplication]".to_string()))?;
+    let table = section_table("duplication", value)?;
     for (key, item) in table {
         match key.as_str() {
             "min_tokens" => {
@@ -781,75 +760,27 @@ fn read_duplication(config: &mut Config, value: &Value) -> Result<(), ConfigErro
             "min_lines" => {
                 config.duplication.min_lines = read_positive_usize(key, item)?;
             }
-            "exclude" => {
-                let array = item.as_array().ok_or_else(|| {
-                    ConfigError::new(format!(
-                        "expected array for `exclude`, got {}",
-                        item.type_str()
-                    ))
-                })?;
-                let mut excludes = Vec::with_capacity(array.len());
-                for entry in array {
-                    match entry.as_str() {
-                        Some(pattern) => excludes.push(pattern.to_string()),
-                        None => {
-                            return Err(ConfigError::new(format!(
-                                "expected string in `exclude` array, got {}",
-                                entry.type_str()
-                            )));
-                        }
-                    }
-                }
-                config.duplication.excludes = excludes;
-            }
-            _ => {
-                return Err(ConfigError::new(format!(
-                    "unknown key `{key}` in [duplication]"
-                )));
-            }
+            "exclude" => config.duplication.excludes = string_array(key, item)?,
+            _ => return Err(unknown_key("duplication", key)),
         }
     }
     Ok(())
 }
 
 fn read_unused(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
-    let table = value
-        .as_table()
-        .ok_or_else(|| ConfigError::new("expected table for [unused]".to_string()))?;
+    let table = section_table("unused", value)?;
     for (key, item) in table {
         match key.as_str() {
-            "entries" => {
-                let array = item.as_array().ok_or_else(|| {
-                    ConfigError::new(format!(
-                        "expected array for `entries`, got {}",
-                        item.type_str()
-                    ))
-                })?;
-                let mut entries = Vec::with_capacity(array.len());
-                for entry in array {
-                    match entry.as_str() {
-                        Some(pattern) => entries.push(pattern.to_string()),
-                        None => {
-                            return Err(ConfigError::new(format!(
-                                "expected string in `entries` array, got {}",
-                                entry.type_str()
-                            )));
-                        }
-                    }
-                }
-                config.unused.entries = entries;
-            }
+            "entries" => config.unused.entries = string_array(key, item)?,
             "include_tests" => {
                 config.unused.include_tests = item.as_bool().ok_or_else(|| {
                     ConfigError::new(format!(
-                        "expected bool for `include_tests`, got {}",
+                        "expected bool for `{key}`, got {}",
                         item.type_str()
                     ))
                 })?;
             }
-            _ => {
-                return Err(ConfigError::new(format!("unknown key `{key}` in [unused]")));
-            }
+            _ => return Err(unknown_key("unused", key)),
         }
     }
     Ok(())
@@ -865,29 +796,22 @@ fn read_positive_usize(key: &str, value: &Value) -> Result<usize, ConfigError> {
 }
 
 fn read_architecture(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
-    let table = value
-        .as_table()
-        .ok_or_else(|| ConfigError::new("expected table for [architecture]".to_string()))?;
+    let table = section_table("architecture", value)?;
     for (key, item) in table {
         match key.as_str() {
             "rules" => {
                 let array = item.as_array().ok_or_else(|| {
                     ConfigError::new(format!(
-                        "expected array for `rules`, got {}",
+                        "expected array for `{key}`, got {}",
                         item.type_str()
                     ))
                 })?;
-                let mut rules = Vec::with_capacity(array.len());
-                for entry in array {
-                    rules.push(read_architecture_rule(entry)?);
-                }
-                config.architecture_rules = rules;
+                config.architecture_rules = array
+                    .iter()
+                    .map(read_architecture_rule)
+                    .collect::<Result<_, _>>()?;
             }
-            _ => {
-                return Err(ConfigError::new(format!(
-                    "unknown key `{key}` in [architecture]"
-                )));
-            }
+            _ => return Err(unknown_key("architecture", key)),
         }
     }
     Ok(())
@@ -903,31 +827,11 @@ fn read_architecture_rule(value: &Value) -> Result<ArchitectureRule, ConfigError
     let mut severity = None;
     for (key, item) in table {
         match key.as_str() {
-            "name" => name = Some(read_rule_string(key, item)?),
-            "source" => source = Some(read_rule_string(key, item)?),
-            "deny" => {
-                let array = item.as_array().ok_or_else(|| {
-                    ConfigError::new(format!(
-                        "expected array for `deny`, got {}",
-                        item.type_str()
-                    ))
-                })?;
-                let mut patterns = Vec::with_capacity(array.len());
-                for entry in array {
-                    match entry.as_str() {
-                        Some(pattern) => patterns.push(pattern.to_string()),
-                        None => {
-                            return Err(ConfigError::new(format!(
-                                "expected string in `deny` array, got {}",
-                                entry.type_str()
-                            )));
-                        }
-                    }
-                }
-                deny = Some(patterns);
-            }
+            "name" => name = Some(read_string(key, item)?),
+            "source" => source = Some(read_string(key, item)?),
+            "deny" => deny = Some(string_array(key, item)?),
             "severity" => {
-                let text = read_rule_string(key, item)?;
+                let text = read_string(key, item)?;
                 severity = Some(Severity::parse(&text).ok_or_else(|| {
                     ConfigError::new(format!(
                         "architecture rule severity must be info, warning, or error, got {text:?}"
@@ -949,41 +853,4 @@ fn read_architecture_rule(value: &Value) -> Result<ArchitectureRule, ConfigError
         severity: severity
             .ok_or_else(|| ConfigError::new("architecture rule needs `severity`".to_string()))?,
     })
-}
-
-fn read_rule_string(key: &str, value: &Value) -> Result<String, ConfigError> {
-    value.as_str().map(str::to_owned).ok_or_else(|| {
-        ConfigError::new(format!(
-            "expected quoted string for `{key}`, got {}",
-            value.type_str()
-        ))
-    })
-}
-
-fn read_limit(key: &str, value: &Value) -> Result<u32, ConfigError> {
-    match value {
-        Value::Integer(n) if (0..=i64::from(u32::MAX)).contains(n) => Ok(*n as u32),
-        _ => Err(ConfigError::new(format!(
-            "threshold `{key}` must be >= 0, got `{value}`"
-        ))),
-    }
-}
-
-fn read_score(value: &Value) -> Result<f64, ConfigError> {
-    let score = match value {
-        Value::Integer(n) => *n as f64,
-        Value::Float(n) => *n,
-        _ => {
-            return Err(ConfigError::new(format!(
-                "threshold `crap` must be >= 0, got `{value}`"
-            )));
-        }
-    };
-    if score.is_finite() && score >= 0.0 {
-        Ok(score)
-    } else {
-        Err(ConfigError::new(format!(
-            "threshold `crap` must be >= 0, got `{value}`"
-        )))
-    }
 }
