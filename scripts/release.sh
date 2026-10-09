@@ -60,6 +60,9 @@ VERSIONED_FILES=(
   integrations/claude-code/.claude-plugin/plugin.json
   integrations/pi/package.json
   integrations/omp/package.json
+  web/package.json
+  web/package-lock.json
+  integrations/opencode/plugin-v2/package.json
 )
 
 semver() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
@@ -135,10 +138,25 @@ git diff --cached --quiet || die "index has staged changes"
 # The list above is the only thing rolled back, so a refused release leaves
 # the tree exactly as it was.
 ROLLBACK=0
+TAGGED=0
+BUMP_COMMIT=""
 rollback() {
   local status=$?
   if [ "$ROLLBACK" = 1 ]; then
-    git checkout -- "${VERSIONED_FILES[@]}" 2>/dev/null || true
+    # Restoring the files cannot undo a commit that already exists, so a
+    # failure after the bump commit must reset back past it. Otherwise the
+    # version stays bumped with no vX.Y.Z pointing at it, and the next
+    # release aborts on `replace_line Cargo.toml "version = ..."` because
+    # the bump already consumed the line it looks for.
+    if [ -n "$BUMP_COMMIT" ]; then
+      git reset -q --hard "$BUMP_COMMIT~1" 2>/dev/null ||
+        echo "release: could not reset past $BUMP_COMMIT" >&2
+    else
+      git checkout -- "${VERSIONED_FILES[@]}" 2>/dev/null || true
+    fi
+    if [ "$TAGGED" = 1 ]; then
+      git tag -d "v$VERSION" >/dev/null 2>&1 || true
+    fi
     echo "release: failed; the version bump was rolled back" >&2
   fi
   return "$status"
@@ -164,6 +182,27 @@ replace_text() { # FILE OLD_TEXT NEW_TEXT EXPECTED
   OLD="$old" NEW="$new" perl -pi -e 's/\Q$ENV{OLD}\E/$ENV{NEW}/g' -- "$file"
 }
 
+# Bump the version of the root entry inside a lockfile's `packages` map.
+#
+# A version string alone is not a safe address here: a transitive dependency
+# can resolve to the same version as the root package, and the release must
+# touch only the root entry. Anchoring on the `"": {` key that opens it makes
+# the whole class of collision unreachable. `agent-adapter-ts` hit exactly
+# that: `json-bigint` and `node-domexception` also sit at 1.0.0, so a unique
+# match against the root version found three lines and the release died.
+replace_lock_root() { # FILE OLD NEW
+  local file="$1" old="$2" new="$3" line
+  line="$(awk -v key='    "": {' -v ver="      \"version\": \"$old\"," '
+    index($0, key) == 1 { root = 1; next }
+    root && index($0, ver) == 1 { print NR; exit }
+  ' "$file")"
+  [ -n "$line" ] || die "$file: no root version '$old' under packages"
+  # The trailing comma is part of the match: JSON records end with one, and a
+  # pattern that omits it silently matches nothing and edits no line at all.
+  LINE="$line" NEW="$new" perl -pi -e 'if ($. == $ENV{LINE}) { s/^      "version": ".*",$/      "version": "$ENV{NEW}",/ }' "$file"
+  grep -q "^      \"version\": \"$new\",\$" "$file" || die "$file: root version was not replaced"
+}
+
 replace_line Cargo.toml "version = \"$CURRENT\"" "version = \"$VERSION\""
 
 lock_line="$(grep -n '^name = "leadline"$' Cargo.lock | cut -d: -f1 || true)"
@@ -175,18 +214,31 @@ LINE="$((lock_line + 1))" NEW="$VERSION" perl -pi -e 'if ($. == $ENV{LINE}) { s/
 replace_line package.json "  \"version\": \"$CURRENT\"," "  \"version\": \"$VERSION\","
 replace_line integrations/agent-adapter-ts/package.json "  \"version\": \"$CURRENT\"," "  \"version\": \"$VERSION\","
 replace_line integrations/agent-adapter-ts/package-lock.json "  \"version\": \"$CURRENT\"," "  \"version\": \"$VERSION\","
-replace_line integrations/agent-adapter-ts/package-lock.json "      \"version\": \"$CURRENT\"," "      \"version\": \"$VERSION\","
+replace_lock_root integrations/agent-adapter-ts/package-lock.json "$CURRENT" "$VERSION"
 replace_line integrations/typesafe-triage/package.json "  \"version\": \"$CURRENT\"," "  \"version\": \"$VERSION\","
 replace_line integrations/typesafe-triage/package-lock.json "  \"version\": \"$CURRENT\"," "  \"version\": \"$VERSION\","
-replace_line integrations/typesafe-triage/package-lock.json "      \"version\": \"$CURRENT\"," "      \"version\": \"$VERSION\","
+replace_lock_root integrations/typesafe-triage/package-lock.json "$CURRENT" "$VERSION"
+replace_line web/package.json "  \"version\": \"$CURRENT\"," "  \"version\": \"$VERSION\","
+replace_line web/package-lock.json "  \"version\": \"$CURRENT\"," "  \"version\": \"$VERSION\","
+replace_lock_root web/package-lock.json "$CURRENT" "$VERSION"
 replace_text integrations/claude-code/.claude-plugin/plugin.json "\"version\":\"$CURRENT\"" "\"version\":\"$VERSION\"" 1
 replace_line integrations/pi/package.json "  \"version\": \"$CURRENT\"," "  \"version\": \"$VERSION\","
 replace_line integrations/omp/package.json "  \"version\": \"$CURRENT\"," "  \"version\": \"$VERSION\","
+# The stats dashboard and the experimental OpenCode V2 plugin are not published,
+# but they carry the release version so a checkout of tag vX.Y.Z reads as one
+# version everywhere. plugin-v2 has no lockfile: its `@opencode/plugin`
+# dependency is resolved by the host that loads the exported entry point, not
+# by this repository.
+replace_line integrations/opencode/plugin-v2/package.json "  \"version\": \"$CURRENT\"," "  \"version\": \"$VERSION\","
 
 changelog_heading="$(grep -n '^## Unreleased$' CHANGELOG.md | cut -d: -f1 || true)"
 [ -n "$changelog_heading" ] || die "CHANGELOG.md: no '## Unreleased' heading"
 [ "$(printf '%s\n' "$changelog_heading" | wc -l | tr -d ' ')" = 1 ] || die "CHANGELOG.md: more than one '## Unreleased' heading"
-entries="$(awk '/^## Unreleased$/{inside=1; next} /^#/{inside=0} inside && /^- /{count++} END{print count+0}' CHANGELOG.md)"
+# Count the bullets in the Unreleased section. Only a `## ` version heading
+# closes it: entries sit under `### Changed` / `### Fixed` subsections, so
+# treating those as section breaks left the counter at zero for every
+# well-formed changelog and the guard below never fired.
+entries="$(awk '/^## / { inside = ($0 == "## Unreleased"); next } inside && /^- / { count++ } END { print count+0 }' CHANGELOG.md)"
 [ "$entries" -gt 0 ] || say "warning: the Unreleased section has no entries"
 CHANGELOG_HEADING="$changelog_heading" NEW="$(printf '## Unreleased\n\n## %s - %s' "$VERSION" "$(date +%Y-%m-%d)")" \
   perl -pi -e 'if ($. == $ENV{CHANGELOG_HEADING}) { s/^\Q## Unreleased\E$/$ENV{NEW}/ }' \
@@ -201,8 +253,14 @@ fi
 
 git add -- "${VERSIONED_FILES[@]}"
 git commit -q -m "chore(release): bump to $VERSION"
+BUMP_COMMIT="$(git rev-parse HEAD)"
+# The tag is created while the rollback window is still open: a failed tag
+# must roll the bump commit back instead of leaving it untagged.
+if ! git tag "v$VERSION"; then
+  die "cannot tag v$VERSION"
+fi
+TAGGED=1
 ROLLBACK=0
-git tag "v$VERSION"
 
 if [ "$PUSH" = 1 ]; then
   # Atomic: the commit and the tag land together or not at all.

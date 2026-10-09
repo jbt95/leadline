@@ -15,9 +15,9 @@ use std::process::{Command, Output};
 
 const CURRENT: &str = "0.1.0";
 
-/// The ten versioned files, stubbed with the same shapes as the real ones —
-/// including where the trailing commas sit.
-const VERSIONED_STUBS: [(&str, &str); 10] = [
+/// The thirteen versioned files, stubbed with the same shapes as the real
+/// ones — including where the trailing commas sit.
+const VERSIONED_STUBS: [(&str, &str); 13] = [
     (
         "Cargo.toml",
         "[package]\nname = \"leadline\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
@@ -57,6 +57,18 @@ const VERSIONED_STUBS: [(&str, &str); 10] = [
     (
         "integrations/omp/package.json",
         "{\n  \"name\": \"leadline-omp\",\n  \"version\": \"0.1.0\",\n  \"private\": true\n}\n",
+    ),
+    (
+        "web/package.json",
+        "{\n  \"name\": \"leadline-stats\",\n  \"version\": \"0.1.0\",\n  \"private\": true\n}\n",
+    ),
+    (
+        "web/package-lock.json",
+        "{\n  \"name\": \"leadline-stats\",\n  \"version\": \"0.1.0\",\n  \"packages\": {\n    \"\": {\n      \"name\": \"leadline-stats\",\n      \"version\": \"0.1.0\",\n      \"dependencies\": {}\n    }\n  }\n}\n",
+    ),
+    (
+        "integrations/opencode/plugin-v2/package.json",
+        "{\n  \"name\": \"leadline-opencode-plugin-v2\",\n  \"version\": \"0.1.0\",\n  \"private\": true\n}\n",
     ),
 ];
 
