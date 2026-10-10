@@ -74,13 +74,26 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
   follows the rule `docs/smoke.md` already states: fixture paths are discovered,
   not hardcoded.
 - The `rustsec/audit-check` action is pinned to a commit SHA like every other
-  action in the workflows, and the eight duplicated `checkout` steps plus five
-  duplicated setup steps across the three workflows collapse into two
-  composite actions, `.github/actions/rust` and `.github/actions/node`. The
-  next action-version bump is a two-file change instead of a thirteen-file one.
+  action in the workflows. It was the one mutable tag left, so the supply-chain
+  job had no immutability guarantee. Every pinned action in the repository is
+  now a full 40-character commit SHA that resolves, checked against the upstream
+  repository with `git ls-remote`.
 
 ### Fixed
 
+- Every GitHub Actions workflow now resolves its pinned actions. A previous
+  change in this pass had introduced a 43-character string where
+  `actions/checkout` took a 40-character commit SHA — three duplicated
+  characters — and had moved that string into two local composite actions that
+  every job used, so all workflows failed at setup with `Unable to resolve
+  action ... unable to find version`. The SHA was already correct everywhere in
+  the repository before that change; the composite actions were reverted to the
+  inline `checkout` and setup steps the repository had been running, and every
+  pinned action in the tree is now verified as a full, resolvable commit SHA.
+  The other three CI gaps this pass set out to close are unaffected: all six
+  declared benches compile in CI, `rustsec/audit-check` is pinned to a commit
+  rather than a mutable tag, and `integrations/opencode/plugin-v2` is
+  typechecked.
 - `web/package.json` and `integrations/opencode/plugin-v2/package.json` now
   carry the release version instead of `0.17.0` and `0.1.0`, and
   `scripts/release.sh` bumps both (plus `web/package-lock.json`) with every

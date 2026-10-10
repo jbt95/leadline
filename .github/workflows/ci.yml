@@ -26,9 +26,12 @@ jobs:
           - windows-2025
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: ./.github/actions/rust
-        with:
-          clippy-rustfmt: ${{ matrix.runner == 'ubuntu-24.04' }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install Rust
+        run: rustup update stable --no-self-update
+      - name: Install lint tools
+        if: matrix.runner == 'ubuntu-24.04'
+        run: rustup component add clippy rustfmt
       - name: Check formatting
         if: matrix.runner == 'ubuntu-24.04'
         run: cargo fmt --check
@@ -49,7 +52,7 @@ jobs:
     name: Rust 1.90 compatibility
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc7cc4b7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - run: rustup toolchain install 1.90 --profile minimal
       - run: rustup run 1.90 cargo check --locked
 
@@ -60,7 +63,9 @@ jobs:
     # on network flakiness; pull request and push runs are strict.
     continue-on-error: ${{ github.event_name == 'schedule' }}
     steps:
-      - uses: ./.github/actions/rust
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install Rust
+        run: rustup update stable --no-self-update
       - name: Audit dependencies
         uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
@@ -75,7 +80,10 @@ jobs:
     name: Typecheck TS adapters
     runs-on: ubuntu-24.04
     steps:
-      - uses: ./.github/actions/node
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
       - name: Install pinned typecheck deps
         working-directory: integrations/agent-adapter-ts
         run: npm install --no-audit --no-fund
@@ -87,7 +95,10 @@ jobs:
     name: Typecheck OpenCode V2 plugin
     runs-on: ubuntu-24.04
     steps:
-      - uses: ./.github/actions/node
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
       # This is the package the root `exports` points at, so it is what a
       # consumer of `leadline/server` actually loads. The check deps are local:
       # the host that loads the entry point resolves `@opencode/plugin` itself.
@@ -102,7 +113,10 @@ jobs:
     name: Triage companion checks
     runs-on: ubuntu-24.04
     steps:
-      - uses: ./.github/actions/node
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
       - name: Install pinned lint and typecheck deps
         working-directory: integrations/typesafe-triage
         run: npm ci --no-audit --no-fund

@@ -49,7 +49,7 @@ jobs:
             archive: leadline-x86_64-pc-windows-msvc.zip
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: ./.github/actions/rust
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
       - name: Install Rust target
@@ -76,7 +76,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: ./.github/actions/rust
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
