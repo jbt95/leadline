@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 1.0.1 - 2026-10-10
+
 ### Changed
 
 - Maintenance pass over the CLI, the MCP handlers, `leadline.toml` parsing, and the

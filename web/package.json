@@ -1,6 +1,6 @@
 {
   "name": "leadline-stats",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Local project-metrics dashboard served by the leadline binary. Built bundle is checked in under web/dist and embedded at compile time; runtime stays offline.",
   "scripts": {
