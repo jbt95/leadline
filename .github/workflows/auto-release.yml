@@ -23,13 +23,12 @@ jobs:
     name: Tag the release
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: ./.github/actions/rust
         with:
           fetch-depth: 0
-      - name: Install Rust
-        run: rustup update stable --no-self-update
-      - name: Install lint tools
-        run: rustup component add clippy rustfmt
+          # The release script refuses to run on a dirty tree, so the lint
+          # tools it verifies with must be present.
+          clippy-rustfmt: "true"
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"

@@ -4,6 +4,128 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Changed
+
+- Maintenance pass over the CLI, the MCP handlers, `leadline.toml` parsing, and the
+  tree-sitter host-SQL walkers, with no output change. Every duplicated shape now
+  lives in one place: `section_table` / `string_array` / `read_string` / `read_score` /
+  `read_limit` in `config.rs`; `agent_envelope`, `change_comparion`,
+  `opt_gate_severity`, `merged_truncated`, `agent_field`, `optional_coverage` in
+  `mcp.rs`; `analysis_excludes`, `no_supported_files`, and `unknown_option` in
+  `main.rs`; `extract_dependencies_for` and `subtree_matches` in `parser/mod.rs`.
+  A `leadline duplication` run over `src/` reports 1,723 duplicated lines
+  across 121 groups where it reported 2,406 across 158 before, so the
+  duplicated code the clustering finds drops by 28%, and the three
+  long-standing copy-paste clusters in `mcp.rs` (the
+  `base`/`staged`/`target` selector, the agent-json envelope header, and the
+  scanner truncation flag) are gone. The one observable
+  difference is in leadline's own accounting of itself: the same `?` operators
+  that were previously invisible inside `println!(...)` macro token trees are
+  now hoisted into `print_json` calls, so cyclomatic complexity for fifteen
+  `main.rs` command functions reads one or two higher while cognitive
+  complexity is unchanged. No control flow was added.
+
+### Fixed
+
+- `analyze --format <ci-format>` and `function --format <ci-format>` no longer
+  accept a CI document shape they never read and silently print the terminal
+  report instead. The flag is now a usage error (exit 2) with
+  `--format <ci-format> is only supported on check, not <command>`, matching
+  `docs/cli-reference.md` and the CLI's own documented rule that a budget or
+  output flag with nothing to control is an error rather than a no-op.
+  `hotspots` and `risk` already rejected every value but `agent-json`, so they
+  are unaffected.
+- `scripts/release.sh` no longer leaves a wedged release when `git tag` fails.
+  The tag is now created while the rollback window is still open, and the
+  rollback resets past the bump commit instead of only restoring its files.
+  Previously a failed tag aborted the script with `ROLLBACK` already cleared, so
+  the version bump survived with no tag pointing at it and the next release run
+  aborted on `replace_line Cargo.toml "version = ..."` because the bump had
+  already consumed the line it looked for.
+- `CHANGELOG.md` had `### Added` merged onto the same line as its first bullet
+  under 0.23.0, which hid that entry from `scripts/release.sh`'s Unreleased
+  entry count and therefore from its "the Unreleased section has no entries"
+  guard.
+- A failing MCP test no longer leaks its fixture directory: the
+  `vulnerabilities` fixture now returns the `Fixture` drop guard the
+  `sql_risks` and `security_findings` fixtures already use, so an assertion
+  failure cleans up instead of leaving `leadline-mcp-vuln-*` in the package
+  root.
+
+### Changed
+
+- `cargo bench` builds with symbols. `[profile.bench]` is now explicit:
+  `lto = false`, `codegen-units = 256`, `debug = true`, `strip = false`. It
+  previously inherited `[profile.release]`, which strips symbols from the bench
+  binaries and serializes codegen, so `perf`/`samply` could not resolve frames
+  in a Criterion run and every bench rebuild was slower than it needed to be.
+- CI compiles all six declared benches with `cargo bench --no-run --locked`
+  instead of only `analyzer` and `history`. A type error in `duplication`,
+  `index`, `realworld`, or `source_snapshot` broke `cargo bench` while passing
+  every pull request.
+- `scripts/smoke.sh` and `scripts/realworld.sh` share one bootstrap in
+  `scripts/lib/common.sh`: the repository root, the log prefixes, the presence
+  checks, and one clone-or-update `fetch` that takes the fixture directory and
+  an optional depth. `smoke.sh` keeps full clones because its history sections
+  read git history; `realworld.sh` stays shallow.
+- The Babel packages `smoke.sh` scopes are discovered rather than hardcoded at
+  eleven sites, so an upstream restructure of `packages/babel-parser` or
+  `packages/babel-generator` is a one-line change instead of eleven. This
+  follows the rule `docs/smoke.md` already states: fixture paths are discovered,
+  not hardcoded.
+- The `rustsec/audit-check` action is pinned to a commit SHA like every other
+  action in the workflows, and the eight duplicated `checkout` steps plus five
+  duplicated setup steps across the three workflows collapse into two
+  composite actions, `.github/actions/rust` and `.github/actions/node`. The
+  next action-version bump is a two-file change instead of a thirteen-file one.
+
+### Fixed
+
+- `web/package.json` and `integrations/opencode/plugin-v2/package.json` now
+  carry the release version instead of `0.17.0` and `0.1.0`, and
+  `scripts/release.sh` bumps both (plus `web/package-lock.json`) with every
+  release. A checkout of tag `vX.Y.Z` now reads as one version everywhere
+  rather than mixing `1.0.0` with two stale numbers, and
+  `docs/releasing.md` lists the full file set. `plugin-v2` has no lockfile of
+  its own beyond the one `npm ci` needs for its typecheck deps; the host that
+  loads the exported entry point resolves the runtime dependency itself.
+- `scripts/release.sh` would have refused to cut any release after 1.0.0, and
+  no release has been cut since. Three latent bugs sat behind one another,
+  each masked by the earlier one: `replace_line` demanded a unique match for
+  the root entry of `integrations/agent-adapter-ts/package-lock.json`, but
+  `json-bigint` and `node-domexception` also resolve to `1.0.0`, so once
+  `CURRENT` became 1.0.0 the match found three lines and the release died;
+  `replace_text` read `$expected` instead of its own `$4`; and the Unreleased
+  entry counter treated a `###` subsection heading as the end of the section,
+  so it counted zero for every well-formed changelog and its guard never fired.
+  The lockfile root is now addressed by anchoring on the `""` key that opens
+  it, which makes the whole class of version collision unreachable.
+- The `execute.after` hook of the experimental OpenCode V2 plugin tried to
+  write `event.result.content`, which `Tool.Result` declares `readonly` while
+  the hook callback returns `void`. Nothing ever typechecked that file, so the
+  code could not compile as written and had never run. The note now attaches by
+  replacing the whole result object, which also means a result whose content
+  was absent no longer silently drops the note.
+- `integrations/opencode/plugin-v2/index.ts` — the file the root
+  `package.json` `exports` points at, so the entry a consumer of
+  `leadline/server` actually loads — now has a typecheck gate: its own
+  `tsconfig.json`, a `check` script, a committed lockfile, and an
+  `opencode-v2-check` CI job next to the existing `ts-check` and
+  `triage-checks` lanes. It uses `npm ci` like `typesafe-triage` and keeps its
+  dependency as a devDependency, since only the typecheck needs it.
+- `CHANGELOG.md` 0.20.1 shipped with an empty body because its one entry was
+  filed under `## 0.20.0` — 0.20.0 was tagged on 2026-09-26, before the fix
+  landed on 2026-09-27, so the merge that carried it also carried its
+  changelog lines under the wrong heading. The `### Fixed` entry now sits under
+  0.20.1, and 0.20.0's pointer to "the fix below" reads "the 0.20.1 fix above".
+- `skills-lock.json` is now documented in `.agents/README.md`. It is the
+  provenance record for the 19 vendored third-party skills under
+  `.agents/skills/`: source repository, path, and content hash for each. This
+  repository neither writes nor reads it — it is the output of whichever
+  external skills manager installed the tree — so deleting it would have
+  discarded the only record of where the vendored content came from and how to
+  detect that a local edit drifted from upstream.
+
 ## 1.0.0 - 2026-10-03
 
 ### Removed
@@ -30,7 +152,9 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 - `security --staged` and `vulnerabilities --staged` no longer resolve the index against `HEAD~1`. `--staged` now compares `HEAD` against the index, which is what a pre-commit gate means. The old base failed outright in a repository with a single commit (`fatal: bad revision 'HEAD~1'`), so the shared secret gate skipped the check on the first commit of a repository and the MCP `secret_scan` tool with `mode: "staged"` returned that git error instead of a result; where it did resolve, it also reported findings from the previous commit as changed, re-warning about secrets that were already committed. `--staged` cannot be combined with an explicit `--base`, so this changes what that flag reports and overrides no explicit request: `changed`, `diff`, and `debt` keep their documented `HEAD~1` default base. The comparison now resolves through one shared definition instead of two copies.
 
-### Added- `secret_scan` MCP tool: the shared secret gate is now reachable from any MCP host, with no native plugin. It lists the paths changed against `HEAD` (untracked files count), runs an installed `gitleaks` over them with a fixed argument vector and `--redact`, and gates the SARIF the scanner writes with the same floor the shell runner uses (`low`, narrowed to the scanned paths). `mode` selects `worktree` (default) or `staged`; the scan root is the server's working directory, so the tool accepts no path and no code. `staged` scans the whole index and gates it against `HEAD` at the repository root, so a server started in a subdirectory still reports findings elsewhere in the repository. The tool requires gitleaks 8.19 or newer, and passes every repository-supplied path behind a `--` so a file named like a flag stays a value. `status` is `findings` when the gate has violations, `clean` when the scan ran and found none, and `nothing_to_scan` when no changed path was scannable, so an unscanned call never reads as a clean one. A missing `gitleaks`, a scanner failure, a missing report, and a repository with no commits all fail visibly with an error rather than an empty result. Findings carry a location and a severity, never the matched text, and the scanner's reports live in a private temporary directory outside the repository, created `0700` on Unix and removed when the call returns. Leadline still never detects secrets itself: `gitleaks` remains the only detector, as with the shell runner and the native `leadline_secret_check` tools. This makes the MCP server the one analysis surface that runs a second subprocess, so `docs/security-model.md` now records it explicitly.
+### Added
+
+- `secret_scan` MCP tool: the shared secret gate is now reachable from any MCP host, with no native plugin. It lists the paths changed against `HEAD` (untracked files count), runs an installed `gitleaks` over them with a fixed argument vector and `--redact`, and gates the SARIF the scanner writes with the same floor the shell runner uses (`low`, narrowed to the scanned paths). `mode` selects `worktree` (default) or `staged`; the scan root is the server's working directory, so the tool accepts no path and no code. `staged` scans the whole index and gates it against `HEAD` at the repository root, so a server started in a subdirectory still reports findings elsewhere in the repository. The tool requires gitleaks 8.19 or newer, and passes every repository-supplied path behind a `--` so a file named like a flag stays a value. `status` is `findings` when the gate has violations, `clean` when the scan ran and found none, and `nothing_to_scan` when no changed path was scannable, so an unscanned call never reads as a clean one. A missing `gitleaks`, a scanner failure, a missing report, and a repository with no commits all fail visibly with an error rather than an empty result. Findings carry a location and a severity, never the matched text, and the scanner's reports live in a private temporary directory outside the repository, created `0700` on Unix and removed when the call returns. Leadline still never detects secrets itself: `gitleaks` remains the only detector, as with the shell runner and the native `leadline_secret_check` tools. This makes the MCP server the one analysis surface that runs a second subprocess, so `docs/security-model.md` now records it explicitly.
 
 ## 0.22.0 - 2026-09-29
 
@@ -54,16 +178,20 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## 0.20.1 - 2026-09-27
 
+### Fixed
+
+- `execute`'s generated declaration lines carried argument names but not their types or whether they were required, so a model composing a call from the declaration had to guess: `coverage: true`, `ownership: true`, `test_map: true`, and a missing `target` on `impact` each cost a `-32602` round trip. Each argument now renders its type and an optional `?` from the same schema the handlers validate against — `path?: string`, `top?: number`, `test_map?: string[]`, `target: string`, `since?: "30d" | "90d" | "365d"`, `ownership?: "aggregate" | "include_authors" | "anonymize_authors"` — so a call composed from the declaration is accepted the first time. Descriptions stay out; the declarations remain one short line per tool.
+
+  This is the fix the 0.20.0 entry below points at: 0.20.0 was tagged on
+  2026-09-26, before this landed on 2026-09-27, so the merge that carried it
+  also filed its changelog lines under 0.20.0's heading.
+
 ## 0.20.0 - 2026-09-26
 
 ### Changed (breaking)
 
-- The MCP server exposes a single `execute` tool instead of twenty. A script — a JavaScript async function body whose only global is a `tools` namespace, one async function per analyzer tool — composes the twenty analyzer tools in one round trip, so loops, branching, `await`, and `Promise.all` aggregate reports in the sandbox and the intermediate results never enter the model's context. `execute` takes one required `code` argument, rejects unknown argument fields with `-32602`, and returns the script's single JSON-serializable value; its description carries a generated declaration line per tool (name plus argument names) derived from the same specs the twenty advertised entries used to come from, so a host loads one tool and the model still sees every capability. Each tool returns its own JSON report unchanged, and a tool failure surfaces as `script error: <message>`, while a syntax error reports the real JavaScript message. Direct calls to the twenty names are rejected — the JSON-RPC direct-tool-method extension is removed, so `execute` is the only route and no caller can skip the sandbox or its call budget. A script stays sandboxed and offline: at most 100 tool calls, a 30s wall clock, and 64 MB of JavaScript memory, with no filesystem, network, module, timer, or process access. Adds the `rquickjs` dependency (`0.9`), whose job queue is driven synchronously, so no `futures` feature and no async runtime are needed. Telemetry is unchanged in kind: every tool called from a script still records its own invocation, cost, and outcome, alongside the outer `execute` call.
-  Argument types and required-ness are in those declaration lines as of the fix below.
-
-### Fixed
-
-- `execute`'s generated declaration lines carried argument names but not their types or whether they were required, so a model composing a call from the declaration had to guess: `coverage: true`, `ownership: true`, `test_map: true`, and a missing `target` on `impact` each cost a `-32602` round trip. Each argument now renders its type and an optional `?` from the same schema the handlers validate against — `path?: string`, `top?: number`, `test_map?: string[]`, `target: string`, `since?: "30d" | "90d" | "365d"`, `ownership?: "aggregate" | "include_authors" | "anonymize_authors"` — so a call composed from the declaration is accepted the first time. Descriptions stay out; the declarations remain one short line per tool.
+- The MCP server exposes a single `execute` tool instead of twenty. A script — a JavaScript async function body whose only global is a `tools` namespace, one async function per analyzer tool — composes the twenty analyzer tools in one round trip, so loops, branching, `await`, and `Promise.all` aggregate reports in the sandbox and the intermediate results never enter the model's context. `execute` takes one required `code` argument, rejects unknown argument fields with `-32602`, and returns the script's single JSON-serializable value; its description carries a generated declaration line per tool (name plus argument names) derived from the same specs the twenty advertised entries used to come from, so a host loads one tool and the model still sees every capabili…
+  Argument types and required-ness are in those declaration lines as of the 0.20.1 fix above.
 
 ## 0.19.1 - 2026-09-26
 

@@ -294,6 +294,38 @@ fn json_and_agent_json_together_is_usage_error() {
 }
 
 #[test]
+fn ci_format_on_an_analysis_command_is_usage_error() {
+    // A CI document shape only the scanner commands read: accepting it on
+    // `analyze` and then printing the terminal report hides the caller's
+    // intent, so the flag is rejected instead of ignored.
+    let root = temporary_directory();
+    let file = root.join("tiny.ts");
+    std::fs::write(&file, "function tiny() { return 1; }\n").unwrap();
+    let path = file.to_string_lossy().to_string();
+    // Only the `CommonOptions` commands carried the gap; `hotspots`/`risk`
+    // already reject every value but `agent-json` in their own parser.
+    let cases: [Vec<&str>; 2] = [vec!["analyze", &path], vec!["function", &path, "tiny"]];
+    for command in cases {
+        let output = common::leadline()
+            .args(command.clone())
+            .arg("--format")
+            .arg("badge")
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{command:?} --format badge must be a usage error"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("only supported on check"),
+            "{command:?} must say the flag belongs to check"
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn missing_function_is_usage_error() {
     let root = temporary_directory();
     let file = root.join("tiny.ts");

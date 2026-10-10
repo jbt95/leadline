@@ -20,7 +20,9 @@ from the conventional commits since the last tag:
 `integrations/typesafe-triage/package.json`,
 `integrations/typesafe-triage/package-lock.json`,
 `integrations/claude-code/.claude-plugin/plugin.json`,
-`integrations/pi/package.json`, and `integrations/omp/package.json`; closes
+`integrations/pi/package.json`, `integrations/omp/package.json`,
+`web/package.json`, `web/package-lock.json`, and
+`integrations/opencode/plugin-v2/package.json`; closes
 the `Unreleased` section of `CHANGELOG.md` as `## X.Y.Z - date`; verifies the
 bumped tree with `cargo fmt --check`, `cargo clippy --all-targets --locked --
 -D warnings`, and `cargo test --locked`; then commits `chore(release): bump to

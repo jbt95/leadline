@@ -321,10 +321,14 @@ fn normalize_leaf(node: Node<'_>, source: &[u8]) -> Option<String> {
     Some(text.to_owned())
 }
 
-pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDependencies> {
-    let (language, tree) = parse_tree(path, source)?;
-    let root = tree.root_node();
-    Ok(match language {
+/// Per-language local-dependency extraction. Shared by [`extract_dependencies`]
+/// and [`parse_bundle`] so the two entry points cannot drift.
+fn extract_dependencies_for(
+    language: Language,
+    root: Node<'_>,
+    source: &[u8],
+) -> ParsedDependencies {
+    match language {
         Language::C | Language::Cpp => c_family::extract_local_includes(root, source),
         Language::Go => go::extract_go_dependencies(root, source),
         Language::Java => java::extract_java_dependencies(root, source),
@@ -334,7 +338,12 @@ pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDe
             js::extract_javascript_dependencies(root, source)
         }
         Language::Zig => zig::extract_imports(root, source),
-    })
+    }
+}
+
+pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDependencies> {
+    let (language, tree) = parse_tree(path, source)?;
+    Ok(extract_dependencies_for(language, tree.root_node(), source))
 }
 
 /// Everything one source file yields for a full project pass.
@@ -352,17 +361,7 @@ pub(crate) fn parse_bundle(path: &str, source: &[u8]) -> Result<ParsedBundle> {
     let root = tree.root_node();
     Ok(ParsedBundle {
         analysis: analyze_tree(path, language, source, root),
-        dependencies: match language {
-            Language::C | Language::Cpp => c_family::extract_local_includes(root, source),
-            Language::Go => go::extract_go_dependencies(root, source),
-            Language::Java => java::extract_java_dependencies(root, source),
-            Language::Rust => rust::extract_rust_dependencies(root, source),
-            Language::Python => python::extract_relative_imports(root, source),
-            Language::JavaScript | Language::TypeScript | Language::Tsx => {
-                js::extract_javascript_dependencies(root, source)
-            }
-            Language::Zig => zig::extract_imports(root, source),
-        },
+        dependencies: extract_dependencies_for(language, root, source),
         tokens: tokenize_tree(language, source, root),
     })
 }
@@ -1977,26 +1976,18 @@ fn first_named_child_after<'a>(node: Node<'a>, function: Node<'a>) -> Option<Nod
         .find(|child| !child.is_extra() && child.start_byte() >= function.end_byte())
 }
 
-/// True when the subtree holds a `+` concatenation or template substitution.
+/// Walks a subtree for the first node `test` accepts, or `false`.
 ///
-/// Nested functions are not entered: a callback argument computing `a + b`
-/// is not the call's SQL text.
-fn subtree_is_dynamic(root: Node<'_>, language: Language) -> bool {
+/// Nested function bodies are not entered: a callback argument computing a
+/// value is not the call's own SQL text. Every dynamic-text probe shares this
+/// walk, so that gate lives in exactly one place.
+fn subtree_matches(root: Node<'_>, language: Language, test: impl Fn(Node<'_>) -> bool) -> bool {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         if node.id() != root.id() && is_function(node, language) {
             continue;
         }
-        if node.kind() == "template_substitution" {
-            return true;
-        }
-        if node.kind() == "binary_expression"
-            && (if language == Language::Zig {
-                has_zig_concatenation_operator(node)
-            } else {
-                has_plus_operator(node)
-            })
-        {
+        if test(node) {
             return true;
         }
         push_children_reversed(node, &mut stack);
@@ -2004,36 +1995,38 @@ fn subtree_is_dynamic(root: Node<'_>, language: Language) -> bool {
     false
 }
 
+/// True when the subtree holds a `+` concatenation or template substitution.
+fn subtree_is_dynamic(root: Node<'_>, language: Language) -> bool {
+    subtree_matches(root, language, |node| {
+        if node.kind() == "template_substitution" {
+            return true;
+        }
+        node.kind() == "binary_expression"
+            && (if language == Language::Zig {
+                has_zig_concatenation_operator(node)
+            } else {
+                has_plus_operator(node)
+            })
+    })
+}
+
 /// True when a Python argument subtree builds query text dynamically.
 ///
 /// Python has no template substitution and its concatenation is a
 /// `binary_operator`, not a `binary_expression`: an f-string carries
 /// `interpolation` children, and `%` formatting, `.format(...)`, and `+`
-/// concatenation all hide the text from a literal reader. Nested function
-/// bodies are not entered, mirroring `subtree_is_dynamic`.
+/// concatenation all hide the text from a literal reader.
 fn subtree_is_dynamic_python(root: Node<'_>, source: &[u8]) -> bool {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if node.id() != root.id() && is_function(node, Language::Python) {
-            continue;
-        }
-        match node.kind() {
-            "interpolation" => return true,
-            "binary_operator"
-                if matches!(
-                    node.child_by_field_name("operator")
-                        .map(|operator| node_text(operator, source)),
-                    Some("+" | "%")
-                ) =>
-            {
-                return true;
-            }
-            "call" if python_call_is_format(node, source) => return true,
-            _ => {}
-        }
-        push_children_reversed(node, &mut stack);
-    }
-    false
+    subtree_matches(root, Language::Python, |node| match node.kind() {
+        "interpolation" => true,
+        "binary_operator" => matches!(
+            node.child_by_field_name("operator")
+                .map(|operator| node_text(operator, source)),
+            Some("+" | "%")
+        ),
+        "call" => python_call_is_format(node, source),
+        _ => false,
+    })
 }
 
 /// True when a Python call is a `str.format(...)` method call.
@@ -2046,53 +2039,35 @@ fn python_call_is_format(node: Node<'_>, source: &[u8]) -> bool {
 
 /// True when the subtree holds a `Sprintf`-family call (Go only):
 /// `fmt.Sprintf("...%v...", x)` builds the query text dynamically by
-/// construction. Nested function bodies are not entered, mirroring
-/// `subtree_is_dynamic`.
+/// construction.
 fn subtree_contains_sprintf(root: Node<'_>, source: &[u8]) -> bool {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if node.id() != root.id() && is_function(node, Language::Go) {
-            continue;
-        }
-        if node.kind() == "call_expression"
-            && let Some(function) = node.child_by_field_name("function")
-        {
-            let callee = match function.kind() {
-                "identifier" => Some(function),
-                "selector_expression" => function.child_by_field_name("field"),
-                _ => None,
-            };
-            if callee.is_some_and(|name| node_text(name, source).contains("Sprintf")) {
-                return true;
-            }
-        }
-        push_children_reversed(node, &mut stack);
-    }
-    false
+    subtree_matches(root, Language::Go, |node| {
+        node.kind() == "call_expression"
+            && node
+                .child_by_field_name("function")
+                .and_then(|function| match function.kind() {
+                    "identifier" => Some(function),
+                    "selector_expression" => function.child_by_field_name("field"),
+                    _ => None,
+                })
+                .is_some_and(|name| node_text(name, source).contains("Sprintf"))
+    })
 }
 
 /// True when the subtree holds a `format!`/`concat!` macro invocation
 /// (Rust only): `format!("SELECT ... {x}")` builds the query text
-/// dynamically by construction. Nested function bodies are not entered,
-/// mirroring `subtree_is_dynamic`.
+/// dynamically by construction.
 fn subtree_contains_format_macro(root: Node<'_>, source: &[u8]) -> bool {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if node.id() != root.id() && is_function(node, Language::Rust) {
-            continue;
-        }
-        if node.kind() == "macro_invocation"
-            && let Some(macro_name) = node.child_by_field_name("macro")
-        {
-            let text = node_text(macro_name, source);
-            let name = text.rsplit("::").next().unwrap_or(text);
-            if matches!(name, "format" | "concat") {
-                return true;
-            }
-        }
-        push_children_reversed(node, &mut stack);
-    }
-    false
+    subtree_matches(root, Language::Rust, |node| {
+        node.kind() == "macro_invocation"
+            && node
+                .child_by_field_name("macro")
+                .map(|macro_name| {
+                    let text = node_text(macro_name, source);
+                    text.rsplit("::").next().unwrap_or(text)
+                })
+                .is_some_and(|name| matches!(name, "format" | "concat"))
+    })
 }
 
 fn has_plus_operator(node: Node<'_>) -> bool {

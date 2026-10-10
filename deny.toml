@@ -1,13 +1,15 @@
 # cargo-deny configuration for leadline.
 #
-# The allow list mirrors the current transitive closure in Cargo.lock:
-# MIT and Apache-2.0 cover every crate except unicode-ident (adds
-# Unicode-3.0) and zerocopy / zerocopy-derive (add BSD-2-Clause);
-# Unlicense covers the BurntSushi crates (memchr, aho-corasick, globset,
-# ignore, walkdir, same-file, winapi-util). Anything else, including
-# copyleft and unknown licenses, fails `cargo deny check licenses`.
-# Re-check the allow list with `cargo deny check licenses` after any
-# dependency change.
+# Deny-by-default licensing: the transitive closure is MIT and Apache-2.0,
+# which also covers criterion's dev-only graph (alloca, plotters, clap,
+# regex). Two crates need an extra allowance: unicode-ident adds Unicode-3.0
+# and zerocopy / zerocopy-derive add BSD-2-Clause. The BurntSushi crates are
+# dual-licensed `Unlicense OR MIT`, which `Unlicense` alone no longer needs to
+# cover. Anything else, including copyleft and unknown licenses, fails
+# `cargo deny check licenses`. Re-check the allow list with
+# `cargo deny check licenses` after any dependency change: new versions pull
+# new transitive crates, and the list above is a policy, not an enumeration
+# that stays accurate on its own.
 
 [graph]
 # Target triples must be an explicit array (cargo-deny has no "all"

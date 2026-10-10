@@ -17,9 +17,10 @@
 # Fixtures float on latest main; nothing here runs in CI and `cargo test`
 # never touches the network. Full (not shallow) clones: the history
 # surfaces degrade to git_available:false without git history.
-set -euo pipefail
+SAY_PREFIX=smoke
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIR="${LEADLINE_SMOKE_DIR:-$ROOT/target/smoke}"
 BIN="${LEADLINE_BIN:-$ROOT/target/debug/leadline}"
 ONLY="${SMOKE_ONLY:-all}"
@@ -29,13 +30,11 @@ SRV=""
 cleanup() { rm -rf "$TMP"; if [ -n "$SRV" ]; then kill "$SRV" 2>/dev/null || true; wait "$SRV" 2>/dev/null || true; fi; }
 trap cleanup EXIT
 
-die() { echo "smoke: FAIL: $1" >&2; exit 1; }
-say() { echo "smoke: $1"; }
-wanted() { [ "$ONLY" = "all" ] || [ "$ONLY" = "$1" ]; }
+have git
+have python3
+have curl
 
-command -v git >/dev/null || die "git not found"
-command -v python3 >/dev/null || die "python3 not found"
-command -v curl >/dev/null || die "curl not found"
+wanted() { [ "$ONLY" = "all" ] || [ "$ONLY" = "$1" ]; }
 
 if [ ! -x "$BIN" ]; then
   say "building leadline..."
@@ -54,30 +53,32 @@ assert_json() {
 # allow_01 CMD... — quality gates exit 0 (clean) or 1 (violations).
 allow_01() { "$@" || { local code=$?; [ "$code" -eq 1 ] || die "exit $code: $*"; }; }
 
-# fetch NAME URL BRANCH — full clone (history needs it), update in place.
-fetch() {
-  local name="$1" url="$2" branch="$3" path="$DIR/$1"
-  if [ -d "$path/.git" ]; then
-    say "updating $name..."
-    git -C "$path" fetch origin "$branch" && git -C "$path" reset --hard FETCH_HEAD
-  else
-    say "cloning $name ($branch)..."
-    git clone --branch "$branch" "$url" "$path"
-  fi
-}
-
 need_repo() { [ -d "$1/.git" ] || die "missing $1 (run the fetch section first)"; }
 
 if wanted fetch; then
   mkdir -p "$DIR"
-  fetch "babel" "https://github.com/babel/babel.git" "main"
-  fetch "elasticsearch" "https://github.com/elastic/elasticsearch.git" "main"
-  fetch "timescaledb" "https://github.com/timescale/timescaledb.git" "main"
+  fetch "babel" "https://github.com/babel/babel.git" "main" "$DIR"
+  fetch "elasticsearch" "https://github.com/elastic/elasticsearch.git" "main" "$DIR"
+  fetch "timescaledb" "https://github.com/timescale/timescaledb.git" "main" "$DIR"
 fi
 
 BABEL="$DIR/babel"
 ES="$DIR/elasticsearch"
 TSDB="$DIR/timescaledb"
+
+# Babel renames and restructures its packages across majors, so the two
+# packages the smoke sections scope are discovered rather than hardcoded.
+# Discover once; every section below reads these variables.
+PARSER_PKG="$(cd "$BABEL" 2>/dev/null && ls -d packages/babel-parser 2>/dev/null || true)"
+if [ -z "$PARSER_PKG" ]; then
+  PARSER_PKG="$(cd "$BABEL" 2>/dev/null && ls -d packages/* 2>/dev/null | head -n 1 || true)"
+fi
+GENERATOR_PKG="$(cd "$BABEL" 2>/dev/null && ls -d packages/babel-generator 2>/dev/null || true)"
+if [ -z "$GENERATOR_PKG" ]; then
+  GENERATOR_PKG="$(cd "$BABEL" 2>/dev/null && ls -d packages/* 2>/dev/null | tail -n 1 || true)"
+fi
+PARSER="${PARSER_PKG:-packages/babel-parser}"
+GENERATOR="${GENERATOR_PKG:-packages/babel-generator}"
 
 if wanted scale; then
   need_repo "$BABEL"; need_repo "$ES"
@@ -94,7 +95,7 @@ if wanted gates; then
   need_repo "$BABEL"
   say "check gates (0 clean, 1 violations)..."
   allow_01 "$BIN" check "$BABEL" --cognitive 15 --cyclomatic 10 --max-nesting 4
-  allow_01 "$BIN" check "$BABEL/packages/babel-parser" --cognitive 15 --cyclomatic 10 --max-nesting 4 --format agent-json
+  allow_01 "$BIN" check "$BABEL/$PARSER" --cognitive 15 --cyclomatic 10 --max-nesting 4 --format agent-json
 fi
 
 if wanted history; then
@@ -105,7 +106,7 @@ if wanted history; then
   say "coupling/impact on a file with dependents..."
   TARGET=""
   # Intentional word-splitting below: newline-separated paths, no spaces in repos.
-  CANDS="$(cd "$BABEL" && grep -rl --include='*.ts' --exclude-dir=node_modules -m1 -e '^import ' -e 'from "' packages/babel-parser/src | head -n 5)"
+  CANDS="$(cd "$BABEL" && grep -rl --include='*.ts' --exclude-dir=node_modules -m1 -e '^import ' -e 'from "' "$PARSER/src" | head -n 5)"
   for cand in $CANDS; do
     if "$BIN" impact "$BABEL/$cand" --path "$BABEL" --format agent-json > "$TMP/im.json" 2>/dev/null; then
       TARGET="$cand"; break
@@ -117,10 +118,10 @@ if wanted history; then
   assert_json "$TMP/co.json"
   say "debt/baseline..."
   allow_01 "$BIN" debt --base HEAD~20 --path "$BABEL" --format agent-json
-  "$BIN" baseline "$BABEL/packages/babel-parser" --output "$TMP/base.json"
-  allow_01 "$BIN" check "$BABEL/packages/babel-parser" --baseline "$TMP/base.json" --regressions
+  "$BIN" baseline "$BABEL/$PARSER" --output "$TMP/base.json"
+  allow_01 "$BIN" check "$BABEL/$PARSER" --baseline "$TMP/base.json" --regressions
   say "duplication (0 clean, 1 findings, 3 ceiling)..."
-  code=0; "$BIN" duplication "$BABEL/packages/babel-parser" --base HEAD~50 --json > "$TMP/du.json" || code=$?
+  code=0; "$BIN" duplication "$BABEL/$PARSER" --base HEAD~50 --json > "$TMP/du.json" || code=$?
   code=${code:-0}; case "$code" in 0|1|3) ;; *) die "duplication exit $code" ;; esac
   assert_json "$TMP/du.json"
 fi
@@ -128,10 +129,10 @@ fi
 if wanted joins; then
   need_repo "$BABEL"
   say "project/snapshot/policy..."
-  "$BIN" project "$BABEL/packages/babel-generator" --format agent-json > "$TMP/pr.json"
+  "$BIN" project "$BABEL/$GENERATOR" --format agent-json > "$TMP/pr.json"
   assert_json "$TMP/pr.json"
-  "$BIN" snapshot "$BABEL/packages/babel-generator" --output "$TMP/snap.json"
-  allow_01 "$BIN" policy "$BABEL/packages/babel-generator" --base HEAD~10 --json
+  "$BIN" snapshot "$BABEL/$GENERATOR" --output "$TMP/snap.json"
+  allow_01 "$BIN" policy "$BABEL/$GENERATOR" --base HEAD~10 --json
 fi
 
 if wanted sql; then
@@ -164,10 +165,10 @@ if wanted coverage; then
   need_repo "$BABEL"
   if [ -f "$BABEL/coverage/lcov.info" ]; then
     say "test-targets with coverage..."
-    "$BIN" test-targets "$BABEL/packages/babel-parser" --lcov "$BABEL/coverage/lcov.info" --format agent-json > "$TMP/tt.json"
+    "$BIN" test-targets "$BABEL/$PARSER" --lcov "$BABEL/coverage/lcov.info" --format agent-json > "$TMP/tt.json"
     assert_json "$TMP/tt.json"
   else
-    say "skip: no coverage (run: cd $BABEL && TEST_COVERAGE=true yarn jest packages/babel-parser)"
+    say "skip: no coverage (run: cd $BABEL && TEST_COVERAGE=true yarn jest \"$PARSER\")"
   fi
 fi
 
