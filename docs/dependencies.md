@@ -112,10 +112,12 @@ Rust (`.rs`):
   declaring file's module directory to `foo.rs` or `foo/mod.rs` →
   `kind: "import"`. A `mod.rs` file or a crate root (`lib.rs`, `main.rs`,
   `build.rs`, a `bin`/`benches`/`examples`/`tests` target) owns its own
-  directory, so `src/parser/mod.rs` reaches `src/parser/rust.rs`; any other
-  module file owns the directory named after it, so `src/telemetry.rs`
-  reaches `src/telemetry/counters.rs`. Exactly one candidate found resolves;
-  both candidates present is `ambiguous`; neither present is `not_found`.
+  directory, so `crates/parse/src/parser/mod.rs` reaches
+  `crates/parse/src/parser/rust.rs`; any other module file owns the directory
+  named after it, so `crates/surfaces/src/telemetry.rs` reaches
+  `crates/surfaces/src/telemetry/counters.rs`. Exactly one candidate found
+  resolves; both candidates present is `ambiguous`; neither present is
+  `not_found`.
 - `mod foo { ... }` (inline module) is not a file reference and produces no
   edge.
 - `use ...` paths (`use crate::a::b;`, `use super::x;`, `use self::y;`,

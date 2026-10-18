@@ -56,6 +56,11 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 - `docs/cli-reference.md`, `docs/configuration.md`, `docs/json-schema.md`,
   `docs/metrics.md`, `docs/versioning.md`, the agent skill, and the README
   document the gate, suppression, Cobertura, and the new schema versions.
+- The source tree is a Cargo workspace: the analysis code is split across
+  eleven library crates under `crates/` that depend in one direction, and the
+  binary crate is `crates/leadline`. No command, output, schema, metric, or
+  exit code changes; the one user-visible consequence is that building from
+  source is now `cargo install --path crates/leadline`.
 
 ## 1.0.1 - 2026-10-10
 

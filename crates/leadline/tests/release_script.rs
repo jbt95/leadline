@@ -15,16 +15,38 @@ use std::process::{Command, Output};
 
 const CURRENT: &str = "0.1.0";
 
-/// The thirteen versioned files, stubbed with the same shapes as the real
-/// ones — including where the trailing commas sit.
-const VERSIONED_STUBS: [(&str, &str); 13] = [
+/// The workspace members the release bumps, matching `WORKSPACE_MEMBERS` in
+/// `scripts/release.sh`. Every member inherits `[workspace.package] version`, so
+/// a release moves all of their `Cargo.lock` entries together.
+const WORKSPACE_MEMBERS: [&str; 11] = [
+    "analysis",
+    "artifacts",
+    "codegraph",
+    "config",
+    "git",
+    "leadline",
+    "model",
+    "parse",
+    "report",
+    "surfaces",
+    "update",
+];
+
+/// A `Cargo.lock` shaped like the workspace's own: one `[[package]]` entry per
+/// member, each carrying the shared version.
+fn lock_stub() -> String {
+    WORKSPACE_MEMBERS
+        .iter()
+        .map(|member| format!("[[package]]\nname = \"{member}\"\nversion = \"{CURRENT}\"\n\n"))
+        .collect()
+}
+
+/// The versioned files other than `Cargo.lock`, stubbed with the same shapes
+/// as the real ones — including where the trailing commas sit.
+const VERSIONED_STUBS: [(&str, &str); 12] = [
     (
         "Cargo.toml",
-        "[package]\nname = \"leadline\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    ),
-    (
-        "Cargo.lock",
-        "[[package]]\nname = \"leadline\"\nversion = \"0.1.0\"\n",
+        "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n\n[workspace.package]\nversion = \"0.1.0\"\nedition = \"2024\"\n",
     ),
     (
         "package.json",
@@ -71,6 +93,17 @@ const VERSIONED_STUBS: [(&str, &str); 13] = [
         "{\n  \"name\": \"leadline-opencode-plugin-v2\",\n  \"version\": \"0.1.0\",\n  \"private\": true\n}\n",
     ),
 ];
+
+/// The thirteen versioned files with their stub contents.
+fn versioned_stubs() -> Vec<(&'static str, String)> {
+    let mut stubs = vec![("Cargo.lock", lock_stub())];
+    stubs.extend(
+        VERSIONED_STUBS
+            .iter()
+            .map(|(path, text)| (*path, (*text).to_owned())),
+    );
+    stubs
+}
 
 const CHANGELOG_STUB: &str = "# Changelog\n\n## Unreleased\n\n### Added\n\n- A feature.\n\n## 0.1.0 - 2026-01-01\n\n- The first one.\n";
 
@@ -130,12 +163,12 @@ fn fixture() -> PathBuf {
     root
 }
 
-/// A repository with the ten versioned files and one `feat` commit on top of
+/// A repository with the versioned files and one `feat` commit on top of
 /// `v0.1.0`, so a 0.2.0 minor release is ready to cut.
 fn release_fixture() -> PathBuf {
     let root = fixture();
-    for (path, contents) in VERSIONED_STUBS {
-        write(&root, path, contents);
+    for (path, contents) in versioned_stubs() {
+        write(&root, path, &contents);
     }
     write(&root, "CHANGELOG.md", CHANGELOG_STUB);
     commit(&root, "feat: a feature");
@@ -356,7 +389,7 @@ fn releases_every_versioned_file_and_closes_the_changelog() {
         "{stdout}"
     );
 
-    for (path, _) in VERSIONED_STUBS {
+    for (path, _) in versioned_stubs() {
         let contents = fs::read_to_string(root.join(path)).unwrap();
         assert!(
             contents.contains("0.2.0"),
@@ -365,6 +398,16 @@ fn releases_every_versioned_file_and_closes_the_changelog() {
         assert!(
             !contents.contains(CURRENT),
             "{path} still mentions {CURRENT}: {contents}"
+        );
+    }
+    // Patching only the `leadline` entry left the other members' entries at
+    // 0.1.0 and the lock inconsistent with the manifests, which the next
+    // `--locked` build reported far from the cause.
+    let lock = fs::read_to_string(root.join("Cargo.lock")).unwrap();
+    for member in WORKSPACE_MEMBERS {
+        assert!(
+            lock.contains(&format!("name = \"{member}\"\nversion = \"0.2.0\"")),
+            "{member} was not bumped to 0.2.0 in Cargo.lock: {lock}"
         );
     }
     let changelog = fs::read_to_string(root.join("CHANGELOG.md")).unwrap();

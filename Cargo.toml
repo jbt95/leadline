@@ -3,7 +3,7 @@
 # The root is a virtual manifest: it declares the members, the package metadata
 # every crate inherits, the shared dependency versions, and the build profiles
 # (`[profile]` is only accepted at the workspace root). There is no `[package]`
-# here, so `cargo install --path .` is not valid any more; the binary crate
+# here, so installing with `--path .` is not valid any more; the binary crate
 # lives in `crates/leadline` and installs with `cargo install --path
 # crates/leadline`.
 #

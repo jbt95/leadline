@@ -43,7 +43,7 @@ The model name `metric-overage` is carried in every effort number.
 - **Assumed cost** is `loc * 30` minutes: one line of code is assumed to cost
   30 minutes to develop, so the ratio is the share of the codebase's assumed
   cost that is remediation debt. The constant is `MINUTES_PER_LINE` in
-  `src/quality.rs`.
+  `crates/analysis/src/quality.rs`.
 - **Maintainability** needs at least one configured threshold; with none there
   is no overage and the rating stays `null`.
 - **Security** counts every ingested finding in the run's scanner families

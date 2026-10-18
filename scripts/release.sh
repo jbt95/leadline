@@ -65,6 +65,14 @@ VERSIONED_FILES=(
   integrations/opencode/plugin-v2/package.json
 )
 
+# The workspace members, in the order their lock entries appear. Every member
+# inherits `[workspace.package] version`, so a release moves all of their
+# `Cargo.lock` entries together; a member this list misses dies during the bump
+# instead of leaving the lock inconsistent with the manifests.
+WORKSPACE_MEMBERS=(
+  analysis artifacts codegraph config git leadline model parse report surfaces update
+)
+
 semver() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
 
 version_gt() { # true when $1 is strictly greater than $2
@@ -205,11 +213,21 @@ replace_lock_root() { # FILE OLD NEW
 
 replace_line Cargo.toml "version = \"$CURRENT\"" "version = \"$VERSION\""
 
-lock_line="$(grep -n '^name = "leadline"$' Cargo.lock | cut -d: -f1 || true)"
-[ -n "$lock_line" ] || die "Cargo.lock: no leadline entry"
-lock_next="$(sed -n "$((lock_line + 1))p" Cargo.lock)"
-[ "$lock_next" = "version = \"$CURRENT\"" ] || die "Cargo.lock: leadline version is '$lock_next', expected $CURRENT"
-LINE="$((lock_line + 1))" NEW="$VERSION" perl -pi -e 'if ($. == $ENV{LINE}) { s/^version = ".*"$/version = "$ENV{NEW}"/ }' Cargo.lock
+# One entry per member, addressed by name and checked against the current
+# version before it is patched: a lock that moved or changed shape stops the
+# release instead of bumping the wrong line.
+bump_lock_entry() { # NAME
+  local name="$1" line next
+  line="$(grep -n "^name = \"$name\"\$" Cargo.lock | cut -d: -f1 || true)"
+  [ -n "$line" ] || die "Cargo.lock: no $name entry"
+  [ "$(printf '%s\n' "$line" | wc -l | tr -d ' ')" = 1 ] || die "Cargo.lock: more than one $name entry"
+  next="$(sed -n "$((line + 1))p" Cargo.lock)"
+  [ "$next" = "version = \"$CURRENT\"" ] || die "Cargo.lock: $name version is '$next', expected $CURRENT"
+  LINE="$((line + 1))" NEW="$VERSION" perl -pi -e 'if ($. == $ENV{LINE}) { s/^version = ".*"$/version = "$ENV{NEW}"/ }' Cargo.lock
+}
+for member in "${WORKSPACE_MEMBERS[@]}"; do
+  bump_lock_entry "$member"
+done
 
 replace_line package.json "  \"version\": \"$CURRENT\"," "  \"version\": \"$VERSION\","
 replace_line integrations/agent-adapter-ts/package.json "  \"version\": \"$CURRENT\"," "  \"version\": \"$VERSION\","

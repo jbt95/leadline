@@ -11,37 +11,19 @@ readme = "../../README.md"
 keywords = ["complexity", "static-analysis", "java", "typescript", "crap"]
 categories = ["command-line-utilities", "development-tools"]
 
+# `main.rs` is the whole crate: it drives the other crates and serializes
+# their output, so `serde`/`serde_json` are its only external dependencies.
+# Everything else it names comes from a path dependency.
 [dependencies]
 analysis = { path = "../analysis" }
 artifacts = { path = "../artifacts" }
-blake3.workspace = true
 codegraph = { path = "../codegraph" }
 config = { path = "../config" }
 git = { path = "../git" }
-ignore.workspace = true
 model = { path = "../model" }
 parse = { path = "../parse" }
-quick-xml.workspace = true
-rayon.workspace = true
 report = { path = "../report" }
 serde.workspace = true
 serde_json.workspace = true
 surfaces = { path = "../surfaces" }
-toml.workspace = true
-tree-sitter.workspace = true
-tree-sitter-c.workspace = true
-tree-sitter-java.workspace = true
-tree-sitter-javascript.workspace = true
-tree-sitter-python.workspace = true
-tree-sitter-go.workspace = true
-tree-sitter-cpp.workspace = true
-tree-sitter-rust.workspace = true
-tree-sitter-typescript.workspace = true
-tree-sitter-zig.workspace = true
 update = { path = "../update" }
-
-[target.'cfg(unix)'.dependencies]
-libc.workspace = true
-
-[target.'cfg(windows)'.dependencies]
-windows-sys.workspace = true

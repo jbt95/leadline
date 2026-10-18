@@ -33,7 +33,8 @@ JavaScript, TypeScript, and TSX).
 Nested functions are independent: a lambda or arrow body never adds to
 the enclosing function; it is scored as its own function. The only
 addition to the enclosing score is +1 per Java `->`
-(`src/parser/mod.rs:564,624`, `src/core.rs:356-392`).
+(`crates/parse/src/parser/mod.rs:837-855` emits the event,
+`crates/model/src/core.rs:441-464` scores it).
 
 Only real operator tokens count: `&&`/`||` written inside string,
 template, or JSX text are text, not branches, and operators inside a

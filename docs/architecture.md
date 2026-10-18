@@ -1,11 +1,14 @@
 # Architecture
 
-`leadline` is a Cargo workspace. The binary crate is `crates/leadline`, and the
-analysis code is split across library crates that depend in one direction,
-lowest first: `model`, `config`, `git`, `parse`, `codegraph`, `analysis`,
-`artifacts`, `report`, and `surfaces`, with `update` standing alone and `tia`
-reserved for test impact analysis. A crate may never depend on one above it in
-that order.
+`leadline` is a Cargo workspace. The root `Cargo.toml` is a virtual manifest:
+every package lives under `crates/`, the binary is `crates/leadline`, and the
+analysis code is split across eleven library crates that depend in one
+direction, lowest first: `model`, `config`, `git`, `parse`, `codegraph`,
+`analysis`, `artifacts`, `report`, and `surfaces`, with `update` standing alone
+and `tia` beside `report` (test impact analysis needs the parser, the graph,
+and the coverage readers, not the report aggregator). A crate may never depend
+on one above it in that order, and nothing depends on the binary. The
+mechanical check is `cargo tree -p <crate>`.
 
 This reverses the earlier one-package decision. That decision weighed workspace
 overhead against an unchanged interface, and neither side of the trade still

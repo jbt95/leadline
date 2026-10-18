@@ -24,3 +24,8 @@
   envelopes so results stay attributable; the scanner reports carry findings
   only.
 - The local metrics store ([telemetry.md](telemetry.md)) carries its own `schema_version` (`3`); it is not a report schema and never appears in report output.
+- The release version is a workspace version: every crate under `crates/`
+  inherits `[workspace.package] version` from the root manifest, and
+  `scripts/release.sh` bumps the root manifest, every member's `Cargo.lock`
+  entry, and the integrations in one commit. The crate versions are that
+  release version; they are not the schema identifiers in the table above.
