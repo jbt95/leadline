@@ -30,11 +30,15 @@
 //!   it is applied **only to files the closure already reaches**: the reading
 //!   scales with the blast radius of the diff, not with the repository.
 //!
-//! `totals.test_files` enumerates path-convention test files through
-//! `parse::discovery`, so `ratio` is measured against them alone. Counting
-//! inline tests repo-wide would mean reading every file, so a repository with
-//! heavy inline testing gets a ratio that overstates the fraction of tests a
-//! selection represents.
+//! `totals.test_files` is the denominator `ratio` is measured against: the
+//! union of the path-convention test files `parse::discovery` enumerates and
+//! the selected set, so it can never be smaller than the numerator and `ratio`
+//! is always ≤ 1. It is a *lower bound* on the repository's true test count,
+//! not a total: a content-detected test file is only discovered when a change
+//! reaches it, so a repository with heavy inline testing has more test files
+//! than the denominator counts. The ratio therefore **over-estimates** the
+//! fraction of the suite a selection runs, which is the safe direction to be
+//! wrong in.
 //!
 //! `confidence.parse_errors` counts **changed** files that failed to parse: the
 //! ladder parses those anyway to decide the T3 reason, which is exact and free.
@@ -100,12 +104,14 @@ pub struct Escalation {
     pub reasons: Vec<String>,
 }
 
-/// The selection's size against every path-convention test file.
+/// The selection's size against its denominator.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Totals {
+    /// The union of the path-convention test files and the selected set: a
+    /// lower bound on the true test-file count, never below `selected`.
     pub test_files: usize,
     pub selected: usize,
-    /// `selected / test_files`, `0.0` when the repository has no test file.
+    /// `selected / test_files`, always ≤ 1, `0.0` when there is no test file.
     pub ratio: f64,
 }
 
@@ -259,7 +265,14 @@ pub fn select_from(inputs: &SelectionInputs<'_>) -> Selection {
         .into_iter()
         .map(|(path, (tier, via))| SelectedTest { path, tier, via })
         .collect();
-    let test_files = inputs.test_files.len();
+    // Selection can also pick a content-detected test file the path-convention
+    // set never named, so the denominator is the union of the two: it can never
+    // be smaller than the numerator, and `ratio` is always ≤ 1.
+    let test_files = selected
+        .iter()
+        .filter(|test| !inputs.test_files.contains(&test.path))
+        .count()
+        + inputs.test_files.len();
     Selection {
         schema_version: SELECTION_SCHEMA_VERSION,
         model: SELECTION_MODEL,
@@ -674,10 +687,42 @@ mod tests {
         assert_eq!(selected_paths(&selection), ["src/lib.rs"]);
         assert_eq!(selection.selected[0].tier, Tier::Graph);
         assert_eq!(selection.selected[0].via, changed(&["src/parser.rs"]));
-        // The denominator stays the path-convention test files.
-        assert_eq!(selection.totals.test_files, 0);
-        assert_eq!(selection.totals.ratio, 0.0);
+        // The denominator absorbs the content-detected file, so it never
+        // falls below the numerator.
+        assert_eq!(selection.totals.test_files, 1);
+        assert_eq!(selection.totals.ratio, 1.0);
         assert_eq!(selection.escalation, None);
+    }
+
+    #[test]
+    fn a_content_detected_test_file_joins_the_denominator() {
+        // One path-convention test file and one selected because its content
+        // declares tests: the denominator is their union, so a repository that
+        // discovers an inline-test file reports 2 of 2 rather than 2 of 1 with
+        // a ratio above 1.
+        let pairs = [
+            (
+                "src/lib.rs",
+                "#[cfg(test)]\nmod tests {\n    #[test]\n    fn it_works() {}\n}\n",
+            ),
+            ("src/other.test.ts", "export const other = 1;\n"),
+        ];
+        let selection = select_over(
+            &TiaConfig::default(),
+            &changed(&["src/lib.rs", "src/other.test.ts"]),
+            &sources(&pairs),
+            &["src/other.test.ts"],
+            &bytes(&pairs),
+        );
+
+        assert_eq!(
+            selected_paths(&selection),
+            ["src/lib.rs", "src/other.test.ts"]
+        );
+        assert_eq!(selection.totals.selected, 2);
+        assert_eq!(selection.totals.test_files, 2);
+        assert!(selection.totals.ratio <= 1.0);
+        assert_eq!(selection.totals.ratio, 1.0);
     }
 
     #[test]

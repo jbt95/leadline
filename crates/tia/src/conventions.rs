@@ -3,10 +3,10 @@
 //! Two predicates, and the split between them is deliberate:
 //!
 //! - [`is_test_file`] reads a path only and never touches the filesystem. It
-//!   answers every path-shaped row of the design's convention table: a
-//!   directory component named `test`, `tests`, or `__tests__`, and the
-//!   per-language file-name forms (`*_test.go`, `*.test.ts`, `*Tests.java`,
-//!   `test_*.py`, ...).
+//!   answers the per-language rows of the design's convention table: the
+//!   file-name forms (`*_test.go`, `*.test.ts`, `*Tests.java`, `test_*.py`,
+//!   ...) and the two directory layouts a runner actually compiles — Rust's
+//!   `tests/` integration targets and the JavaScript ecosystem's `__tests__/`.
 //! - [`declares_tests`] reads bytes, for the two rows a path cannot answer: a
 //!   Rust file declaring `#[test]`, and a Zig file declaring `test "..."`.
 //!   Selection applies it only to files the reverse closure of a changed file
@@ -19,12 +19,22 @@
 //! `target`, ...) is never a test file, and `config.exclude` removes candidates
 //! the same way it removes analysis sources.
 //!
-//! The directory rows are read as "a path component named `tests`/`test`/
-//! `__tests__`" at any depth rather than as a root-anchored directory: a Cargo
-//! workspace keeps its integration tests in `<crate>/tests/`, and the
-//! alternative misses every one of them. Matching a file that is not a test
-//! file over-selects; missing one under-selects, so the generous reading is the
-//! safe one.
+//! Directory layouts are language-specific, never a blanket "any `tests/`
+//! component" rule. Rust compiles only a *top-level* file under `tests/`
+//! (`tests/foo.rs`) or a directory target (`tests/<name>/main.rs`) as an
+//! integration test; `tests/common/mod.rs` is a module the harness never runs
+//! on its own. TypeScript, TSX, and JavaScript keep their `__tests__/`
+//! directory, and Java keeps its `src/test/` build layout. Every other language
+//! is named rather than placed. Matching a file that is not a test over-selects
+//! and a missing one under-selects, so where a layout is genuine the generous
+//! reading stays; the fix is to stop claiming layouts no runner compiles.
+//!
+//! One shared exclusion sits above the per-language rules: any path with a
+//! `fixtures`, `common`, `helpers`, `support`, `testdata`, `snapshots`,
+//! `__snapshots__`, or `__mocks__` component. Those are near-universal
+//! conventions for data and helpers a test *reads*, never a target a runner
+//! executes, and keeping the list in one place keeps a new language from
+//! forgetting it.
 //!
 //! `declares_tests` scans for the attribute rather than resolving it, so a
 //! `#[test]` inside a comment or a string counts. That direction is the safe
@@ -81,19 +91,67 @@ fn contains(source: &[u8], needle: &[u8]) -> bool {
     source.windows(needle.len()).any(|window| window == needle)
 }
 
-/// The built-in conventions: the name form of the path's language, the Java
-/// build-layout pair, plus a directory component any language's table spells
-/// as `tests/**`, `test/**`, or `**/__tests__/**`.
+/// The built-in conventions: the name form of the path's language, plus the
+/// directory layout that language's runner compiles, unless the path sits in a
+/// helper or data subtree.
 fn matches_builtin(path: &str) -> bool {
+    if in_helper_or_data_tree(path) {
+        return false;
+    }
     let Some(language) = detect_language(path) else {
         return false;
     };
     let name = path.rsplit('/').next().unwrap_or(path);
-    matches_builtin_name(name, language)
-        || (language == Language::Java && in_source_test_tree(path))
-        || path
-            .split('/')
-            .any(|component| matches!(component, "tests" | "test" | "__tests__"))
+    matches_builtin_name(name, language) || matches_builtin_layout(path, language)
+}
+
+/// The directory layout a runner compiles, by language. A language absent here
+/// has a name form only.
+fn matches_builtin_layout(path: &str, language: Language) -> bool {
+    match language {
+        Language::Rust => is_rust_integration_test(path),
+        Language::TypeScript | Language::Tsx | Language::JavaScript => {
+            path.split('/').any(|component| component == "__tests__")
+        }
+        Language::Java => in_source_test_tree(path),
+        _ => false,
+    }
+}
+
+/// Rust compiles a *top-level* file under `tests/` (`tests/foo.rs`) or a
+/// directory target (`tests/<name>/main.rs`) as an integration test. A deeper
+/// module such as `tests/common/mod.rs` is a helper, not a target.
+fn is_rust_integration_test(path: &str) -> bool {
+    let components: Vec<&str> = path.split('/').collect();
+    let Some(index) = components
+        .iter()
+        .rposition(|component| *component == "tests")
+    else {
+        return false;
+    };
+    match &components[index + 1..] {
+        [file] => file.ends_with(".rs"),
+        [_, "main.rs"] => true,
+        _ => false,
+    }
+}
+
+/// True when a component of `path` names a helper or data directory: the
+/// near-universal conventions for what a test reads rather than executes.
+fn in_helper_or_data_tree(path: &str) -> bool {
+    path.split('/').any(|component| {
+        matches!(
+            component,
+            "fixtures"
+                | "common"
+                | "helpers"
+                | "support"
+                | "testdata"
+                | "snapshots"
+                | "__snapshots__"
+                | "__mocks__"
+        )
+    })
 }
 
 fn matches_builtin_name(name: &str, language: Language) -> bool {
@@ -184,10 +242,33 @@ mod tests {
     }
 
     #[test]
-    fn a_test_directory_component_counts_for_every_language() {
+    fn a_directory_layout_follows_the_language_that_compiles_it() {
+        // The JavaScript ecosystem's `__tests__/` directory.
         assert!(test_file("web/__tests__/render.ts"));
-        assert!(test_file("app/test/helpers.py"));
-        assert!(test_file("service/tests/handler.go"));
+        // Rust's integration targets: a top-level file and a directory main.
+        assert!(test_file("tests/symbol_key.rs"));
+        assert!(test_file("tests/backtest/main.rs"));
+        // No other language is selected by directory placement alone: a Go
+        // file and a Python helper that are not named as tests are not tests.
+        assert!(!test_file("service/tests/handler.go"));
+        assert!(!test_file("app/test/helpers.py"));
+    }
+
+    #[test]
+    fn fixtures_and_helper_modules_are_never_test_files() {
+        // A `.c` fixture under `tests/` is data a test reads, not a target a
+        // runner executes; this is the path that forced the tightening.
+        assert!(!test_file("crates/leadline/tests/fixtures/c/decisions.c"));
+        // A shared Rust module under `tests/` is a module, not an integration
+        // target — `tests/<name>/main.rs` would be, but `mod.rs` is not.
+        assert!(!test_file("crates/leadline/tests/common/mod.rs"));
+        assert!(!test_file("crates/leadline/tests/support/main.rs"));
+        assert!(test_file("crates/leadline/tests/runner.rs"));
+        assert!(test_file("crates/leadline/tests/cases/main.rs"));
+        // The exclusion outranks a genuine name form too.
+        assert!(!test_file("src/__mocks__/client.test.ts"));
+        assert!(!test_file("testdata/golden_test.go"));
+        assert!(!test_file("web/__snapshots__/app.test.tsx"));
     }
 
     #[test]
