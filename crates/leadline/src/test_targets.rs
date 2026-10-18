@@ -6,8 +6,8 @@
 //! Unknown lines are reported separately and never count as uncovered.
 //! Test-targets ranks line-coverage gaps only; branch data feeds function coverage/CRAP.
 
-use crate::coverage::CoverageMap;
 use model::core::{AnalysisReport, MetricContribution};
+use parse::coverage::CoverageMap;
 use serde::Serialize;
 
 /// One function worth testing: identity, risk, and decision lines by state.

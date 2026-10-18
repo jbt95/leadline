@@ -42,7 +42,7 @@ pub(super) fn extract_local_includes(root: Node<'_>, source: &[u8]) -> ParsedDep
 /// `.c`, `.cpp`, `.cc`, and `.cxx` are compiled rather than included, so no
 /// include edge can ever reach them; `unused` treats them as entry points for
 /// the same reason Cargo crate roots are entry points for Rust.
-pub(crate) fn is_translation_unit(path: &str) -> bool {
+pub fn is_translation_unit(path: &str) -> bool {
     path.rsplit_once('.')
         .is_some_and(|(_, extension)| matches!(extension, "c" | "cpp" | "cc" | "cxx"))
 }

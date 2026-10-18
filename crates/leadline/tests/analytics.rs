@@ -2,7 +2,7 @@ use leadline::analytics::{DebtRequest, ProjectRequest, analyze_debt, build, capt
 use leadline::history::HistoryWindow;
 use leadline::ownership::OwnershipMode;
 use leadline::snapshots::SnapshotOutcome;
-use leadline::source_snapshot::SnapshotTarget;
+use parse::source_snapshot::SnapshotTarget;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};

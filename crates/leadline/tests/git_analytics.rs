@@ -9,7 +9,7 @@ use leadline::coupling::{CouplingEdge, CouplingOptions, MAX_COMMIT_FILES, analyz
 use leadline::history::{
     FileTouches, GitAnalyticsSnapshot, analyze_git_at, analyze_git_at_with_mailmap,
 };
-use leadline::source_snapshot::{SnapshotContext, SnapshotTarget, load};
+use parse::source_snapshot::{SnapshotContext, SnapshotTarget, load};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};

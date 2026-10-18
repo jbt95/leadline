@@ -904,7 +904,7 @@ pub fn record_check_findings(surface: &str, findings: &CheckFindings<'_>) {
 
 /// Maps a file path to its metrics language label, if supported.
 pub fn language_label(path: &str) -> Option<&'static str> {
-    crate::parser::detect_language(path).map(|language| language.as_str())
+    parse::parser::detect_language(path).map(|language| language.as_str())
 }
 
 /// Records one `debt` run: new and resolved function debt, increased and added

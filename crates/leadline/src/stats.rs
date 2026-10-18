@@ -551,7 +551,7 @@ mod tests {
         Server {
             request: ProjectRequest {
                 path: std::path::PathBuf::from("."),
-                target: crate::source_snapshot::SnapshotTarget::Worktree,
+                target: parse::source_snapshot::SnapshotTarget::Worktree,
                 window: crate::history::HistoryWindow::Days90,
                 mutation_inputs: Vec::new(),
                 test_maps: Vec::new(),

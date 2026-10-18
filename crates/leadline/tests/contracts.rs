@@ -2,7 +2,7 @@ use model::core::{AnalysisReport, FunctionKind, Language, MetricSpecs};
 use std::path::Path;
 
 fn function_metrics(path: &str, source: &str) -> (u32, u32, u32) {
-    let file = leadline::analyze_source(path, source.as_bytes()).unwrap();
+    let file = parse::analyze_source(path, source.as_bytes()).unwrap();
     assert!(file.parse_errors.is_empty(), "parse errors in {path}");
     let metrics = &file.functions.first().expect("missing function").metrics;
     (metrics.cyclomatic, metrics.cognitive, metrics.max_nesting)
@@ -10,7 +10,7 @@ fn function_metrics(path: &str, source: &str) -> (u32, u32, u32) {
 
 #[test]
 fn public_language_detection_contract_covers_every_extension() {
-    use leadline::parser::detect_language;
+    use parse::parser::detect_language;
 
     for (path, expected) in [
         ("Example.JAVA", Some(Language::Java)),
@@ -44,14 +44,11 @@ fn public_language_detection_contract_covers_every_extension() {
 #[test]
 fn path_normalization_is_lexical_and_stable() {
     assert_eq!(
-        leadline::normalize_path(Path::new("./src/generated/../main.ts")),
+        parse::normalize_path(Path::new("./src/generated/../main.ts")),
         "src/main.ts"
     );
     assert_eq!(
-        leadline::normalized_relative_path(
-            Path::new("workspace/src/main.ts"),
-            Path::new("workspace")
-        ),
+        parse::normalized_relative_path(Path::new("workspace/src/main.ts"), Path::new("workspace")),
         "src/main.ts"
     );
 }
@@ -153,7 +150,7 @@ fn python_metric_edges_are_contracts() {
 
 #[test]
 fn generators_and_java_constructors_are_discovered() {
-    let generator = leadline::analyze_source(
+    let generator = parse::analyze_source(
         "generator.js",
         b"function* values(limit) { for (let i = 0; i < limit; i++) { yield i; } }",
     )
@@ -162,7 +159,7 @@ fn generators_and_java_constructors_are_discovered() {
     assert_eq!(generator.functions[0].name, "values");
     assert_eq!(generator.functions[0].metrics.parameters, 1);
 
-    let constructor = leadline::analyze_source(
+    let constructor = parse::analyze_source(
         "Point.java",
         b"class Point { Point(int x, int y) { if (x < y) { this.x = x; } } int x; }",
     )
@@ -176,7 +173,7 @@ fn generators_and_java_constructors_are_discovered() {
 #[test]
 fn terminal_report_keeps_human_readable_metric_labels() {
     let file =
-        leadline::analyze_source("fixture.ts", b"function score(x) { if (x) return 1; }").unwrap();
+        parse::analyze_source("fixture.ts", b"function score(x) { if (x) return 1; }").unwrap();
     let report = AnalysisReport {
         schema_version: model::core::OUTPUT_SCHEMA_VERSION,
         metric_profile: model::core::METRIC_PROFILE,

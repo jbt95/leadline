@@ -162,8 +162,8 @@ fn rejects_invalid_paths_depth_size_and_row_counts() {
 #[test]
 fn changed_import_evidence_marks_direct_matches() {
     use leadline::graph::external_packages_from_sources;
-    use leadline::source_snapshot::SourceEntry;
     use leadline::vulnerabilities::add_changed_import_evidence;
+    use parse::source_snapshot::SourceEntry;
     let osv = [fixture("osv.json")];
     let trivy = [fixture("trivy.json")];
     let mut report = read_vulnerability_reports(VulnerabilityInputs {
@@ -202,8 +202,8 @@ fn changed_import_evidence_marks_direct_matches() {
 #[test]
 fn changed_import_evidence_stays_unknown_without_comparison() {
     use leadline::graph::external_packages_from_sources;
-    use leadline::source_snapshot::SourceEntry;
     use leadline::vulnerabilities::add_changed_import_evidence;
+    use parse::source_snapshot::SourceEntry;
     let root = temporary_directory();
     let java = r#"{"results": [{"source": {"path": "pom.xml"}, "packages": [{"package": {"name": "org.example:lib", "version": "1.0", "ecosystem": "Maven"}, "vulnerabilities": [{"id": "CVE-2024-0001", "database_specific": {"severity": "HIGH"}}]}]}]}"#;
     let java_file = write_temp(&root, "java.json", java.as_bytes());

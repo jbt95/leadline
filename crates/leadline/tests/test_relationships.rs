@@ -1,9 +1,9 @@
-use leadline::external::InputBudget;
 use leadline::test_relationships::ingest;
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
     MetricSpecs, OUTPUT_SCHEMA_VERSION,
 };
+use parse::external::InputBudget;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 

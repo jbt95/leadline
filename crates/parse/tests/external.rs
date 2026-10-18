@@ -1,4 +1,4 @@
-use leadline::external::{
+use parse::external::{
     InputBudget, JSON_DEPTH_LIMIT, XML_DEPTH_LIMIT, read_bounded, strict_relative_path,
     validate_json_depth, validate_xml_preamble_and_depth,
 };

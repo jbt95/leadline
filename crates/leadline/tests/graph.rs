@@ -1000,7 +1000,7 @@ fn cli_dependencies_agent_json_reports_unresolved() {
 #[test]
 fn external_packages_from_changed_sources() {
     use leadline::graph::external_packages_from_sources;
-    use leadline::source_snapshot::SourceEntry;
+    use parse::source_snapshot::SourceEntry;
     let entries = vec![
         SourceEntry {
             path: "src/new.ts".to_owned(),

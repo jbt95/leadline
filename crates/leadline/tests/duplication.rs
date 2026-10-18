@@ -1,6 +1,6 @@
 use config::DuplicationConfig;
 use leadline::duplication::{GroupStatus, OccurrenceStatus, compare, detect, detect_with_limits};
-use leadline::source_snapshot::SourceEntry;
+use parse::source_snapshot::SourceEntry;
 use std::collections::BTreeMap;
 
 fn entry(path: &str, source: &str) -> SourceEntry {

@@ -17,7 +17,7 @@ fn discovery_honors_gitignore_and_generated_defaults() {
     .unwrap();
     std::fs::write(root.join("dist/output.js"), "function output() {}\n").unwrap();
 
-    let discovered = leadline::discovery::discover(&root).unwrap();
+    let discovered = parse::discovery::discover(&root).unwrap();
     assert_eq!(discovered, vec![root.join("src/main.ts")]);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -30,7 +30,7 @@ fn discovery_finds_go_sources() {
     std::fs::write(root.join("src/main.go"), "package main\n\nfunc main() {}\n").unwrap();
     std::fs::write(root.join("vendor/dep.go"), "package dep\n").unwrap();
     std::fs::write(root.join("notes.txt"), "not source\n").unwrap();
-    let discovered = leadline::discovery::discover(&root).unwrap();
+    let discovered = parse::discovery::discover(&root).unwrap();
     assert_eq!(discovered, vec![root.join("src/main.go")]);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -43,7 +43,7 @@ fn discovery_finds_rust_sources() {
     std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
     std::fs::write(root.join("target/debug/build.rs"), "fn build() {}\n").unwrap();
     std::fs::write(root.join("notes.txt"), "not source\n").unwrap();
-    let discovered = leadline::discovery::discover(&root).unwrap();
+    let discovered = parse::discovery::discover(&root).unwrap();
     assert_eq!(discovered, vec![root.join("src/main.rs")]);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -59,7 +59,7 @@ fn discovery_finds_zig_sources() {
         "pub fn ignored() void {}\n",
     )
     .unwrap();
-    let discovered = leadline::discovery::discover(&root).unwrap();
+    let discovered = parse::discovery::discover(&root).unwrap();
     assert_eq!(discovered, vec![root.join("src/main.zig")]);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -70,7 +70,7 @@ fn discovery_finds_c_sources() {
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/main.c"), "int main(void) { return 0; }\n").unwrap();
     std::fs::write(root.join("notes.txt"), "not source\n").unwrap();
-    let discovered = leadline::discovery::discover(&root).unwrap();
+    let discovered = parse::discovery::discover(&root).unwrap();
     assert_eq!(discovered, vec![root.join("src/main.c")]);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -83,7 +83,7 @@ fn discovery_finds_cpp_sources() {
     std::fs::write(root.join("include/api.h"), "int api();\n").unwrap();
     std::fs::write(root.join("src/main.cpp"), "int main() { return 0; }\n").unwrap();
     std::fs::write(root.join("notes.txt"), "not source\n").unwrap();
-    let discovered = leadline::discovery::discover(&root).unwrap();
+    let discovered = parse::discovery::discover(&root).unwrap();
     assert_eq!(
         discovered,
         vec![root.join("include/api.h"), root.join("src/main.cpp")]
@@ -98,7 +98,7 @@ fn discovery_finds_python_sources_and_skips_stubs() {
     std::fs::write(root.join("pkg/service.py"), "def run():\n    return 1\n").unwrap();
     std::fs::write(root.join("pkg/service.pyi"), "def run() -> int: ...\n").unwrap();
     std::fs::write(root.join("notes.txt"), "not source\n").unwrap();
-    let discovered = leadline::discovery::discover(&root).unwrap();
+    let discovered = parse::discovery::discover(&root).unwrap();
     assert_eq!(discovered, vec![root.join("pkg/service.py")]);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -109,7 +109,7 @@ fn explicit_ignored_file_is_analyzable() {
     std::fs::write(root.join(".gitignore"), "ignored.ts\n").unwrap();
     let file = root.join("ignored.ts");
     std::fs::write(&file, "function ignored() {}\n").unwrap();
-    assert_eq!(leadline::discovery::discover(&file).unwrap(), vec![file]);
+    assert_eq!(parse::discovery::discover(&file).unwrap(), vec![file]);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -120,11 +120,11 @@ fn single_file_report_preserves_invoked_path() {
     let file = root.join("src/main.ts");
     std::fs::write(&file, "function main() {}\n").unwrap();
 
-    let single = leadline::analyze_path(&file, None).unwrap();
+    let single = parse::analyze_path(&file, None).unwrap();
     assert_eq!(single.files.len(), 1);
-    assert_eq!(single.files[0].path, leadline::normalize_path(&file));
+    assert_eq!(single.files[0].path, parse::normalize_path(&file));
 
-    let directory = leadline::analyze_path(&root, None).unwrap();
+    let directory = parse::analyze_path(&root, None).unwrap();
     assert_eq!(directory.files.len(), 1);
     assert_eq!(directory.files[0].path, "src/main.ts");
     std::fs::remove_dir_all(root).unwrap();

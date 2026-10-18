@@ -9,20 +9,20 @@ use std::cell::RefCell;
 use std::path::Path;
 use tree_sitter::{Language as TsLanguage, Node, Parser, Tree};
 
-pub(crate) mod c_family;
+pub mod c_family;
 mod go;
 mod java;
 mod js;
-pub(crate) mod python;
-pub(crate) mod rust;
-pub(crate) mod zig;
+pub mod python;
+pub mod rust;
+pub mod zig;
 
 thread_local! {
     static THREAD_PARSER: RefCell<Parser> = RefCell::new(Parser::new());
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RawDependencyKind {
+pub enum RawDependencyKind {
     GoImport,
     JavaScriptImport,
     JavaScriptCall,
@@ -38,25 +38,25 @@ pub(crate) enum RawDependencyKind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RawDependency {
-    pub(crate) kind: RawDependencyKind,
-    pub(crate) specifier: String,
-    pub(crate) line: u32,
+pub struct RawDependency {
+    pub kind: RawDependencyKind,
+    pub specifier: String,
+    pub line: u32,
 }
 
 /// One name a file exports to its consumers.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ExportedSymbol {
+pub struct ExportedSymbol {
     /// Exported name. A star re-export exports no name of its own, so it
     /// carries the module specifier instead.
-    pub(crate) name: String,
-    pub(crate) line: u32,
-    pub(crate) kind: ExportKind,
+    pub name: String,
+    pub line: u32,
+    pub kind: ExportKind,
 }
 
 /// How an exported name reaches consumers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ExportKind {
+pub enum ExportKind {
     Named,
     Default,
     /// `export * from "..."`: every name of the target module is re-exported.
@@ -65,25 +65,25 @@ pub(crate) enum ExportKind {
 
 /// One name a file imports or re-exports.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ImportedSymbol {
+pub struct ImportedSymbol {
     /// Name as the source module declares it: `import { a as b }` records
     /// `a`, so matching it against exports needs no alias table. A star form
     /// (`import * as ns`, `export * from "..."`) reads no single name and
     /// records none.
-    pub(crate) name: String,
-    pub(crate) line: u32,
+    pub name: String,
+    pub line: u32,
     /// True for a namespace import or a star re-export: the names it reads
     /// are not statically known.
-    pub(crate) star: bool,
+    pub star: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ParsedDependencies {
-    pub(crate) references: Vec<RawDependency>,
-    pub(crate) exports: Vec<ExportedSymbol>,
-    pub(crate) imports: Vec<ImportedSymbol>,
-    pub(crate) java_package: Option<String>,
-    pub(crate) java_top_level_types: Vec<String>,
+pub struct ParsedDependencies {
+    pub references: Vec<RawDependency>,
+    pub exports: Vec<ExportedSymbol>,
+    pub imports: Vec<ImportedSymbol>,
+    pub java_package: Option<String>,
+    pub java_top_level_types: Vec<String>,
 }
 
 pub trait ParserBackend: Sync {
@@ -219,23 +219,23 @@ fn push_children_reversed_with<'tree>(
 
 /// One normalized leaf token for duplication analysis (`tokens`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct NormalizedToken {
+pub struct NormalizedToken {
     /// `<id>`, `<str>`, `<num>`, or the exact keyword/punctuation text.
-    pub(crate) text: String,
-    pub(crate) line: u32,
+    pub text: String,
+    pub line: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TokenizedSource {
-    pub(crate) language: Language,
-    pub(crate) tokens: Vec<NormalizedToken>,
+pub struct TokenizedSource {
+    pub language: Language,
+    pub tokens: Vec<NormalizedToken>,
     /// `ERROR`/`MISSING` leaf count; non-zero excludes the file from clones.
-    pub(crate) parse_errors: usize,
-    pub(crate) line_count: u32,
+    pub parse_errors: usize,
+    pub line_count: u32,
 }
 
 /// Extracts `tokens` normalized leaf tokens from `source`.
-pub(crate) fn normalized_tokens(path: &str, source: &[u8]) -> Result<TokenizedSource> {
+pub fn normalized_tokens(path: &str, source: &[u8]) -> Result<TokenizedSource> {
     let (language, tree) = parse_tree(path, source)?;
     Ok(tokenize_tree(language, source, tree.root_node()))
 }
@@ -357,16 +357,16 @@ fn extract_dependencies_for(
     }
 }
 
-pub(crate) fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDependencies> {
+pub fn extract_dependencies(path: &str, source: &[u8]) -> Result<ParsedDependencies> {
     let (language, tree) = parse_tree(path, source)?;
     Ok(extract_dependencies_for(language, tree.root_node(), source))
 }
 
 /// Everything one source file yields for a full project pass.
-pub(crate) struct ParsedBundle {
-    pub(crate) analysis: FileAnalysis,
-    pub(crate) dependencies: ParsedDependencies,
-    pub(crate) tokens: TokenizedSource,
+pub struct ParsedBundle {
+    pub analysis: FileAnalysis,
+    pub dependencies: ParsedDependencies,
+    pub tokens: TokenizedSource,
 }
 
 /// Parses `source` once and derives metrics, dependencies, and normalized
@@ -384,7 +384,7 @@ pub(crate) fn parse_bundle(path: &str, source: &[u8]) -> Result<ParsedBundle> {
 
 /// Parses every entry once, in parallel, preserving input order. Errors are
 /// returned for the first path in sorted order.
-pub(crate) fn parse_bundles(entries: &[SourceEntry]) -> Result<Vec<(String, ParsedBundle)>> {
+pub fn parse_bundles(entries: &[SourceEntry]) -> Result<Vec<(String, ParsedBundle)>> {
     let mut outcomes: Vec<(String, Result<ParsedBundle>)> = entries
         .par_iter()
         .map(|entry| (entry.path.clone(), parse_bundle(&entry.path, &entry.bytes)))
@@ -400,7 +400,7 @@ pub(crate) fn parse_bundles(entries: &[SourceEntry]) -> Result<Vec<(String, Pars
 ///
 /// Parses `source` with the Python grammar and delegates to the pure tree walk;
 /// `path` must be a Python path, exactly as `SourceEntry` paths are.
-pub(crate) fn python_has_main_guard(path: &str, source: &[u8]) -> Result<bool> {
+pub fn python_has_main_guard(path: &str, source: &[u8]) -> Result<bool> {
     let (_, tree) = parse_tree(path, source)?;
     Ok(python::has_main_guard(tree.root_node(), source))
 }
@@ -409,17 +409,14 @@ pub(crate) fn python_has_main_guard(path: &str, source: &[u8]) -> Result<bool> {
 ///
 /// Parses `source` with the Go grammar and delegates to the pure tree walk;
 /// `path` must be a Go path, exactly as `SourceEntry` paths are.
-pub(crate) fn go_has_main_package(path: &str, source: &[u8]) -> Result<bool> {
+pub fn go_has_main_package(path: &str, source: &[u8]) -> Result<bool> {
     let (_, tree) = parse_tree(path, source)?;
     Ok(go::has_main_package(tree.root_node(), source))
 }
 
 /// Parses one host-language file once for SQL call-site analysis and
 /// function attribution.
-pub(crate) fn parse_sql_host(
-    path: &str,
-    source: &[u8],
-) -> Result<(FileAnalysis, Vec<HostSqlSite>)> {
+pub fn parse_sql_host(path: &str, source: &[u8]) -> Result<(FileAnalysis, Vec<HostSqlSite>)> {
     let (language, tree) = parse_tree(path, source)?;
     let root = tree.root_node();
     Ok((
@@ -1906,11 +1903,11 @@ pub(super) fn node_text<'a>(node: Node<'_>, source: &'a [u8]) -> &'a str {
 
 /// One recognized query/execute call site in host-language source.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct HostSqlSite {
-    pub(crate) line: u32,
-    pub(crate) end_line: u32,
-    pub(crate) dynamic: bool,
-    pub(crate) inside_loop: bool,
+pub struct HostSqlSite {
+    pub line: u32,
+    pub end_line: u32,
+    pub dynamic: bool,
+    pub inside_loop: bool,
 }
 
 /// Terminal query/execute call names across supported host languages.
@@ -1953,7 +1950,7 @@ fn is_loop_kind(kind: &str) -> bool {
 /// literal text is never inspected or retained. Loop state walks ancestors
 /// until a function boundary and stops there, so calls in a nested function
 /// are never attributed to an outer loop. Dedplicated by span and flags.
-pub(crate) fn host_sql_sites(path: &str, source: &[u8]) -> model::Result<Vec<HostSqlSite>> {
+pub fn host_sql_sites(path: &str, source: &[u8]) -> model::Result<Vec<HostSqlSite>> {
     let (language, tree) = parse_tree(path, source)?;
     Ok(host_sql_sites_from_tree(language, source, tree.root_node()))
 }

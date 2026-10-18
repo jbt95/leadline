@@ -79,7 +79,7 @@ fn scope_label_of_the_current_directory_is_dot() {
 
 #[test]
 fn parse_error_files_are_never_stored_and_are_always_reanalyzed() {
-    let entries = vec![leadline::source_snapshot::SourceEntry {
+    let entries = vec![parse::source_snapshot::SourceEntry {
         path: "broken.ts".to_owned(),
         bytes: b"function ( {".to_vec(),
     }];

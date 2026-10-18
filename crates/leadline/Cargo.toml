@@ -17,6 +17,7 @@ config = { path = "../config" }
 git = { path = "../git" }
 ignore.workspace = true
 model = { path = "../model" }
+parse = { path = "../parse" }
 quick-xml.workspace = true
 rayon.workspace = true
 serde.workspace = true
@@ -41,10 +42,6 @@ libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
-
-[[bench]]
-name = "analyzer"
-harness = false
 
 [[bench]]
 name = "history"

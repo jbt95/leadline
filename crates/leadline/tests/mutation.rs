@@ -1,10 +1,10 @@
-use leadline::external::InputBudget;
 use leadline::mutation::{MutationInput, MutationStatus, ingest};
-use leadline::source_snapshot::SourceEntry;
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
     MetricSpecs, OUTPUT_SCHEMA_VERSION,
 };
+use parse::external::InputBudget;
+use parse::source_snapshot::SourceEntry;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 

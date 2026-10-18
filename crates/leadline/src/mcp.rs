@@ -735,7 +735,7 @@ fn agent_field(agent: &serde_json::Value, key: &str) -> serde_json::Value {
 /// Optional coverage file, auto-detected by extension.
 fn optional_coverage(
     params: &serde_json::Value,
-) -> Result<Option<crate::coverage::CoverageMap>, (i64, String)> {
+) -> Result<Option<parse::coverage::CoverageMap>, (i64, String)> {
     opt_str(params, "coverage")?
         .map(load_coverage_file)
         .transpose()
@@ -1134,8 +1134,8 @@ fn tool_analyze_function(params: &serde_json::Value) -> Result<serde_json::Value
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     let mut analyzed =
-        crate::analyze_file(&file, &root, None).map_err(|error| (-32602, error.to_string()))?;
-    analyzed.path = crate::normalize_path(&file);
+        parse::analyze_file(&file, &root, None).map_err(|error| (-32602, error.to_string()))?;
+    analyzed.path = parse::normalize_path(&file);
     analyzed
         .functions
         .retain(|candidate| candidate.name == function);
@@ -1250,7 +1250,7 @@ fn note_parse_errors(counts: &mut Vec<(&'static str, u64)>, language: &'static s
 /// Apply coverage data to both sides of each changed-function pair.
 fn apply_changed_coverage(
     report: &mut crate::diff::ChangedReport,
-    coverage: &crate::coverage::CoverageMap,
+    coverage: &parse::coverage::CoverageMap,
 ) {
     for change in &mut report.functions {
         if let Some(before) = change.before.as_mut() {
@@ -1269,7 +1269,7 @@ fn check_changed_rows(
     base: &str,
     thresholds: &Thresholds,
     regression_limits: Option<&RegressionLimits>,
-    coverage: Option<&crate::coverage::CoverageMap>,
+    coverage: Option<&parse::coverage::CoverageMap>,
     gate: Option<&config::QualityGateConfig>,
 ) -> Result<CheckRows, (i64, String)> {
     let mut report = crate::diff::analyze_changed(Path::new(path), base)
@@ -1724,7 +1724,7 @@ fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i
     let report = {
         let config = load_config(path)?;
         let excludes = config_excludes(config.as_ref());
-        crate::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
+        parse::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
             .map_err(|error| (-32602, error.to_string()))?
     };
     let files = report.files.len();
@@ -1789,7 +1789,7 @@ fn tool_test_targets(params: &serde_json::Value) -> Result<serde_json::Value, (i
     let coverage = load_coverage_file(coverage_path).map_err(|message| (-32602, message))?;
     let config = load_config(path)?;
     let excludes = config_excludes(config.as_ref());
-    let report = crate::analyze_path_with_excludes(Path::new(path), Some(&coverage), &excludes)
+    let report = parse::analyze_path_with_excludes(Path::new(path), Some(&coverage), &excludes)
         .map_err(|error| (-32602, error.to_string()))?;
     let ranked = crate::test_targets::test_targets(&report, &coverage);
     let total = ranked.len();
@@ -1852,7 +1852,7 @@ fn tool_impact(params: &serde_json::Value) -> Result<serde_json::Value, (i64, St
         return Err((-32602, format!("impact path '{path}' is not a directory")));
     }
     let key =
-        crate::resolve_scoped_target(root, target).map_err(|error| (-32602, error.to_string()))?;
+        parse::resolve_scoped_target(root, target).map_err(|error| (-32602, error.to_string()))?;
     let config = load_config(path)?;
     let excludes = config_excludes(config.as_ref());
     let graph = crate::graph::analyze_dependencies(root, &excludes)
@@ -1911,7 +1911,7 @@ fn tool_coupling(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
         return Err((-32602, format!("coupling path '{path}' is not a directory")));
     }
     let key =
-        crate::resolve_scoped_target(root, target).map_err(|error| (-32602, error.to_string()))?;
+        parse::resolve_scoped_target(root, target).map_err(|error| (-32602, error.to_string()))?;
     let options = crate::coupling::CouplingOptions {
         min_co_changes: min_cochanges,
         limit: top,
@@ -1964,7 +1964,7 @@ fn tool_duplication(params: &serde_json::Value) -> Result<serde_json::Value, (i6
     let base = opt_str(params, "base")?;
     let outcome = crate::analytics::analyze_duplication(
         Path::new(path),
-        crate::source_snapshot::SnapshotTarget::Worktree,
+        parse::source_snapshot::SnapshotTarget::Worktree,
         base,
     )
     .map_err(|error| (-32602, error.to_string()))?;
@@ -1985,7 +1985,7 @@ fn tool_policy(params: &serde_json::Value) -> Result<serde_json::Value, (i64, St
     let base = opt_str(params, "base")?;
     let report = crate::analytics::analyze_policy(
         Path::new(path),
-        crate::source_snapshot::SnapshotTarget::Worktree,
+        parse::source_snapshot::SnapshotTarget::Worktree,
         base,
     )
     .map_err(|error| (-32602, error.to_string()))?;
@@ -2021,7 +2021,7 @@ fn analyze_optional_coverage(
     let coverage = optional_coverage(params)?;
     let config = load_config(path)?;
     let excludes = config_excludes(config.as_ref());
-    let analysis = crate::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
+    let analysis = parse::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
         .map_err(|error| (-32602, error.to_string()))?;
     if analysis.files.is_empty() {
         return Err((-32602, format!("no supported files found under {path}")));
@@ -2038,9 +2038,9 @@ fn tool_debt(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Stri
     let path = opt_str(params, "path")?.unwrap_or(".");
     let base = opt_str(params, "base")?.unwrap_or("HEAD~1");
     let target = match opt_str(params, "target")? {
-        None | Some("worktree") => crate::source_snapshot::SnapshotTarget::Worktree,
-        Some("index") => crate::source_snapshot::SnapshotTarget::Index,
-        Some(revision) => crate::source_snapshot::SnapshotTarget::Revision(revision.to_owned()),
+        None | Some("worktree") => parse::source_snapshot::SnapshotTarget::Worktree,
+        Some("index") => parse::source_snapshot::SnapshotTarget::Index,
+        Some(revision) => parse::source_snapshot::SnapshotTarget::Revision(revision.to_owned()),
     };
     let renames = opt_flag(params, "renames", "debt")?;
     let window = parse_since(params, crate::history::HistoryWindow::Days90)?;
@@ -2092,8 +2092,8 @@ fn tool_project(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
     )?;
     let path = opt_str(params, "path")?.unwrap_or(".");
     let target = match opt_str(params, "target")? {
-        None => crate::source_snapshot::SnapshotTarget::Worktree,
-        Some(revision) => crate::source_snapshot::SnapshotTarget::Revision(revision.to_owned()),
+        None => parse::source_snapshot::SnapshotTarget::Worktree,
+        Some(revision) => parse::source_snapshot::SnapshotTarget::Revision(revision.to_owned()),
     };
     let window = parse_since(params, crate::history::HistoryWindow::Days90)?;
     let coverage = optional_coverage(params)?;
@@ -2154,8 +2154,8 @@ fn tool_project(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
 
 /// Load one coverage file. An `.info` path is LCOV; any other path decides by
 /// XML root element, so JaCoCo and Cobertura share one argument.
-fn load_coverage_file(path: &str) -> Result<crate::coverage::CoverageMap, String> {
-    use crate::coverage::CoverageFormat;
+fn load_coverage_file(path: &str) -> Result<parse::coverage::CoverageMap, String> {
+    use parse::coverage::CoverageFormat;
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read coverage '{path}': {error}"))?;
     let is_lcov = Path::new(path)
@@ -2168,7 +2168,7 @@ fn load_coverage_file(path: &str) -> Result<crate::coverage::CoverageMap, String
         CoverageFormat::detect_xml(&text)
             .map_err(|error| format!("cannot detect coverage format for '{path}': {error}"))?
     };
-    crate::coverage::parse(&text, format)
+    parse::coverage::parse(&text, format)
         .map_err(|error| format!("cannot parse coverage '{path}': {error}"))
 }
 
@@ -2377,7 +2377,7 @@ fn analyze_read_only(
     params: &serde_json::Value,
     config: Option<&config::Config>,
     path: &str,
-    coverage: Option<&crate::coverage::CoverageMap>,
+    coverage: Option<&parse::coverage::CoverageMap>,
     excludes: &[String],
 ) -> Result<(model::core::AnalysisReport, Option<crate::index::Reuse>), (i64, String)> {
     let index_dir = index_directory(params, config, path)?;
@@ -2395,7 +2395,7 @@ fn analyze_read_only(
             return Ok((report, Some(reuse)));
         }
     }
-    let report = crate::analyze_path_with_excludes(Path::new(path), coverage, excludes)
+    let report = parse::analyze_path_with_excludes(Path::new(path), coverage, excludes)
         .map_err(|error| (-32602, error.to_string()))?;
     Ok((report, None))
 }
@@ -2458,7 +2458,7 @@ fn path_arguments(
 /// absolute paths, parent escapes, and control characters are rejected.
 fn relative_path(tool: &str, key: &str, path: &str) -> Result<String, (i64, String)> {
     let validate = |path| {
-        crate::external::strict_relative_path(path).map_err(|error| {
+        parse::external::strict_relative_path(path).map_err(|error| {
             (
                 -32602,
                 format!("{tool} '{key}' must be root-relative: {error}"),

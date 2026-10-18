@@ -4,12 +4,12 @@
 //! [`SecurityReport`]. Scanner messages, source snippets, and absolute
 //! paths never survive normalization.
 
-use crate::external::{INPUT_BYTES_LIMIT, InputBudget, read_bounded, strict_relative_path};
 use model::Result;
 use model::security::{
     ChangeComparison, FindingState, SecurityFinding, SecuritySeverity, agent_page,
     merge_report_ids, severity_from_label, severity_from_score, state_rank,
 };
+use parse::external::{INPUT_BYTES_LIMIT, InputBudget, read_bounded, strict_relative_path};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -260,7 +260,7 @@ pub fn assemble(request: &SecurityRequest) -> Result<SecurityOutcome, SecurityEr
     .map_err(|error| SecurityError::Input(error.to_string()))?;
     let project = crate::analytics::build(&crate::analytics::ProjectRequest {
         path: request.path.clone(),
-        target: crate::source_snapshot::SnapshotTarget::Worktree,
+        target: parse::source_snapshot::SnapshotTarget::Worktree,
         window: crate::history::HistoryWindow::Days90,
         mutation_inputs: Vec::new(),
         test_maps: Vec::new(),
@@ -344,7 +344,7 @@ fn read_one(
         .ok_or_else(|| format!("SARIF input has no UTF-8 file name: {}", path.display()))?
         .to_owned();
     let bytes = read_bounded(path, INPUT_BYTES_LIMIT, budget)?;
-    crate::external::validate_json_depth(&bytes)?;
+    parse::external::validate_json_depth(&bytes)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid SARIF JSON {}: {error}", path.display()))?;
     let runs = value

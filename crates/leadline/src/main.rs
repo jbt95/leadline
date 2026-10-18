@@ -1,15 +1,15 @@
 use config::{self, Config, RegressionLimits};
 use leadline::agent::{Budget, SortKey};
 use leadline::coupling::CouplingOptions;
-use leadline::coverage::CoverageMap;
 use leadline::history::HistoryWindow;
 use leadline::mutation::MutationInput;
 use leadline::ownership::OwnershipMode;
-use leadline::source_snapshot::SnapshotTarget;
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, METRIC_PROFILE, MetricSpecs,
     OUTPUT_SCHEMA_VERSION, Thresholds,
 };
+use parse::coverage::CoverageMap;
+use parse::source_snapshot::SnapshotTarget;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -406,9 +406,9 @@ fn function_command(args: &[String]) -> Result<ExitCode, CliError> {
     let options = CommonOptions::parse_with_path(&rest, file.clone(), "function")?;
     // Config loads from the containing directory; explicit file paths still analyze.
     let _ = load_config_for(&file)?;
-    let mut analyzed = leadline::analyze_file(&file, &config_dir(&file), options.coverage.as_ref())
+    let mut analyzed = parse::analyze_file(&file, &config_dir(&file), options.coverage.as_ref())
         .map_err(|error| CliError::incomplete(error.to_string()))?;
-    analyzed.path = leadline::normalize_path(&file);
+    analyzed.path = parse::normalize_path(&file);
     analyzed.functions.retain(|function| function.name == *name);
     if analyzed.functions.is_empty() {
         return Err(CliError::usage(format!(
@@ -686,7 +686,7 @@ fn analyze_ranked(
 ) -> Result<(AnalysisReport, PathBuf), CliError> {
     let (analysis, scope) = if path.is_file() {
         let scope = config_dir(path);
-        let analyzed = leadline::analyze_file(path, &scope, coverage)
+        let analyzed = parse::analyze_file(path, &scope, coverage)
             .map_err(|error| CliError::incomplete(error.to_string()))?;
         (
             AnalysisReport {
@@ -1991,8 +1991,8 @@ fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
             root.display()
         )));
     }
-    let key = leadline::resolve_scoped_target(&root, &target).map_err(|error| match error {
-        leadline::ScopedTargetError::Io(message) => CliError::incomplete(message),
+    let key = parse::resolve_scoped_target(&root, &target).map_err(|error| match error {
+        parse::ScopedTargetError::Io(message) => CliError::incomplete(message),
         other => CliError::usage(other.to_string()),
     })?;
     let options = CouplingOptions {
@@ -2231,8 +2231,8 @@ fn impact_command(args: &[String]) -> Result<ExitCode, CliError> {
             root.display()
         )));
     }
-    let key = leadline::resolve_scoped_target(&root, &target).map_err(|error| match error {
-        leadline::ScopedTargetError::Io(message) => CliError::incomplete(message),
+    let key = parse::resolve_scoped_target(&root, &target).map_err(|error| match error {
+        parse::ScopedTargetError::Io(message) => CliError::incomplete(message),
         other => CliError::usage(other.to_string()),
     })?;
     let config = load_config_for(&root)?;
@@ -2891,7 +2891,7 @@ fn check_changed(
     let files: Vec<FileAnalysis> = grouped
         .into_iter()
         .filter_map(|(path, functions)| {
-            let language = leadline::parser::detect_language(&path)?;
+            let language = parse::parser::detect_language(&path)?;
             Some(FileAnalysis {
                 path,
                 language,
@@ -3294,7 +3294,7 @@ fn doctor_command(args: &[String]) -> Result<ExitCode, CliError> {
             "pub fn check(value: bool) bool { if (value) { return true; } return false; }\n",
         ),
     ] {
-        let outcome = match leadline::analyze_source(file, snippet.as_bytes()) {
+        let outcome = match parse::analyze_source(file, snippet.as_bytes()) {
             Ok(report) if !report.functions.is_empty() => {
                 Ok(Some(format!("{} function", report.functions.len())))
             }
@@ -3484,7 +3484,7 @@ fn analyze_with_index(
     index_dir: Option<&Path>,
 ) -> Result<AnalysisReport, CliError> {
     let Some(dir) = index_dir.filter(|_| coverage.is_none()) else {
-        return leadline::analyze_path_with_excludes(path, coverage, excludes)
+        return parse::analyze_path_with_excludes(path, coverage, excludes)
             .map_err(|error| CliError::incomplete(error.to_string()));
     };
     let previous = leadline::index::AnalysisIndex::open(dir);
@@ -4046,7 +4046,7 @@ enum CoverageFormat {
 /// LCOV) and otherwise decides by XML root element, so `--coverage` accepts
 /// both XML dialects without guessing.
 fn load_coverage(path: &str, format: CoverageFormat) -> Result<CoverageMap, CliError> {
-    use leadline::coverage::CoverageFormat as Detected;
+    use parse::coverage::CoverageFormat as Detected;
     let text = std::fs::read_to_string(path).map_err(|error| {
         CliError::coverage(format!("cannot read coverage file '{path}': {error}"))
     })?;
@@ -4061,7 +4061,7 @@ fn load_coverage(path: &str, format: CoverageFormat) -> Result<CoverageMap, CliE
             ))
         })?,
     };
-    leadline::coverage::parse(&text, detected).map_err(|error| {
+    parse::coverage::parse(&text, detected).map_err(|error| {
         CliError::coverage(format!("cannot parse coverage file '{path}': {error}"))
     })
 }

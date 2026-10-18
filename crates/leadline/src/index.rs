@@ -372,7 +372,7 @@ pub struct Reuse {
 
 /// Analysis-root label used to keep one index from mixing scopes.
 pub fn scope_label(path: &Path) -> String {
-    let label = crate::normalize_path(path);
+    let label = parse::normalize_path(path);
     if label.is_empty() {
         ".".to_owned()
     } else {
@@ -384,13 +384,13 @@ pub fn scope_label(path: &Path) -> String {
 pub fn load_entries(
     root: &Path,
     excludes: &[String],
-) -> model::Result<Vec<crate::source_snapshot::SourceEntry>> {
-    let discovered = crate::discovery::discover_with_excludes(root, excludes)?;
+) -> model::Result<Vec<parse::source_snapshot::SourceEntry>> {
+    let discovered = parse::discovery::discover_with_excludes(root, excludes)?;
     let mut entries = Vec::with_capacity(discovered.len());
     for file in discovered {
         let bytes = std::fs::read(&file)?;
-        entries.push(crate::source_snapshot::SourceEntry {
-            path: crate::normalized_relative_path(&file, root),
+        entries.push(parse::source_snapshot::SourceEntry {
+            path: parse::normalized_relative_path(&file, root),
             bytes,
         });
     }
@@ -405,10 +405,10 @@ pub fn refresh_files(
     previous: Option<&AnalysisIndex>,
     scope: &str,
     config_fingerprint: &str,
-    entries: &[crate::source_snapshot::SourceEntry],
+    entries: &[parse::source_snapshot::SourceEntry],
 ) -> model::Result<(model::core::AnalysisReport, AnalysisIndex, Reuse)> {
     let reusable = previous.filter(|index| index.is_usable(scope, config_fingerprint));
-    let mut ordered: Vec<&crate::source_snapshot::SourceEntry> = entries.iter().collect();
+    let mut ordered: Vec<&parse::source_snapshot::SourceEntry> = entries.iter().collect();
     ordered.sort_by(|left, right| left.path.cmp(&right.path));
 
     // Per-entry decisions are independent, so misses are parsed in parallel;
@@ -428,7 +428,7 @@ pub fn refresh_files(
                 .and_then(|file| rebuild(entry, file).map(|analysis| (file, analysis)));
             match hit {
                 Some((file, analysis)) => Outcome::Reused(file.clone(), analysis),
-                None => Outcome::Analyzed(key, crate::analyze_source(&entry.path, &entry.bytes)),
+                None => Outcome::Analyzed(key, parse::analyze_source(&entry.path, &entry.bytes)),
             }
         })
         .collect();
@@ -468,14 +468,14 @@ pub fn refresh_files(
             }
         }
     }
-    Ok((crate::analysis_report(files), index, reuse))
+    Ok((parse::analysis_report(files), index, reuse))
 }
 
 fn rebuild(
-    entry: &crate::source_snapshot::SourceEntry,
+    entry: &parse::source_snapshot::SourceEntry,
     file: &IndexedFile,
 ) -> Option<model::core::FileAnalysis> {
-    let language = crate::parser::detect_language(&entry.path)?;
+    let language = parse::parser::detect_language(&entry.path)?;
     Some(model::core::FileAnalysis {
         path: entry.path.clone(),
         language,
@@ -626,7 +626,7 @@ pub fn refresh_file_index(
     previous: &AnalysisIndex,
     config_fingerprint: &str,
 ) -> model::Result<(model::core::AnalysisReport, AnalysisIndex, Reuse)> {
-    let display = crate::normalize_path(file);
+    let display = parse::normalize_path(file);
     let bytes = std::fs::read(file)?;
     let usable = file_reusable(previous, config_fingerprint);
     let key = if usable {
@@ -639,7 +639,7 @@ pub fn refresh_file_index(
     } else {
         scope_label(file)
     };
-    let entry = crate::source_snapshot::SourceEntry {
+    let entry = parse::source_snapshot::SourceEntry {
         path: key.clone(),
         bytes,
     };

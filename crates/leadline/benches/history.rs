@@ -158,7 +158,7 @@ fn history_fixture(path: &str, changes: u64) -> FileHistory {
 /// Join and ranking cost on an already-analyzed project, with no Git access.
 fn hotspot_scoring(c: &mut Criterion) {
     const FILES: usize = 2_000;
-    let template = leadline::analyze_source("src/template.ts", source(0, 1).as_bytes()).unwrap();
+    let template = parse::analyze_source("src/template.ts", source(0, 1).as_bytes()).unwrap();
     let files: Vec<FileAnalysis> = (0..FILES)
         .map(|index| FileAnalysis {
             path: format!("src/mod{}/file{index}.ts", index % 32),

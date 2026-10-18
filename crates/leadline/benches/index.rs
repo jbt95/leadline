@@ -1,6 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use leadline::index::refresh_files;
-use leadline::source_snapshot::SourceEntry;
+use parse::source_snapshot::SourceEntry;
 
 fn synthetic_repo(files: usize, functions: usize) -> Vec<SourceEntry> {
     (0..files)

@@ -3,11 +3,11 @@ use leadline::duplication::detect;
 use leadline::graph::{DependencyEdge, DependencyFile, DependencyReport};
 use leadline::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow};
 use leadline::project::{PROJECT_SCHEMA_VERSION, ProjectInputs, build};
-use leadline::source_snapshot::SourceEntry;
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
     MetricSpecs, OUTPUT_SCHEMA_VERSION,
 };
+use parse::source_snapshot::SourceEntry;
 
 fn function(name: &str, cognitive: u32, loc: u32) -> FunctionAnalysis {
     FunctionAnalysis {

@@ -1,8 +1,8 @@
 use leadline::analytics::{ProjectRequest, build};
-use leadline::coverage::CoverageMap;
 use leadline::history::HistoryWindow;
 use leadline::ownership::OwnershipMode;
-use leadline::source_snapshot::SnapshotTarget;
+use parse::coverage::CoverageMap;
+use parse::source_snapshot::SnapshotTarget;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -163,13 +163,12 @@ fn complex_scanner_reports_deduplicate_enrich_and_gate() {
         },
     )
     .unwrap();
-    let imports = leadline::graph::external_packages_from_sources(&[
-        leadline::source_snapshot::SourceEntry {
+    let imports =
+        leadline::graph::external_packages_from_sources(&[parse::source_snapshot::SourceEntry {
             path: "src/changed.ts".to_owned(),
             bytes: std::fs::read(fixture("scanners/vulnerabilities/changed.ts")).unwrap(),
-        },
-    ])
-    .unwrap();
+        }])
+        .unwrap();
     leadline::vulnerabilities::add_changed_import_evidence(&mut vulnerabilities, &imports, true);
 
     assert_eq!(vulnerabilities.findings.len(), 3);
@@ -347,7 +346,7 @@ fn complex_history_fixture_joins_changes_coupling_hotspots_and_debt() {
         edge.source == "src/service.ts" && edge.target == "src/store.ts" && edge.co_changes == 3
     }));
 
-    let analysis = leadline::analyze_path(&root, None).unwrap();
+    let analysis = parse::analyze_path(&root, None).unwrap();
     let hotspots = leadline::hotspots::build(
         &analysis,
         &history,

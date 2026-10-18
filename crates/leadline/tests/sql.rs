@@ -1,5 +1,5 @@
-use leadline::discovery::discover_matching;
 use leadline::sql::{accepts_sql, tokenize_statements};
+use parse::discovery::discover_matching;
 use std::path::Path;
 mod common;
 use common::temporary_directory;
@@ -533,7 +533,7 @@ fn reports_tables_absent_from_migrations() {
 }
 
 fn host_functions(path: &str, source: &[u8]) -> Vec<model::core::FunctionAnalysis> {
-    leadline::analyze_source(path, source).unwrap().functions
+    parse::analyze_source(path, source).unwrap().functions
 }
 
 #[test]
@@ -630,7 +630,7 @@ fn host_sql_matrix_across_languages() {
         "{findings:?}"
     );
 
-    let zig_analysis = leadline::analyze_source("src/db.zig", zig.as_bytes()).unwrap();
+    let zig_analysis = parse::analyze_source("src/db.zig", zig.as_bytes()).unwrap();
     assert!(
         zig_analysis.parse_errors.is_empty(),
         "Zig SQL fixture must parse: {:?}",

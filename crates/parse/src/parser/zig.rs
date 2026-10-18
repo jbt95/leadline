@@ -8,7 +8,7 @@ use tree_sitter::Node;
 /// `build.zig` is a convention basename at any depth. The three source roots
 /// are recognized only at the analysis root or at an exact `/src/...` suffix;
 /// arbitrary Zig modules remain subject to graph reachability.
-pub(crate) fn is_conventional_entry(path: &str) -> bool {
+pub fn is_conventional_entry(path: &str) -> bool {
     let path = path.replace('\\', "/");
     if path.rsplit('/').next() == Some("build.zig") {
         return true;

@@ -8,7 +8,6 @@ use crate::debt::{
     DEBT_SCHEMA_VERSION, DebtReport, RISK_CHANGE_MODEL, classify, compare_risks, summarize,
 };
 use crate::duplication::detect;
-use crate::external::InputBudget;
 use crate::graph::{analyze_dependencies, analyze_dependencies_from_sources};
 use crate::history::{
     HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow, analyze_git_at_with_mailmap,
@@ -19,10 +18,11 @@ use crate::policy::{PolicyReport, evaluate as evaluate_policy};
 use crate::project::{Project, ProjectInputs, build as build_project};
 use crate::risk::{RiskReport, build as build_risk};
 use crate::snapshots::{SnapshotOutcome, TrendPoint, TrendStore};
-use crate::source_snapshot::{SnapshotContext, SnapshotTarget, SourceSnapshot, load};
 use crate::test_relationships::ingest as ingest_test_relationships;
 use model::Result;
 use model::core::AnalysisReport;
+use parse::external::InputBudget;
+use parse::source_snapshot::{SnapshotContext, SnapshotTarget, SourceSnapshot, load};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -36,7 +36,7 @@ pub struct ProjectRequest {
     pub test_maps: Vec<PathBuf>,
     pub ownership_mode: OwnershipMode,
     pub snapshots_path: Option<PathBuf>,
-    pub coverage: Option<crate::coverage::CoverageMap>,
+    pub coverage: Option<parse::coverage::CoverageMap>,
 }
 
 /// Loads a source snapshot and builds the canonical Project.
@@ -72,14 +72,14 @@ fn build_with_analysis(
 
 /// One parse per entry feeds metrics, dependencies, and clone tokens.
 fn bundle_parts(
-    entries: &[crate::source_snapshot::SourceEntry],
+    entries: &[parse::source_snapshot::SourceEntry],
     config: &config::DuplicationConfig,
 ) -> Result<(
     AnalysisReport,
     crate::graph::DependencyReport,
     crate::duplication::DuplicationReport,
 )> {
-    let bundles = crate::parser::parse_bundles(entries)?;
+    let bundles = parse::parser::parse_bundles(entries)?;
     let excluded = crate::duplication::ExcludeMatcher::new(&config.excludes);
     let mut files = Vec::with_capacity(bundles.len());
     let mut dependencies = Vec::with_capacity(bundles.len());
@@ -101,7 +101,7 @@ fn bundle_parts(
         dependencies.push((path, bundle.dependencies));
         files.push(bundle.analysis);
     }
-    let analysis = crate::analysis_report(files);
+    let analysis = parse::analysis_report(files);
     let graph = crate::graph::dependency_report_from_parsed(dependencies);
     let duplication = crate::duplication::detect_tokenized(
         tokenized,
@@ -299,7 +299,7 @@ fn hash_json(value: &serde_json::Value) -> String {
     hash_bytes(serde_json::to_vec(value).unwrap_or_default().as_slice())
 }
 
-fn hash_source_entries(entries: &[crate::source_snapshot::SourceEntry]) -> String {
+fn hash_source_entries(entries: &[parse::source_snapshot::SourceEntry]) -> String {
     let mut hasher = blake3::Hasher::new();
     for entry in entries {
         hasher.update(entry.path.as_bytes());
@@ -537,7 +537,7 @@ pub fn analyze_mutation(
     Option<crate::test_relationships::TestRelationshipReport>,
 )> {
     let (_, snapshot) = load(path, target)?;
-    let analysis = crate::analyze_sources(&snapshot.entries, None)?;
+    let analysis = parse::analyze_sources(&snapshot.entries, None)?;
     let mut budget = InputBudget::new();
     let mutation = ingest_mutation(mutation_inputs, &snapshot.entries, &analysis, &mut budget)?;
     let relationships = if test_maps.is_empty() {
@@ -555,8 +555,8 @@ pub fn analyze_mutation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source_snapshot::SourceEntry;
     use config::{DuplicationConfig, parse_str};
+    use parse::source_snapshot::SourceEntry;
 
     #[test]
     fn bundle_parts_excludes_duplication_candidates_without_dropping_analysis() {

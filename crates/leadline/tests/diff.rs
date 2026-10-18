@@ -327,7 +327,7 @@ fn temporary_directory() -> PathBuf {
 
 fn regression_analysis(name: &str, cognitive: u32) -> model::core::FunctionAnalysis {
     let source = format!("function {name}() {{ return 1; }}\n");
-    let mut function = leadline::analyze_source("src/a.ts", source.as_bytes())
+    let mut function = parse::analyze_source("src/a.ts", source.as_bytes())
         .unwrap()
         .functions
         .into_iter()

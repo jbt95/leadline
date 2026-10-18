@@ -380,6 +380,7 @@ dependencies = [
  "ignore",
  "libc",
  "model",
+ "parse",
  "quick-xml",
  "rayon",
  "serde",
@@ -453,6 +454,30 @@ checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
 dependencies = [
  "libc",
  "winapi",
+]
+
+[[package]]
+name = "parse"
+version = "1.0.1"
+dependencies = [
+ "config",
+ "criterion",
+ "git",
+ "ignore",
+ "model",
+ "quick-xml",
+ "rayon",
+ "serde_json",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "tree-sitter-zig",
 ]
 
 [[package]]

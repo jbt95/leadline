@@ -7,7 +7,7 @@
 //! `benches/realworld.toml` and are enforced after each group.
 
 use criterion::{Throughput, criterion_group, criterion_main};
-use leadline::analyze_path;
+use parse::analyze_path;
 use serde::Deserialize;
 use std::hint::black_box;
 use std::path::PathBuf;

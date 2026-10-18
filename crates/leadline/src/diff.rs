@@ -1,5 +1,3 @@
-use crate::parser::detect_language;
-use crate::source_snapshot::SourceEntry;
 use config::{RegressionLimits, Thresholds};
 use git;
 use git::strip_verbatim_prefix;
@@ -8,6 +6,8 @@ use model::core::{
     FunctionAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION, ParseDiagnostic,
 };
 use model::security::ChangeComparison;
+use parse::parser::detect_language;
+use parse::source_snapshot::SourceEntry;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -245,7 +245,7 @@ fn changed_paths_in_scope(path: &Path, options: &ChangeOptions) -> model::Result
     let root_output = git::run(&start, &["rev-parse", "--show-toplevel"])?;
     let toplevel = String::from_utf8(root_output.stdout)?;
     let root = strip_verbatim_prefix(&std::fs::canonicalize(toplevel.trim())?);
-    let scope = crate::normalized_relative_path(&requested, &root);
+    let scope = parse::normalized_relative_path(&requested, &root);
     let base = if requested.is_dir() {
         scope.clone()
     } else {
@@ -312,14 +312,14 @@ pub fn analyze_changes(path: &Path, options: &ChangeOptions) -> Result<ChangedRe
         .map(|(relative, before_path)| {
             let before = before_blobs
                 .get(before_path)
-                .map(|source| crate::analyze_source(before_path, source))
+                .map(|source| parse::analyze_source(before_path, source))
                 .transpose()?;
             let after_source: Result<Option<Vec<u8>>> = match &options.target {
                 ComparisonTarget::Revision(_) => Ok(after_blobs.get(relative).cloned()),
                 _ => read_after(&root, relative, &options.target),
             };
             let after = after_source?
-                .map(|source| crate::analyze_source(relative, &source))
+                .map(|source| parse::analyze_source(relative, &source))
                 .transpose()?;
             Ok((relative.clone(), before, after))
         })

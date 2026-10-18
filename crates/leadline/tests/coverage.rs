@@ -1,8 +1,8 @@
-use leadline::coverage::CoverageMap;
+use parse::coverage::CoverageMap;
 
 #[test]
 fn lcov_maps_known_lines_and_computes_crap() {
-    let mut file = leadline::analyze_source(
+    let mut file = parse::analyze_source(
         "src/payment.ts",
         b"function pay(ok: boolean) {\n  if (ok) {\n    return 1;\n  }\n  return 0;\n}\n",
     )
@@ -19,7 +19,7 @@ fn lcov_maps_known_lines_and_computes_crap() {
 
 #[test]
 fn jacoco_uses_package_and_source_file_path() {
-    let mut file = leadline::analyze_source(
+    let mut file = parse::analyze_source(
         "sample/Value&More.java",
         b"class Value {\n  int value() {\n    return 1;\n  }\n}\n",
     )
@@ -34,7 +34,7 @@ fn jacoco_uses_package_and_source_file_path() {
 
 #[test]
 fn missing_coverage_stays_unavailable() {
-    let mut file = leadline::analyze_source("other.ts", b"function empty() {}\n").unwrap();
+    let mut file = parse::analyze_source("other.ts", b"function empty() {}\n").unwrap();
     let coverage = CoverageMap::from_lcov("SF:covered.ts\nDA:1,1\nend_of_record\n").unwrap();
     coverage.apply(&mut file);
     assert_eq!(file.functions[0].metrics.coverage, None);
@@ -45,7 +45,7 @@ fn missing_coverage_stays_unavailable() {
 fn crap_formula_handles_coverage_bounds() {
     let source = b"function branch(x) { if (x) return 1; return 0; }\n";
     for (count, expected) in [(0, 6.0), (1, 2.0)] {
-        let mut file = leadline::analyze_source("branch.js", source).unwrap();
+        let mut file = parse::analyze_source("branch.js", source).unwrap();
         let coverage =
             CoverageMap::from_lcov(&format!("SF:branch.js\nDA:1,{count}\nend_of_record\n"))
                 .unwrap();
@@ -57,7 +57,7 @@ fn crap_formula_handles_coverage_bounds() {
 #[test]
 fn windows_coverage_paths_match_repository_paths() {
     let mut file =
-        leadline::analyze_source("src/branch.ts", b"function branch() { return 1; }\n").unwrap();
+        parse::analyze_source("src/branch.ts", b"function branch() { return 1; }\n").unwrap();
     let coverage =
         CoverageMap::from_lcov("SF:C:\\repo\\src\\branch.ts\nDA:1,1\nend_of_record\n").unwrap();
     coverage.apply(&mut file);
@@ -67,7 +67,7 @@ fn windows_coverage_paths_match_repository_paths() {
 #[test]
 fn ambiguous_suffixes_do_not_attach_wrong_coverage() {
     let mut file =
-        leadline::analyze_source("src/branch.ts", b"function branch() { return 1; }\n").unwrap();
+        parse::analyze_source("src/branch.ts", b"function branch() { return 1; }\n").unwrap();
     let coverage = CoverageMap::from_lcov(
         "SF:/first/src/branch.ts\nDA:1,1\nend_of_record\nSF:/second/src/branch.ts\nDA:1,0\nend_of_record\n",
     )
@@ -79,7 +79,7 @@ fn ambiguous_suffixes_do_not_attach_wrong_coverage() {
 #[test]
 fn repeated_lcov_lines_accumulate_execution_counts() {
     let mut file =
-        leadline::analyze_source("branch.ts", b"function branch() { return 1; }\n").unwrap();
+        parse::analyze_source("branch.ts", b"function branch() { return 1; }\n").unwrap();
     let coverage = CoverageMap::from_lcov("SF:branch.ts\nDA:1,1\nDA:1,0\nend_of_record\n").unwrap();
     coverage.apply(&mut file);
     assert_eq!(file.functions[0].metrics.coverage, Some(1.0));
@@ -106,7 +106,7 @@ fn lcov_lines(path: &str, hits: &[(u32, u64)]) -> CoverageMap {
 }
 
 fn analyzed(path: &str, source: &[u8], coverage: &CoverageMap) -> model::core::FileAnalysis {
-    let mut file = leadline::analyze_source(path, source).unwrap();
+    let mut file = parse::analyze_source(path, source).unwrap();
     coverage.apply(&mut file);
     file
 }
@@ -123,7 +123,7 @@ fn line_hits_distinguishes_covered_uncovered_and_unknown() {
 #[test]
 fn zero_hit_contribution_lines_become_test_targets() {
     let source = b"function pay(ok: boolean) {\n  if (ok) {\n    return 1;\n  }\n  return 0;\n}\n";
-    let mut probe = leadline::analyze_source("src/payment.ts", source).unwrap();
+    let mut probe = parse::analyze_source("src/payment.ts", source).unwrap();
     let lines: Vec<(u32, u64)> = probe.functions[0]
         .contributions
         .iter()
@@ -144,7 +144,7 @@ fn zero_hit_contribution_lines_become_test_targets() {
 #[test]
 fn covered_contribution_lines_produce_no_targets() {
     let source = b"function pay(ok: boolean) {\n  if (ok) {\n    return 1;\n  }\n  return 0;\n}\n";
-    let probe = leadline::analyze_source("src/payment.ts", source).unwrap();
+    let probe = parse::analyze_source("src/payment.ts", source).unwrap();
     let lines: Vec<(u32, u64)> = probe.functions[0]
         .contributions
         .iter()
@@ -159,7 +159,7 @@ fn covered_contribution_lines_produce_no_targets() {
 #[test]
 fn unknown_lines_are_separate_from_uncovered() {
     let source = b"function pay(ok: boolean) {\n  if (ok) {\n    return 1;\n  }\n  return 0;\n}\n";
-    let probe = leadline::analyze_source("src/payment.ts", source).unwrap();
+    let probe = parse::analyze_source("src/payment.ts", source).unwrap();
     let contributions = &probe.functions[0].contributions;
     assert!(!contributions.is_empty());
     let coverage = lcov_lines("src/payment.ts", &[(contributions[0].line, 0)]);
@@ -192,7 +192,7 @@ fn functions_without_any_known_coverage_produce_no_targets() {
 fn targets_sort_by_crap_then_path_function_line() {
     let complex =
         b"function complex(x: boolean) {\n  if (x) {\n    return 1;\n  }\n  return 0;\n}\n";
-    let probe = leadline::analyze_source("b.ts", complex).unwrap();
+    let probe = parse::analyze_source("b.ts", complex).unwrap();
     let complex_lines: Vec<(u32, u64)> = probe.functions[0]
         .contributions
         .iter()
@@ -222,7 +222,7 @@ fn targets_sort_by_crap_then_path_function_line() {
 
 #[test]
 fn brda_mixes_branch_and_line_coverage() {
-    let mut file = leadline::analyze_source(
+    let mut file = parse::analyze_source(
         "src/payment.ts",
         b"function pay(ok: boolean) {\n  if (ok) {\n    return 1;\n  }\n  return 0;\n}\n",
     )
@@ -238,7 +238,7 @@ fn brda_mixes_branch_and_line_coverage() {
 
 #[test]
 fn brda_shifts_an_otherwise_full_line_ratio() {
-    let mut file = leadline::analyze_source(
+    let mut file = parse::analyze_source(
         "src/payment.ts",
         b"function pay(ok: boolean) {\n  if (ok) {\n    return 1;\n  }\n  return 0;\n}\n",
     )
@@ -256,7 +256,7 @@ fn brda_shifts_an_otherwise_full_line_ratio() {
 #[test]
 fn branches_without_line_data_still_score() {
     let mut file =
-        leadline::analyze_source("branch.js", b"function branch(x) { return x; }\n").unwrap();
+        parse::analyze_source("branch.js", b"function branch(x) { return x; }\n").unwrap();
     let coverage =
         CoverageMap::from_lcov("SF:branch.js\nBRDA:1,0,0,5\nBRDA:1,0,1,0\nend_of_record\n")
             .unwrap();
@@ -272,7 +272,7 @@ fn malformed_brda_is_rejected() {
 
 #[test]
 fn jacoco_mb_cb_mix_with_line_hits() {
-    let mut file = leadline::analyze_source(
+    let mut file = parse::analyze_source(
         "sample/Value.java",
         b"class Value {\n  int value() {\n    return 1;\n  }\n}\n",
     )
@@ -289,7 +289,7 @@ fn jacoco_mb_cb_mix_with_line_hits() {
 
 #[test]
 fn jacoco_without_branch_attributes_stays_line_only() {
-    let mut file = leadline::analyze_source(
+    let mut file = parse::analyze_source(
         "sample/Value.java",
         b"class Value {\n  int value() {\n    return 1;\n  }\n}\n",
     )
@@ -304,7 +304,7 @@ fn jacoco_without_branch_attributes_stays_line_only() {
 
 #[test]
 fn cobertura_line_only_documents_ignore_a_bare_branch_attribute() {
-    let mut file = leadline::analyze_source(
+    let mut file = parse::analyze_source(
         "src/payment.ts",
         b"function pay(ok: boolean) {\n  if (ok) { return 1; }\n  return 0;\n}\n",
     )
@@ -332,7 +332,7 @@ fn cobertura_rejects_a_line_without_hits() {
 
 #[test]
 fn xml_coverage_dialects_are_detected_by_root_element() {
-    use leadline::coverage::CoverageFormat;
+    use parse::coverage::CoverageFormat;
     assert_eq!(
         CoverageFormat::detect_xml(r#"<coverage line-rate="0.5"/>"#).unwrap(),
         CoverageFormat::Cobertura

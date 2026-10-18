@@ -16,7 +16,7 @@ const MAX_PAREN_DEPTH: usize = 128;
 /// not expand into tens of millions of owned token strings.
 const MAX_SQL_TOKENS: usize = 1_000_000;
 
-/// Case-sensitive `.sql` file predicate for [`crate::discovery::discover_matching`].
+/// Case-sensitive `.sql` file predicate for [`parse::discovery::discover_matching`].
 pub fn accepts_sql(path: &Path) -> bool {
     path.extension().is_some_and(|extension| extension == "sql")
 }
@@ -909,14 +909,14 @@ pub fn analyze_host_sql(
     source: &[u8],
     functions: &[model::core::FunctionAnalysis],
 ) -> model::Result<Vec<SqlFinding>> {
-    let sites = crate::parser::host_sql_sites(path, source)?;
+    let sites = parse::parser::host_sql_sites(path, source)?;
     Ok(host_sql_findings(path, &sites, functions))
 }
 
 /// Maps already-parsed host call sites to fixed findings.
 fn host_sql_findings(
     path: &str,
-    sites: &[crate::parser::HostSqlSite],
+    sites: &[parse::parser::HostSqlSite],
     functions: &[model::core::FunctionAnalysis],
 ) -> Vec<SqlFinding> {
     let mut findings = Vec::new();
@@ -1065,7 +1065,7 @@ pub fn analyze_sql_path(
             return Err(format!("sql migration root not found: {migration_root}").into());
         }
     }
-    let sql_paths = match crate::discovery::discover_matching(root, excludes, accepts_sql) {
+    let sql_paths = match parse::discovery::discover_matching(root, excludes, accepts_sql) {
         Ok(paths) => paths,
         Err(_) if root.is_file() => Vec::new(),
         Err(error) => return Err(error),
@@ -1078,7 +1078,7 @@ pub fn analyze_sql_path(
     for path in &sql_paths {
         let bytes = std::fs::read(path)
             .map_err(|error| format!("cannot read SQL file {}: {error}", path.display()))?;
-        let display = crate::normalized_relative_path(path, &base);
+        let display = parse::normalized_relative_path(path, &base);
         let statements = tokenize_statements(&bytes)
             .map_err(|error| format!("invalid SQL {display}: {error}"))?;
         let file = SqlFile {
@@ -1097,13 +1097,13 @@ pub fn analyze_sql_path(
     let host_paths = if root.is_file() && accepts_sql(root) {
         Vec::new()
     } else {
-        crate::discovery::discover_with_excludes(root, excludes)?
+        parse::discovery::discover_with_excludes(root, excludes)?
     };
     for path in &host_paths {
         let bytes = std::fs::read(path)
             .map_err(|error| format!("cannot read source file {}: {error}", path.display()))?;
-        let display = crate::normalized_relative_path(path, &base);
-        let (analysis, sites) = crate::parser::parse_sql_host(&display, &bytes)?;
+        let display = parse::normalized_relative_path(path, &base);
+        let (analysis, sites) = parse::parser::parse_sql_host(&display, &bytes)?;
         report
             .findings
             .extend(host_sql_findings(&display, &sites, &analysis.functions));

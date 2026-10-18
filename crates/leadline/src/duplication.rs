@@ -5,10 +5,10 @@
 //! bounded: it never exceeds the token or exact-comparison ceilings and marks
 //! the report incomplete instead of dropping candidates silently.
 
-use crate::parser::normalized_tokens;
-use crate::source_snapshot::SourceEntry;
 use config::DuplicationConfig;
 use model::core::Language;
+use parse::parser::normalized_tokens;
+use parse::source_snapshot::SourceEntry;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -107,7 +107,7 @@ pub fn detect(entries: &[SourceEntry], config: &DuplicationConfig) -> Duplicatio
 
 #[derive(Default)]
 pub(crate) struct TokenizedFiles {
-    pub(crate) files: Vec<(String, crate::parser::TokenizedSource)>,
+    pub(crate) files: Vec<(String, parse::parser::TokenizedSource)>,
     pub(crate) diagnostics: Vec<DuplicationDiagnostic>,
     pub(crate) total_tokens: usize,
 }
@@ -121,7 +121,7 @@ pub(crate) fn tokenize(entries: &[SourceEntry], config: &DuplicationConfig) -> T
     enum Outcome {
         Skipped,
         Diagnostic(String),
-        Tokens(String, crate::parser::TokenizedSource),
+        Tokens(String, parse::parser::TokenizedSource),
     }
     let outcomes: Vec<Outcome> = entries
         .par_iter()

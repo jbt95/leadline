@@ -5,7 +5,7 @@ fn fixture(relative: &str) -> FileAnalysis {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(relative);
-    leadline::analyze_source(relative, &std::fs::read(path).unwrap()).unwrap()
+    parse::analyze_source(relative, &std::fs::read(path).unwrap()).unwrap()
 }
 
 fn function<'a>(file: &'a FileAnalysis, name: &str) -> &'a FunctionAnalysis {
@@ -176,7 +176,7 @@ test {
     const text = "not a name";
 }
 "#;
-    let file = leadline::analyze_source("custom.zig", source).unwrap();
+    let file = parse::analyze_source("custom.zig", source).unwrap();
     assert!(file.parse_errors.is_empty(), "{:?}", file.parse_errors);
 
     let names = file
@@ -300,7 +300,7 @@ fn c_function_kind_and_javascript_parity() {
 
 #[test]
 fn go_grouped_parameters_survive_c_support() {
-    let go = leadline::analyze_source(
+    let go = parse::analyze_source(
         "grouped.go",
         b"package fixtures\nfunc grouped(a, b, c bool) {}\n",
     )
@@ -310,7 +310,7 @@ fn go_grouped_parameters_survive_c_support() {
 
 #[test]
 fn c_only_discovers_function_definitions() {
-    let file = leadline::analyze_source(
+    let file = parse::analyze_source(
         "definitions.c",
         b"int forward(int value);\nint defined(int value) { return value; }\n",
     )
@@ -335,13 +335,12 @@ fn c_preprocessor_conditionals_only_add_logical_loc() {
 #[test]
 fn c_number_and_string_literals_are_halstead_operands() {
     let number =
-        leadline::analyze_source("number.c", b"int probe(int value) { return value + 42; }\n")
+        parse::analyze_source("number.c", b"int probe(int value) { return value + 42; }\n")
             .unwrap();
     assert_eq!(function(&number, "probe").metrics.halstead_n2, 3);
 
     let string =
-        leadline::analyze_source("string.c", b"const char *text(void) { return \"x\"; }\n")
-            .unwrap();
+        parse::analyze_source("string.c", b"const char *text(void) { return \"x\"; }\n").unwrap();
     assert_eq!(function(&string, "text").metrics.halstead_n2, 2);
 }
 
@@ -389,7 +388,7 @@ fn python_kinds_and_javascript_parity() {
 
 #[test]
 fn python_elif_chain_is_a_chain_not_an_else() {
-    let file = leadline::analyze_source(
+    let file = parse::analyze_source(
         "chain.py",
         b"def chain(x):\n    if x == 1:\n        return 1\n    elif x == 2:\n        return 2\n    elif x == 3:\n        return 3\n    else:\n        return 0\n",
     )
@@ -405,20 +404,20 @@ fn python_elif_chain_is_a_chain_not_an_else() {
 
 #[test]
 fn python_literals_and_keywords_are_halstead_leaves() {
-    let number = leadline::analyze_source("probe.py", b"def probe():\n    return 42\n").unwrap();
+    let number = parse::analyze_source("probe.py", b"def probe():\n    return 42\n").unwrap();
     assert_eq!(function(&number, "probe").metrics.halstead_n2, 2);
 
-    let text = leadline::analyze_source("probe.py", b"def probe():\n    return \"x\"\n").unwrap();
+    let text = parse::analyze_source("probe.py", b"def probe():\n    return \"x\"\n").unwrap();
     assert_eq!(function(&text, "probe").metrics.halstead_n2, 2);
 
-    let nothing = leadline::analyze_source("probe.py", b"def probe():\n    return None\n").unwrap();
+    let nothing = parse::analyze_source("probe.py", b"def probe():\n    return None\n").unwrap();
     assert_eq!(function(&nothing, "probe").metrics.halstead_n2, 2);
 
     // `def`, `global`, `del`, and `lambda` are operator keywords the shared
     // punctuation table cannot name. The enclosing function sees `def`,
     // `global`, `del` and its own `:`, `=`; the bound lambda sees its own `:`
     // and `lambda`.
-    let keywords = leadline::analyze_source(
+    let keywords = parse::analyze_source(
         "probe.py",
         b"def probe():\n    global g\n    f = lambda v: v\n    del f\n",
     )
@@ -511,7 +510,7 @@ fn size_and_halstead_fixtures_have_explicit_results() {
 fn parse_diagnostics_are_explicit() {
     assert!(fixture("typescript/method.ts").parse_errors.is_empty());
     let malformed =
-        leadline::analyze_source("malformed.ts", b"function broken( { return 1; }\n").unwrap();
+        parse::analyze_source("malformed.ts", b"function broken( { return 1; }\n").unwrap();
     assert!(!malformed.parse_errors.is_empty());
     assert_eq!(malformed.parse_errors[0].start_line, 1);
 }
@@ -560,7 +559,7 @@ fn functions_carry_stable_ids_and_byte_spans() {
 #[test]
 fn reports_carry_analyzer_version_and_metric_specs() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    let report = leadline::analyze_path(&root, None).unwrap();
+    let report = parse::analyze_path(&root, None).unwrap();
     assert_eq!(report.analyzer_version, env!("CARGO_PKG_VERSION"));
     assert_eq!(report.metric_specs.cyclomatic, "default");
     assert_eq!(report.metric_specs.cognitive, "default");

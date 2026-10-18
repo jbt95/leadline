@@ -247,7 +247,7 @@ fn enrich_project(root: &std::path::Path) -> leadline::project::Project {
     std::fs::write(root.join("src/empty.ts"), "export const ready = true;\n").unwrap();
     leadline::analytics::build(&leadline::analytics::ProjectRequest {
         path: root.to_path_buf(),
-        target: leadline::source_snapshot::SnapshotTarget::Worktree,
+        target: parse::source_snapshot::SnapshotTarget::Worktree,
         window: leadline::history::HistoryWindow::Days90,
         mutation_inputs: Vec::new(),
         test_maps: Vec::new(),

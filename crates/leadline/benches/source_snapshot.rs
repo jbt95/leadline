@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use leadline::analyze_sources;
 use leadline::graph::analyze_dependencies_from_sources;
-use leadline::source_snapshot::SourceEntry;
+use parse::analyze_sources;
+use parse::source_snapshot::SourceEntry;
 use std::hint::black_box;
 
 fn entries(count: usize) -> Vec<SourceEntry> {

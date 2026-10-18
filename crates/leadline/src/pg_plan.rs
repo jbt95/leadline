@@ -3,7 +3,7 @@
 //! Reads raw plan artifacts only. Leadline never connects to PostgreSQL,
 //! executes SQL, or shells out to `psql`.
 
-use crate::external::{INPUT_BYTES_LIMIT, InputBudget, read_bounded, validate_json_depth};
+use parse::external::{INPUT_BYTES_LIMIT, InputBudget, read_bounded, validate_json_depth};
 use serde::Serialize;
 use std::path::Path;
 

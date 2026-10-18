@@ -5,8 +5,8 @@
 //! output never survive normalization. CVSS vectors are not scored: only
 //! literal labels and plain numeric scores map to severities.
 
-use crate::external::{INPUT_BYTES_LIMIT, InputBudget, read_bounded, strict_relative_path};
 use model::security::{FindingState, SecuritySeverity, merge_report_ids};
+use parse::external::{INPUT_BYTES_LIMIT, InputBudget, read_bounded, strict_relative_path};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -342,7 +342,7 @@ fn report_id(path: &Path) -> model::Result<String> {
 
 fn read_bounded_json(path: &Path, budget: &mut InputBudget) -> model::Result<serde_json::Value> {
     let bytes = read_bounded(path, INPUT_BYTES_LIMIT, budget)?;
-    crate::external::validate_json_depth(&bytes)?;
+    parse::external::validate_json_depth(&bytes)?;
     serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid vulnerability JSON {}: {error}", path.display()).into())
 }

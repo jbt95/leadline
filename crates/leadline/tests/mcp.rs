@@ -762,7 +762,7 @@ fn test_targets_returns_uncovered_rows_and_caps() {
 fn check_gates_baseline_regressions() {
     let dir = fixture_dir("function calc(x: boolean) { return 1; }\n");
     let path = dir.to_str().unwrap().to_owned();
-    let report = leadline::analyze_path(std::path::Path::new(&path), None).unwrap();
+    let report = parse::analyze_path(std::path::Path::new(&path), None).unwrap();
     let snapshot = dir.join("baseline.json");
     leadline::baseline::Baseline::from_report(&report)
         .write(&snapshot)

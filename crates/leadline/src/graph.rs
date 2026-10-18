@@ -1,9 +1,10 @@
 //! Deterministic internal source dependency graph extraction.
 
-use crate::parser::{ParsedDependencies, RawDependency, RawDependencyKind, extract_dependencies};
-use crate::source_snapshot::SourceEntry;
-use crate::{Result, normalized_relative_path};
+use model::Result;
 use model::core::METRIC_PROFILE;
+use parse::normalized_relative_path;
+use parse::parser::{ParsedDependencies, RawDependency, RawDependencyKind, extract_dependencies};
+use parse::source_snapshot::SourceEntry;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -66,7 +67,7 @@ enum Resolution {
 
 /// Extracts and resolves dependencies among supported source files in `path`.
 pub fn analyze_dependencies(path: &Path, excludes: &[String]) -> Result<DependencyReport> {
-    let discovered = crate::discovery::discover_with_excludes(path, excludes)?;
+    let discovered = parse::discovery::discover_with_excludes(path, excludes)?;
     let root = analysis_root(path);
     let outcomes: Vec<(String, Result<ParsedDependencies>)> = discovered
         .par_iter()
@@ -142,7 +143,7 @@ pub struct ExternalPackageImport {
 pub fn external_packages_from_sources(
     entries: &[SourceEntry],
 ) -> Result<Vec<ExternalPackageImport>> {
-    use crate::parser::{RawDependencyKind, extract_dependencies};
+    use parse::parser::{RawDependencyKind, extract_dependencies};
     let mut imports = BTreeSet::new();
     for entry in entries {
         let parsed = extract_dependencies(&entry.path, &entry.bytes)?;
@@ -416,7 +417,7 @@ fn resolve_local_include(specifier: &str, source: &str, paths: &BTreeSet<String>
 /// The directory is not simply the file's own: `src/parser/mod.rs` declares
 /// siblings, while `src/telemetry.rs` declares children under `src/telemetry/`.
 fn resolve_rust_module(specifier: &str, source: &str, paths: &BTreeSet<String>) -> Resolution {
-    let directory = crate::parser::rust::module_directory(source);
+    let directory = parse::parser::rust::module_directory(source);
     let base = if directory.is_empty() {
         specifier.to_owned()
     } else {

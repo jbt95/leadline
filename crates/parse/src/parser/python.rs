@@ -36,7 +36,7 @@ const CONVENTIONAL_ENTRY_NAMES: [&str; 6] = [
 ];
 
 /// True for the file names a host loads or runs by name rather than by import.
-pub(crate) fn is_conventional_entry(path: &str) -> bool {
+pub fn is_conventional_entry(path: &str) -> bool {
     let (_, name) = path.rsplit_once('/').unwrap_or(("", path));
     CONVENTIONAL_ENTRY_NAMES.contains(&name)
 }

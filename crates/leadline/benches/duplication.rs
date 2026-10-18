@@ -1,7 +1,7 @@
 use config::DuplicationConfig;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use leadline::duplication::detect;
-use leadline::source_snapshot::SourceEntry;
+use parse::source_snapshot::SourceEntry;
 use std::hint::black_box;
 
 const SHARED: &str = r#"

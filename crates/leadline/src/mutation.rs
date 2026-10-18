@@ -4,13 +4,13 @@
 //! preserved as provenance. Nothing here executes tools, resolves packages,
 //! or guesses function identity by name alone.
 
-use crate::external::{
+use model::Result;
+use model::core::AnalysisReport;
+use parse::external::{
     INPUT_BYTES_LIMIT, InputBudget, read_bounded, strict_relative_path, validate_json_depth,
     validate_xml_preamble_and_depth,
 };
-use crate::source_snapshot::SourceEntry;
-use model::Result;
-use model::core::AnalysisReport;
+use parse::source_snapshot::SourceEntry;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use serde::Serialize;

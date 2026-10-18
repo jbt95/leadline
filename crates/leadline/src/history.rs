@@ -27,10 +27,10 @@
 //!   working.
 
 use crate::coupling::{ProjectCoupling, ProjectCouplingAccumulator};
-use crate::discovery::SourceFilter;
-use crate::source_snapshot::SnapshotContext;
 use git;
 use model::Result;
+use parse::discovery::SourceFilter;
+use parse::source_snapshot::SnapshotContext;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead, BufReader};
@@ -391,7 +391,7 @@ pub(crate) fn scope_head(scope: &Path) -> Result<Option<(Option<String>, Option<
 /// Analyzes Git history for every file under `scope`.
 ///
 /// `scope` is a repository directory; results are keyed relative to it and
-/// match the paths produced by `leadline::analyze_path` for the same
+/// match the paths produced by `parse::analyze_path` for the same
 /// directory. Git performs the scoping: `git log --relative` walks only the
 /// requested directory and prints scope-relative paths, so subdirectories do
 /// not pay for whole-repository path filtering. A missing repository, missing

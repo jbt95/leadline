@@ -1,6 +1,6 @@
 use leadline::graph::{analyze_dependencies, analyze_dependencies_from_sources};
-use leadline::source_snapshot::{SnapshotTarget, SourceEntry, SourceSnapshot, load};
-use leadline::{analyze_path, analyze_sources};
+use parse::source_snapshot::{SnapshotTarget, SourceEntry, SourceSnapshot, load};
+use parse::{analyze_path, analyze_sources};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -502,7 +502,7 @@ fn non_utf8_extension_paths_are_supported_candidates() {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
 
-    let filter = leadline::discovery::SourceFilter::new(Path::new("."), &[]).unwrap();
+    let filter = parse::discovery::SourceFilter::new(Path::new("."), &[]).unwrap();
     let source = PathBuf::from(OsString::from_vec(b"src/bad-\xff.ts".to_vec()));
     assert!(filter.accepts_file(&source));
     let other = PathBuf::from(OsString::from_vec(b"src/bad-\xff.bin".to_vec()));

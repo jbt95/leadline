@@ -28,13 +28,14 @@
 //!
 //! Nothing here writes to the analyzed repository.
 
+use crate::graph;
 use crate::graph::DependencyReport;
-use crate::parser::{ExportKind, ExportedSymbol, ParsedDependencies, extract_dependencies};
-use crate::source_snapshot::SourceEntry;
-use crate::{discovery, graph, normalized_relative_path};
 use config::UnusedConfig;
 use model::Result;
 use model::core::METRIC_PROFILE;
+use parse::parser::{ExportKind, ExportedSymbol, ParsedDependencies, extract_dependencies};
+use parse::source_snapshot::SourceEntry;
+use parse::{discovery, normalized_relative_path};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -570,7 +571,7 @@ fn convention_entries(
     // Zig builds run `build.zig` and project roots by convention; arbitrary
     // `.zig` modules still need an import edge to be reachable.
     for path in files {
-        if crate::parser::zig::is_conventional_entry(path) {
+        if parse::parser::zig::is_conventional_entry(path) {
             entries.push(EntryPoint {
                 path: path.clone(),
                 source: SOURCE_CONVENTION,
@@ -590,7 +591,7 @@ fn convention_entries(
     // Cargo compiles crate roots by name rather than through an import edge, so
     // without them a Rust crate reads as entirely unused.
     for path in files {
-        if crate::parser::rust::is_crate_root(path) {
+        if parse::parser::rust::is_crate_root(path) {
             entries.push(EntryPoint {
                 path: path.clone(),
                 source: SOURCE_CONVENTION,
@@ -601,7 +602,7 @@ fn convention_entries(
     // can reach it either; headers stay subject to reachability, because a
     // library's public header has no in-repository includer.
     for path in files {
-        if crate::parser::c_family::is_translation_unit(path) {
+        if parse::parser::c_family::is_translation_unit(path) {
             entries.push(EntryPoint {
                 path: path.clone(),
                 source: SOURCE_CONVENTION,
@@ -617,8 +618,8 @@ fn convention_entries(
         if !source.path.ends_with(".py") {
             continue;
         }
-        if crate::parser::python::is_conventional_entry(&source.path)
-            || crate::parser::python_has_main_guard(&source.path, &source.bytes)?
+        if parse::parser::python::is_conventional_entry(&source.path)
+            || parse::parser::python_has_main_guard(&source.path, &source.bytes)?
         {
             entries.push(EntryPoint {
                 path: source.path.clone(),
@@ -634,7 +635,7 @@ fn convention_entries(
         if !source.path.ends_with(".go") {
             continue;
         }
-        if crate::parser::go_has_main_package(&source.path, &source.bytes)? {
+        if parse::parser::go_has_main_package(&source.path, &source.bytes)? {
             entries.push(EntryPoint {
                 path: source.path.clone(),
                 source: SOURCE_CONVENTION,

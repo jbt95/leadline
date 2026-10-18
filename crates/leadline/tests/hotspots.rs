@@ -22,7 +22,7 @@ fn analysis(files: Vec<FileAnalysis>) -> AnalysisReport {
 }
 
 fn analyze(path: &str, source: &str) -> FileAnalysis {
-    leadline::analyze_source(path, source.as_bytes()).unwrap()
+    parse::analyze_source(path, source.as_bytes()).unwrap()
 }
 
 fn history_file(path: &str, changes_30d: u64, changes_90d: u64, changes_365d: u64) -> FileHistory {

@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use leadline::{analyze_path, analyze_source};
+use parse::{analyze_path, analyze_source};
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};

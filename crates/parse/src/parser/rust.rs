@@ -7,7 +7,7 @@ use tree_sitter::Node;
 /// anywhere, plus every `.rs` file inside a `bin`, `benches`, `examples`, or
 /// `tests` directory, which covers `src/bin` and workspace members' target
 /// directories alike.
-pub(crate) fn is_crate_root(path: &str) -> bool {
+pub fn is_crate_root(path: &str) -> bool {
     let (directory, name) = split_path(path);
     if matches!(name, "lib.rs" | "main.rs" | "build.rs") {
         return true;
@@ -24,7 +24,7 @@ pub(crate) fn is_crate_root(path: &str) -> bool {
 /// A subtree module lives beside the declaring file when that file is named
 /// `mod.rs` or is a crate root; every other module file owns the directory
 /// named after it, so `src/telemetry.rs` declares `src/telemetry/counters.rs`.
-pub(crate) fn module_directory(path: &str) -> String {
+pub fn module_directory(path: &str) -> String {
     let (directory, name) = split_path(path);
     if name == "mod.rs" || is_crate_root(path) {
         return directory.to_owned();

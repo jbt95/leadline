@@ -7,7 +7,7 @@ const COMPLEX: &[u8] =
 const EXTRA: &[u8] = b"function calc(x: boolean) { return 1; }\nfunction fresh() { return 2; }\n";
 
 fn report(path: &str, source: &[u8]) -> AnalysisReport {
-    let file = leadline::analyze_source(path, source).unwrap();
+    let file = parse::analyze_source(path, source).unwrap();
     AnalysisReport {
         schema_version: OUTPUT_SCHEMA_VERSION,
         metric_profile: METRIC_PROFILE,

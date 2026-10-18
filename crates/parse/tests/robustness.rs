@@ -5,14 +5,14 @@
 //! mutations.
 //!
 //! Partial-result semantics under test: broken input never fails the whole
-//! analysis. [`leadline::analyze_source`] always returns `Ok` for a supported
+//! analysis. [`parse::analyze_source`] always returns `Ok` for a supported
 //! extension; syntax breakage surfaces inline as `FileAnalysis::parse_errors`
 //! while any recoverable functions are still reported. Coverage parsers
 //! (`CoverageMap::from_lcov` / `from_jacoco_xml`) may return `Ok` or `Err`,
 //! but must never panic, and applying parsed coverage to a file must never
 //! panic either.
 
-use leadline::coverage::CoverageMap;
+use parse::coverage::CoverageMap;
 
 /// Fixed seed: every run mutates identically, so failures reproduce.
 const CORPUS_SEED: u64 = 0x51_7E_2B_9C_3D_4F_11_A5;
@@ -282,7 +282,7 @@ fn seeded_mutation_corpus_never_panics_and_stays_partial() {
         .find(|(path, _)| *path == "seed.zig")
         .expect("Zig robustness seed");
     let baseline =
-        leadline::analyze_source("seed.zig", zig_seed.as_bytes()).expect("valid Zig seed analyzes");
+        parse::analyze_source("seed.zig", zig_seed.as_bytes()).expect("valid Zig seed analyzes");
     assert!(
         baseline.parse_errors.is_empty(),
         "{:?}",
@@ -297,7 +297,7 @@ fn seeded_mutation_corpus_never_panics_and_stays_partial() {
     for i in 0..PARSER_ITERATIONS {
         let (path, seed) = SOURCE_SEEDS[i % SOURCE_SEEDS.len()];
         let mutated = mutate_source(&mut rng, seed.as_bytes(), i);
-        let result = leadline::analyze_source(path, &mutated);
+        let result = parse::analyze_source(path, &mutated);
         assert!(
             result.is_ok(),
             "analyze_source must return Ok for mutated input {i} ({path})"
@@ -316,7 +316,7 @@ fn seeded_mutation_corpus_never_panics_and_stays_partial() {
         let mutated = mutate_coverage(&mut rng, LCOV_SEED, i);
         let parsed = CoverageMap::from_lcov(&mutated);
         if let Ok(map) = parsed {
-            let mut file = leadline::analyze_source("seed.ts", SOURCE_SEEDS[0].1.as_bytes())
+            let mut file = parse::analyze_source("seed.ts", SOURCE_SEEDS[0].1.as_bytes())
                 .expect("valid seed analyzes");
             map.apply(&mut file);
         }
@@ -325,7 +325,7 @@ fn seeded_mutation_corpus_never_panics_and_stays_partial() {
         let mutated = mutate_coverage(&mut rng, JACOCO_SEED, i);
         let parsed = CoverageMap::from_jacoco_xml(&mutated);
         if let Ok(map) = parsed {
-            let mut file = leadline::analyze_source("Seed.java", SOURCE_SEEDS[3].1.as_bytes())
+            let mut file = parse::analyze_source("Seed.java", SOURCE_SEEDS[3].1.as_bytes())
                 .expect("valid seed analyzes");
             map.apply(&mut file);
         }
@@ -338,12 +338,12 @@ fn seeded_mutation_corpus_never_panics_and_stays_partial() {
         let lossy = String::from_utf8_lossy(&mutated).into_owned();
         let lcov = format!("SF:fuzz.ts\nDA:1,1\n{lossy}\nend_of_record\n");
         if let Ok(map) = CoverageMap::from_lcov(&lcov) {
-            let mut file = leadline::analyze_source("fuzz.ts", b"function f() { return 1; }\n")
+            let mut file = parse::analyze_source("fuzz.ts", b"function f() { return 1; }\n")
                 .expect("valid seed analyzes");
             map.apply(&mut file);
         }
         if let Ok(map) = CoverageMap::from_jacoco_xml(&lossy) {
-            let mut file = leadline::analyze_source("fuzz.ts", b"function f() { return 1; }\n")
+            let mut file = parse::analyze_source("fuzz.ts", b"function f() { return 1; }\n")
                 .expect("valid seed analyzes");
             map.apply(&mut file);
         }
@@ -361,17 +361,17 @@ fn broken_file_does_not_affect_neighbor() {
     // analyze both, and the valid one keeps its exact expected metrics.
     let valid_path = "neighbor.ts";
     let valid_source = b"function add(a: number, b: number): number {\n  if (b > 0) {\n    return a + b;\n  }\n  return a;\n}\n";
-    let baseline = leadline::analyze_source(valid_path, valid_source).expect("valid seed analyzes");
+    let baseline = parse::analyze_source(valid_path, valid_source).expect("valid seed analyzes");
     assert!(baseline.parse_errors.is_empty());
     assert_eq!(baseline.functions.len(), 1);
 
-    let broken = leadline::analyze_source(
+    let broken = parse::analyze_source(
         "broken.ts",
         b"function broken( {\n<<<<<<< HEAD\n=======\n>>>>>>> branch\n",
     )
     .expect("broken input still returns Ok with inline parse_errors");
 
-    let rerun = leadline::analyze_source(valid_path, valid_source).expect("valid seed analyzes");
+    let rerun = parse::analyze_source(valid_path, valid_source).expect("valid seed analyzes");
     assert_eq!(
         rerun, baseline,
         "neighbor analysis must be bit-identical after a broken file"
@@ -384,7 +384,7 @@ fn broken_file_does_not_affect_neighbor() {
 fn hostile_single_inputs_never_panic() {
     // Overlong single line (200k chars, no newline).
     let long_line = vec![b'a'; 200_000];
-    let file = leadline::analyze_source("long.js", &long_line).expect("Ok with parse_errors");
+    let file = parse::analyze_source("long.js", &long_line).expect("Ok with parse_errors");
     assert_eq!(file.path, "long.js");
 
     // 1MB+ valid-shaped input: repeated simple functions.
@@ -393,28 +393,28 @@ fn hostile_single_inputs_never_panic() {
         big.extend_from_slice(format!("function f{i}() {{ return {i}; }}\n").as_bytes());
     }
     assert!(big.len() > 1_000_000, "big input exceeds 1MB");
-    let file = leadline::analyze_source("big.js", &big).expect("Ok with parse_errors");
+    let file = parse::analyze_source("big.js", &big).expect("Ok with parse_errors");
     assert_eq!(file.functions.len(), 40_000);
 
     // Minified single-line JS.
     let minified = b"function a(x){if(x){return 1}return 0}function b(y){return y?1:0}";
-    let file = leadline::analyze_source("min.js", minified).expect("Ok with parse_errors");
+    let file = parse::analyze_source("min.js", minified).expect("Ok with parse_errors");
     assert_eq!(file.functions.len(), 2);
 
     // Merge-conflict markers inside otherwise valid code.
     let conflict = b"function ok() { return 1; }\n<<<<<<< HEAD\nfunction a() {}\n=======\nfunction b() {}\n>>>>>>> branch\n";
-    leadline::analyze_source("conflict.ts", conflict).expect("Ok with parse_errors");
+    parse::analyze_source("conflict.ts", conflict).expect("Ok with parse_errors");
 
     // Unusual Unicode identifiers and comments.
     let unicode = "function \u{4E2D}\u{6587}() { return 1; } // \u{1F600}\u{200D}\u{202E}comment\n"
         .as_bytes();
-    leadline::analyze_source("unicode.ts", unicode).expect("Ok with parse_errors");
+    parse::analyze_source("unicode.ts", unicode).expect("Ok with parse_errors");
 
     // Invalid UTF-8 byte sequences straight to the parser.
     let invalid: &[u8] = b"function f() {\n\xFF\xFE\x80\xC0\xAF return 1;\n}\n";
-    leadline::analyze_source("invalid.js", invalid).expect("Ok with parse_errors");
+    parse::analyze_source("invalid.js", invalid).expect("Ok with parse_errors");
 
     // Empty and NUL-only inputs.
-    leadline::analyze_source("empty.ts", b"").expect("Ok with parse_errors");
-    leadline::analyze_source("nul.js", b"\0\0\0\0").expect("Ok with parse_errors");
+    parse::analyze_source("empty.ts", b"").expect("Ok with parse_errors");
+    parse::analyze_source("nul.js", b"\0\0\0\0").expect("Ok with parse_errors");
 }
