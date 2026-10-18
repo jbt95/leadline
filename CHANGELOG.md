@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 1.1.0 - 2026-10-18
+
 ### Added
 
 - Test selection: `leadline select-tests` turns a git diff into the test files a
