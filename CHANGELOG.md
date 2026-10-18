@@ -6,6 +6,24 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ### Added
 
+- Test selection: `leadline select-tests` turns a git diff into the test files a
+  change can affect, and never runs anything. The change set comes from the
+  static import graph (`--base REV`, default `HEAD~1`, or `--staged` for the
+  index), the test files from per-language conventions, and an escalation ladder
+  keeps under-selection visible: a changed file in the graph selects the tests
+  in its reverse closure; a file the ladder cannot reason about — unsupported
+  extension, parse error, absent from the graph, or no test reached it —
+  escalates to every test under its top-level directory; an `always_run` match
+  selects the whole suite. Conventions are per language and additive to
+  `[tia] test_globs`; data trees (`fixtures`, `testdata`, `snapshots`,
+  `__mocks__`) and helper trees (`common`, `helpers`, `support`) are never
+  targets. `--format json`/`agent-json` carry `selected` (path, tier, `via`),
+  `escalation` with its reasons, `totals` with the ratio, and `confidence`
+  counting graph files, edges, unresolved imports, and parse errors in changed
+  files; `--format list` prints bare paths for piping into a runner; `--explain`
+  names the tier and its causes; `--max-ratio N` warns without failing. Selection
+  is file-level, the Go and Python graphs are weaker, and recall against
+  actually-failing tests is not measured yet. See `docs/test-selection.md`.
 - Named quality gate: an optional `[quality_gate]` section in `leadline.toml`
   turns `check` into a named pass/fail verdict with conditions on
   `maintainability_rating`, `security_rating`, and `effort_minutes`. Effort uses

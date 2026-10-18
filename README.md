@@ -20,7 +20,7 @@ Deterministic function-level complexity analysis for Go, Java, JavaScript, C, C+
 
 Start here: [installation](docs/installation.md), [CLI reference](docs/cli-reference.md), [configuration](docs/configuration.md).
 
-Metrics and analysis: [metric specification](docs/metrics.md), [changed code](docs/changed-code.md), [hotspots](docs/hotspots.md), [coupling](docs/coupling.md), [dependencies](docs/dependencies.md), [risk](docs/risk.md), [analytics roadmap](docs/analytics-roadmap.md).
+Metrics and analysis: [metric specification](docs/metrics.md), [changed code](docs/changed-code.md), [hotspots](docs/hotspots.md), [coupling](docs/coupling.md), [dependencies](docs/dependencies.md), [risk](docs/risk.md), [test selection](docs/test-selection.md), [analytics roadmap](docs/analytics-roadmap.md).
 
 Gates and security: [security findings](docs/security-findings.md), [vulnerabilities](docs/vulnerabilities.md), [security model](docs/security-model.md), [quality gate](docs/quality-gate.md), [PostgreSQL risks](docs/postgresql-risks.md), [PostgreSQL plans](docs/postgresql-plans.md).
 
@@ -263,7 +263,8 @@ Functions are paired by name and same-name source order. By default a rename sur
 
 `--format agent-json` emits the compact agent-oriented shape on `analyze`, `function`,
 `check`, `changed`, `diff`, `hotspots`, `risk`, `coupling`, `dependencies`, `impact`,
-`test-targets`, `project`, `debt`, `sql-plan`, `security`, `vulnerabilities`, and `sql`. `leadline doctor` self-checks the parsers, coverage
+`select-tests`, `test-targets`, `project`, `debt`, `sql-plan`, `security`,
+`vulnerabilities`, and `sql`. `leadline doctor` self-checks the parsers, coverage
 readers, `git`, and `leadline.toml`. `leadline version` prints the release version.
 
 ## Git history and hotspots
