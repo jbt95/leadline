@@ -38,6 +38,7 @@ tree-sitter-cpp.workspace = true
 tree-sitter-rust.workspace = true
 tree-sitter-typescript.workspace = true
 tree-sitter-zig.workspace = true
+update = { path = "../update" }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

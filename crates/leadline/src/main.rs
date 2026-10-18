@@ -80,7 +80,7 @@ impl From<config::ConfigError> for CliError {
 
 fn main() -> ExitCode {
     #[cfg(windows)]
-    leadline::update::cleanup_stale_backup();
+    update::cleanup_stale_backup();
     match run(std::env::args().skip(1).collect()) {
         Ok(code) => code,
         Err(error) => {
@@ -3351,7 +3351,7 @@ fn doctor_command(args: &[String]) -> Result<ExitCode, CliError> {
 }
 
 fn update_command(args: &[String]) -> Result<ExitCode, CliError> {
-    use leadline::update::IntegrationState;
+    use update::IntegrationState;
 
     let mut integrations = false;
     for argument in args {
@@ -3362,13 +3362,13 @@ fn update_command(args: &[String]) -> Result<ExitCode, CliError> {
             }
         }
     }
-    let base_url = std::env::var("LEADLINE_BASE_URL")
-        .unwrap_or_else(|_| leadline::update::DEFAULT_BASE_URL.to_owned());
-    match leadline::update::run(&base_url) {
-        Ok(leadline::update::Outcome::Current(version)) => {
+    let base_url =
+        std::env::var("LEADLINE_BASE_URL").unwrap_or_else(|_| update::DEFAULT_BASE_URL.to_owned());
+    match update::run(&base_url) {
+        Ok(update::Outcome::Current(version)) => {
             println!("leadline {version} is the latest release.");
         }
-        Ok(leadline::update::Outcome::Updated { from, to, path }) => {
+        Ok(update::Outcome::Updated { from, to, path }) => {
             println!("leadline {to} (updated from {from})");
             println!("Installed to {}", path.display());
         }
@@ -3380,7 +3380,7 @@ fn update_command(args: &[String]) -> Result<ExitCode, CliError> {
 
     let mut failed = Vec::new();
     let mut restarts = Vec::new();
-    for outcome in &leadline::update::update_integrations() {
+    for outcome in &update::update_integrations() {
         match outcome.state {
             IntegrationState::Skipped => continue,
             IntegrationState::Refreshed | IntegrationState::Manual => {

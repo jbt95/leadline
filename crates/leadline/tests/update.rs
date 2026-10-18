@@ -33,7 +33,7 @@ fn build_release(root: &Path, version: &str, binary_body: &str, corrupt_sums: bo
     std::fs::create_dir_all(&payload).unwrap();
     write_executable(&payload.join("leadline"), binary_body);
 
-    let archive = leadline::update::archive_for(std::env::consts::OS, std::env::consts::ARCH)
+    let archive = update::archive_for(std::env::consts::OS, std::env::consts::ARCH)
         .expect("test platform is supported");
     assert!(
         Command::new("tar")
@@ -50,7 +50,7 @@ fn build_release(root: &Path, version: &str, binary_body: &str, corrupt_sums: bo
     let sum = if corrupt_sums {
         "0".repeat(64)
     } else {
-        leadline::update::sha256_file(&download.join(archive)).unwrap()
+        update::sha256_file(&download.join(archive)).unwrap()
     };
     std::fs::write(download.join("SHA256SUMS"), format!("{sum}  {archive}\n")).unwrap();
 

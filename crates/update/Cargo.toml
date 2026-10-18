@@ -1,0 +1,13 @@
+[package]
+name = "update"
+description = "Self-update: fetch, verify, and install the latest leadline release"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+model = { path = "../model" }
+serde_json.workspace = true
