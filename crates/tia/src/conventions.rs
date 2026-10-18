@@ -29,12 +29,20 @@
 //! and a missing one under-selects, so where a layout is genuine the generous
 //! reading stays; the fix is to stop claiming layouts no runner compiles.
 //!
-//! One shared exclusion sits above the per-language rules: any path with a
-//! `fixtures`, `common`, `helpers`, `support`, `testdata`, `snapshots`,
-//! `__snapshots__`, or `__mocks__` component. Those are near-universal
-//! conventions for data and helpers a test *reads*, never a target a runner
-//! executes, and keeping the list in one place keeps a new language from
-//! forgetting it.
+//! Two shared exclusions sit above the per-language rules, split by how strong
+//! the convention's signal is:
+//!
+//! - A **data** tree — `fixtures`, `testdata`, `snapshots`, `__snapshots__`,
+//!   `__mocks__` — outranks every row, including a name that says "test".
+//!   Nothing in `fixtures/` is executed by a runner, whatever it is called.
+//! - A **helper** tree — `common`, `helpers`, `support` — outranks only the
+//!   **directory-layout** rows, where the directory is the entire signal. A
+//!   test's own name outranks where it sits: `src/common/app.test.ts` is a
+//!   test, while an unnamed Java class in `src/test/java/.../helpers/` is not.
+//!   Excluding the helper names from name-form matches as well made a whole
+//!   source subtree invisible, and since the ladder then found no test it
+//!   escalated that file's top-level directory — every test under `src/` for
+//!   one changed file.
 //!
 //! `declares_tests` scans for the attribute rather than resolving it, so a
 //! `#[test]` inside a comment or a string counts. That direction is the safe
@@ -92,17 +100,20 @@ fn contains(source: &[u8], needle: &[u8]) -> bool {
 }
 
 /// The built-in conventions: the name form of the path's language, plus the
-/// directory layout that language's runner compiles, unless the path sits in a
-/// helper or data subtree.
+/// directory layout that language's runner compiles.
+///
+/// The two are excluded differently on purpose. A name form carries its own
+/// evidence, so only a data tree suppresses it; a layout is the entire signal,
+/// so a helper tree suppresses it too.
 fn matches_builtin(path: &str) -> bool {
-    if in_helper_or_data_tree(path) {
-        return false;
-    }
     let Some(language) = detect_language(path) else {
         return false;
     };
     let name = path.rsplit('/').next().unwrap_or(path);
-    matches_builtin_name(name, language) || matches_builtin_layout(path, language)
+    if matches_builtin_name(name, language) {
+        return !in_data_tree(path);
+    }
+    !in_helper_or_data_tree(path) && matches_builtin_layout(path, language)
 }
 
 /// The directory layout a runner compiles, by language. A language absent here
@@ -136,22 +147,26 @@ fn is_rust_integration_test(path: &str) -> bool {
     }
 }
 
-/// True when a component of `path` names a helper or data directory: the
-/// near-universal conventions for what a test reads rather than executes.
-fn in_helper_or_data_tree(path: &str) -> bool {
+/// True when a component of `path` names a data directory: golden files,
+/// snapshots, and mocks a test reads rather than anything a runner executes.
+/// Strong enough to outrank a test-shaped file name.
+fn in_data_tree(path: &str) -> bool {
     path.split('/').any(|component| {
         matches!(
             component,
-            "fixtures"
-                | "common"
-                | "helpers"
-                | "support"
-                | "testdata"
-                | "snapshots"
-                | "__snapshots__"
-                | "__mocks__"
+            "fixtures" | "testdata" | "snapshots" | "__snapshots__" | "__mocks__"
         )
     })
+}
+
+/// True when a component of `path` names a helper directory: the near-universal
+/// conventions for code a test calls rather than a test. Weak enough that it
+/// only suppresses a directory-layout match; see [`matches_builtin`].
+fn in_helper_or_data_tree(path: &str) -> bool {
+    in_data_tree(path)
+        || path
+            .split('/')
+            .any(|component| matches!(component, "common" | "helpers" | "support"))
 }
 
 fn matches_builtin_name(name: &str, language: Language) -> bool {
@@ -255,20 +270,40 @@ mod tests {
     }
 
     #[test]
-    fn fixtures_and_helper_modules_are_never_test_files() {
-        // A `.c` fixture under `tests/` is data a test reads, not a target a
-        // runner executes; this is the path that forced the tightening.
-        assert!(!test_file("crates/leadline/tests/fixtures/c/decisions.c"));
-        // A shared Rust module under `tests/` is a module, not an integration
-        // target — `tests/<name>/main.rs` would be, but `mod.rs` is not.
-        assert!(!test_file("crates/leadline/tests/common/mod.rs"));
-        assert!(!test_file("crates/leadline/tests/support/main.rs"));
-        assert!(test_file("crates/leadline/tests/runner.rs"));
-        assert!(test_file("crates/leadline/tests/cases/main.rs"));
-        // The exclusion outranks a genuine name form too.
-        assert!(!test_file("src/__mocks__/client.test.ts"));
+    fn a_data_tree_outranks_even_a_test_shaped_file_name() {
+        // Fixtures are data a test reads, not a target a runner executes; this
+        // is the path that forced the tightening.
+        assert!(!test_file("crates/leadline/tests/fixtures/c/store_test.c"));
         assert!(!test_file("testdata/golden_test.go"));
         assert!(!test_file("web/__snapshots__/app.test.tsx"));
+        assert!(!test_file("src/__mocks__/client.test.ts"));
+        // A real test beside them still counts.
+        assert!(test_file("crates/leadline/tests/runner.rs"));
+    }
+
+    #[test]
+    fn a_helper_tree_outranks_a_directory_layout_only() {
+        // `tests/common/mod.rs` is not a cargo target, so the Rust layout rule
+        // already refuses it; the helper exclusion earns its keep on
+        // `tests/<name>/main.rs`, which *is* one.
+        assert!(!test_file("crates/leadline/tests/common/mod.rs"));
+        assert!(!test_file("crates/leadline/tests/support/main.rs"));
+        assert!(test_file("crates/leadline/tests/cases/main.rs"));
+        // Java's `src/test/**` layout claims every class in the test source
+        // tree, so a helper package there needs the exclusion.
+        assert!(!test_file("src/test/java/com/example/helpers/Fixture.java"));
+        assert!(test_file("src/test/java/com/example/Dao.java"));
+    }
+
+    #[test]
+    fn a_test_name_is_a_test_wherever_a_helper_directory_sits() {
+        // The name declares the file a test unambiguously, so the helper
+        // exclusion must not suppress it: rejecting these escalated a change
+        // under `src/common/` or `src/support/` to every test under `src/`.
+        assert!(test_file("src/common/app.test.ts"));
+        assert!(test_file("src/support/db.test.ts"));
+        assert!(test_file("service/common/db_test.go"));
+        assert!(test_file("pkg/support/test_store.py"));
     }
 
     #[test]
