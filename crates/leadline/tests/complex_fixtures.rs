@@ -1,8 +1,8 @@
 use codegraph::history::HistoryWindow;
 use codegraph::ownership::OwnershipMode;
-use leadline::analytics::{ProjectRequest, build};
 use parse::coverage::CoverageMap;
 use parse::source_snapshot::SnapshotTarget;
+use report::analytics::{ProjectRequest, build};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -62,7 +62,7 @@ fn commit(root: &Path, message: &str, date: &str) {
     git(root, &["commit", "-q", "-m", message], Some(date));
 }
 
-fn complex_project() -> leadline::project::Project {
+fn complex_project() -> report::project::Project {
     let root = fixture("repo/current");
     let mut coverage =
         CoverageMap::from_lcov(&std::fs::read_to_string(fixture("coverage/lcov.info")).unwrap())
@@ -117,15 +117,14 @@ fn complex_scanner_reports_deduplicate_enrich_and_gate() {
         fixture("scanners/security/current-b.sarif"),
     ];
     let baseline_security = [fixture("scanners/security/baseline.sarif")];
-    let mut security =
-        leadline::security::read_security_reports(leadline::security::SecurityInputs {
-            current: &current_security,
-            baseline: &baseline_security,
-        })
-        .unwrap();
+    let mut security = report::security::read_security_reports(report::security::SecurityInputs {
+        current: &current_security,
+        baseline: &baseline_security,
+    })
+    .unwrap();
     let changed =
         std::collections::BTreeSet::from(["src/service.ts".to_owned(), "src/store.ts".to_owned()]);
-    leadline::security::enrich(&mut security, &complex_project(), Some(&changed));
+    report::security::enrich(&mut security, &complex_project(), Some(&changed));
 
     assert_eq!(security.findings.len(), 3);
     let injection = security
@@ -136,13 +135,13 @@ fn complex_scanner_reports_deduplicate_enrich_and_gate() {
     assert_eq!(injection.report_ids, ["current-a.sarif", "current-b.sarif"]);
     assert!(injection.function_id.is_some());
     assert_eq!(injection.changed, Some(true));
-    let security_gate = leadline::security::SecurityGate {
+    let security_gate = report::security::SecurityGate {
         minimum: model::security::SecuritySeverity::High,
         new_only: true,
         changed_only: true,
     };
     assert_eq!(
-        leadline::security::gate_violations(&security, &security_gate).len(),
+        report::security::gate_violations(&security, &security_gate).len(),
         2
     );
     assert!(
@@ -378,7 +377,7 @@ fn complex_history_fixture_joins_changes_coupling_hotspots_and_debt() {
             .any(|change| { change.path == "src/service.ts" && change.name == "process" })
     );
 
-    let debt = leadline::analytics::analyze_debt(&leadline::analytics::DebtRequest {
+    let debt = report::analytics::analyze_debt(&report::analytics::DebtRequest {
         path: root.clone(),
         base,
         target: SnapshotTarget::Worktree,

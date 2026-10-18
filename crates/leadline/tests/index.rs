@@ -1,4 +1,4 @@
-use leadline::index::{AnalysisIndex, IndexedFile, content_key};
+use report::index::{AnalysisIndex, IndexedFile, content_key};
 
 mod common;
 use common::temporary_directory;

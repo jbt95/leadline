@@ -1,13 +1,5 @@
-pub mod agent;
-pub mod analytics;
 pub mod http;
-pub mod index;
 pub mod mcp;
-pub mod project;
-pub mod render;
-pub mod report;
-pub mod security;
-pub mod snapshots;
 pub mod stats;
 pub mod telemetry;
 pub mod update;

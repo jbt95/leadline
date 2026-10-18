@@ -182,7 +182,7 @@ fn terminal_report_keeps_human_readable_metric_labels() {
         files: vec![file],
     };
 
-    let output = leadline::report::terminal(&report);
+    let output = report::report::terminal(&report);
     assert!(output.starts_with("fixture.ts\n\nscore()\n"));
     for label in [
         "Cognitive",

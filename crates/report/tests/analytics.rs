@@ -1,8 +1,8 @@
 use codegraph::history::HistoryWindow;
 use codegraph::ownership::OwnershipMode;
-use leadline::analytics::{DebtRequest, ProjectRequest, analyze_debt, build, capture_trend};
-use leadline::snapshots::SnapshotOutcome;
 use parse::source_snapshot::SnapshotTarget;
+use report::analytics::{DebtRequest, ProjectRequest, analyze_debt, build, capture_trend};
+use report::snapshots::SnapshotOutcome;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};

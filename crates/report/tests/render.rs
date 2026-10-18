@@ -1,6 +1,6 @@
 //! CI format rendering over one check document.
 
-use leadline::render::{
+use report::render::{
     CiFormat, Finding, GateLimits, GateSummary, findings_from_check_json, parse_format, render,
     summary_from_check_json,
 };

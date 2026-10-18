@@ -12,7 +12,6 @@
 //! `{jsonrpc:"2.0", id, result}` or `{jsonrpc:"2.0", id, error:{code,message}}`.
 //! Messages without an `id` are notifications and produce no response.
 
-use crate::agent::{SortKey, changed_causes};
 use crate::http::{
     DEFAULT_HOST, DEFAULT_PORT, JSON_CONTENT_TYPE, MAX_HTTP_BODY, Request, bad_request, bind,
     http_error, parse_port,
@@ -21,6 +20,7 @@ use config::RegressionLimits;
 use model::core::{
     FunctionAnalysis, FunctionMetrics, METRIC_PROFILE, OUTPUT_SCHEMA_VERSION, Thresholds,
 };
+use report::agent::{SortKey, changed_causes};
 use std::collections::{BTreeSet, HashMap};
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
@@ -1172,7 +1172,7 @@ fn tool_analyze_function(params: &serde_json::Value) -> Result<serde_json::Value
 /// Violation rows, index reuse, and per-language parse-error counts for `check`.
 struct CheckRows {
     rows: Vec<serde_json::Value>,
-    reuse: Option<crate::index::Reuse>,
+    reuse: Option<report::index::Reuse>,
     parse_languages: Vec<(&'static str, u64)>,
     quality_gate: Option<analysis::quality::QualityGateReport>,
 }
@@ -1331,7 +1331,7 @@ fn check_path_rows(
     report: &model::core::AnalysisReport,
     thresholds: &Thresholds,
     regressed: &BTreeSet<(String, String)>,
-    reuse: Option<crate::index::Reuse>,
+    reuse: Option<report::index::Reuse>,
     gate: Option<&config::QualityGateConfig>,
 ) -> CheckRows {
     let quality_gate = mcp_quality_gate(
@@ -1826,7 +1826,7 @@ fn tool_dependencies(params: &serde_json::Value) -> Result<serde_json::Value, (i
     if report.files.is_empty() {
         return Err((-32602, format!("no supported files found under {path}")));
     }
-    let agent = crate::agent::dependencies_agent_json(&report);
+    let agent = report::agent::dependencies_agent_json(&report);
     agent_envelope(
         "dependencies",
         path,
@@ -1863,7 +1863,7 @@ fn tool_impact(params: &serde_json::Value) -> Result<serde_json::Value, (i64, St
             format!("impact target '{target}' was not found in the dependency graph under {path}"),
         ));
     };
-    let agent = crate::agent::impact_agent_json(&report);
+    let agent = report::agent::impact_agent_json(&report);
     agent_envelope(
         "impact",
         path,
@@ -1918,7 +1918,7 @@ fn tool_coupling(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
     };
     let report = codegraph::coupling::analyze_coupling(root, &key, &options)
         .map_err(|error| (-32602, error.to_string()))?;
-    let agent = crate::agent::coupling_agent_json(&report);
+    let agent = report::agent::coupling_agent_json(&report);
     agent_envelope(
         "coupling",
         path,
@@ -1942,7 +1942,7 @@ fn tool_hotspots(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
     let history = codegraph::history::analyze_history(&config_dir(path))
         .map_err(|error| (-32602, error.to_string()))?;
     let report = analysis::hotspots::build(&analysis, &history, window, top);
-    let agent = crate::agent::hotspots_agent_json(&report);
+    let agent = report::agent::hotspots_agent_json(&report);
     agent_envelope(
         "hotspots",
         path,
@@ -1962,15 +1962,15 @@ fn tool_duplication(params: &serde_json::Value) -> Result<serde_json::Value, (i6
     reject_unknown(params, "duplication", &["path", "base"])?;
     let path = opt_str(params, "path")?.unwrap_or(".");
     let base = opt_str(params, "base")?;
-    let outcome = crate::analytics::analyze_duplication(
+    let outcome = report::analytics::analyze_duplication(
         Path::new(path),
         parse::source_snapshot::SnapshotTarget::Worktree,
         base,
     )
     .map_err(|error| (-32602, error.to_string()))?;
     let (mode, mut fields) = match &outcome {
-        crate::analytics::DuplicationOutcome::Single(report) => ("single", report_object(report)?),
-        crate::analytics::DuplicationOutcome::Drift(report) => ("drift", report_object(report)?),
+        report::analytics::DuplicationOutcome::Single(report) => ("single", report_object(report)?),
+        report::analytics::DuplicationOutcome::Drift(report) => ("drift", report_object(report)?),
     };
     fields.insert("tool".to_owned(), serde_json::json!("duplication"));
     fields.insert("path".to_owned(), serde_json::json!(path));
@@ -1983,7 +1983,7 @@ fn tool_policy(params: &serde_json::Value) -> Result<serde_json::Value, (i64, St
     reject_unknown(params, "policy", &["path", "base"])?;
     let path = opt_str(params, "path")?.unwrap_or(".");
     let base = opt_str(params, "base")?;
-    let report = crate::analytics::analyze_policy(
+    let report = report::analytics::analyze_policy(
         Path::new(path),
         parse::source_snapshot::SnapshotTarget::Worktree,
         base,
@@ -2002,10 +2002,10 @@ fn tool_risk(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Stri
     let top = parse_top_param(params, 10)?;
     let window = parse_since(params, codegraph::history::HistoryWindow::Days90)?;
     let (analysis, excludes) = analyze_optional_coverage(params, path)?;
-    let mut report = crate::analytics::analyze_risk(&analysis, Path::new(path), &excludes, window)
+    let mut report = report::analytics::analyze_risk(&analysis, Path::new(path), &excludes, window)
         .map_err(|error| (-32602, error.to_string()))?;
     report.risks.truncate(top);
-    let agent = crate::agent::risk_agent_json(&report);
+    let agent = report::agent::risk_agent_json(&report);
     agent_envelope(
         "risk",
         path,
@@ -2044,7 +2044,7 @@ fn tool_debt(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Stri
     };
     let renames = opt_flag(params, "renames", "debt")?;
     let window = parse_since(params, codegraph::history::HistoryWindow::Days90)?;
-    let report = crate::analytics::analyze_debt(&crate::analytics::DebtRequest {
+    let report = report::analytics::analyze_debt(&report::analytics::DebtRequest {
         path: std::path::PathBuf::from(path),
         base: base.to_owned(),
         target,
@@ -2053,7 +2053,7 @@ fn tool_debt(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Stri
         fail_on_regression: false,
     })
     .map_err(|error| (-32602, error.to_string()))?;
-    let agent = crate::agent::debt_agent_json(&report);
+    let agent = report::agent::debt_agent_json(&report);
     crate::telemetry::record_debt("mcp", &report.summary);
     let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("debt"));
@@ -2121,7 +2121,7 @@ fn tool_project(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
     let snapshots_path = opt_str(params, "snapshots")?
         .map(|file| artifact_path("project", "snapshots", file))
         .transpose()?;
-    let report = crate::analytics::build(&crate::analytics::ProjectRequest {
+    let report = report::analytics::build(&report::analytics::ProjectRequest {
         path: std::path::PathBuf::from(path),
         target,
         window,
@@ -2132,7 +2132,7 @@ fn tool_project(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
         coverage,
     })
     .map_err(|error| (-32602, error.to_string()))?;
-    let agent = crate::agent::project_agent_json(&report);
+    let agent = report::agent::project_agent_json(&report);
     agent_envelope(
         "project",
         path,
@@ -2327,15 +2327,15 @@ fn index_directory(
 struct CachedIndex {
     modified: Option<SystemTime>,
     len: u64,
-    index: Arc<crate::index::AnalysisIndex>,
+    index: Arc<report::index::AnalysisIndex>,
 }
 
 static INDEX_CACHE: OnceLock<Mutex<HashMap<std::path::PathBuf, CachedIndex>>> = OnceLock::new();
 
 /// Opens the index at `dir` once per file identity (path + mtime + length) and
 /// reuses the parsed value afterwards. A missing file caches the empty index.
-fn cached_index(dir: &std::path::Path) -> Arc<crate::index::AnalysisIndex> {
-    let path = dir.join(crate::index::INDEX_FILE_NAME);
+fn cached_index(dir: &std::path::Path) -> Arc<report::index::AnalysisIndex> {
+    let path = dir.join(report::index::INDEX_FILE_NAME);
     let metadata = std::fs::metadata(&path).ok();
     let cache = INDEX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(cached) = cache.lock().ok().and_then(|cache| {
@@ -2351,7 +2351,7 @@ fn cached_index(dir: &std::path::Path) -> Arc<crate::index::AnalysisIndex> {
             return index;
         }
     }
-    let index = Arc::new(crate::index::AnalysisIndex::open(dir));
+    let index = Arc::new(report::index::AnalysisIndex::open(dir));
     let (modified, len) = metadata.map_or((None, 0), |metadata| {
         (metadata.modified().ok(), metadata.len())
     });
@@ -2379,16 +2379,16 @@ fn analyze_read_only(
     path: &str,
     coverage: Option<&parse::coverage::CoverageMap>,
     excludes: &[String],
-) -> Result<(model::core::AnalysisReport, Option<crate::index::Reuse>), (i64, String)> {
+) -> Result<(model::core::AnalysisReport, Option<report::index::Reuse>), (i64, String)> {
     let index_dir = index_directory(params, config, path)?;
     if coverage.is_none()
         && let Some(dir) = index_dir
     {
         let previous = cached_index(&dir);
-        if let Ok((report, reuse)) = crate::index::warm_report_with(
+        if let Ok((report, reuse)) = report::index::warm_report_with(
             &previous,
             Path::new(path),
-            &crate::index::scope_label(Path::new(path)),
+            &report::index::scope_label(Path::new(path)),
             &config::fingerprint(&config_dir(path)),
             excludes,
         ) {
@@ -2401,7 +2401,7 @@ fn analyze_read_only(
 }
 
 /// Envelope `index` block for a report that reused a stored index.
-fn index_counts(reuse: Option<crate::index::Reuse>) -> Option<serde_json::Value> {
+fn index_counts(reuse: Option<report::index::Reuse>) -> Option<serde_json::Value> {
     reuse.map(|reuse| {
         serde_json::json!({
             "reused": reuse.reused,
@@ -2566,13 +2566,13 @@ fn tool_security_findings(params: &serde_json::Value) -> Result<serde_json::Valu
             "changed_only requires base, staged, or target".to_owned(),
         ));
     }
-    let gate = opt_gate_severity(params)?.map(|minimum| crate::security::SecurityGate {
+    let gate = opt_gate_severity(params)?.map(|minimum| report::security::SecurityGate {
         minimum,
         new_only,
         changed_only,
     });
-    let top = parse_top_param(params, crate::security::AGENT_DEFAULT_TOP)?;
-    let outcome = crate::security::assemble(&crate::security::SecurityRequest {
+    let top = parse_top_param(params, report::security::AGENT_DEFAULT_TOP)?;
+    let outcome = report::security::assemble(&report::security::SecurityRequest {
         path: PathBuf::from(path),
         sarif,
         baseline_sarif,
@@ -2580,7 +2580,7 @@ fn tool_security_findings(params: &serde_json::Value) -> Result<serde_json::Valu
         gate,
     })
     .map_err(|error| (-32602, error.message().to_owned()))?;
-    let agent = crate::security::agent_json(&outcome.report, top);
+    let agent = report::security::agent_json(&outcome.report, top);
     let (violations, violations_truncated) = cap_violations(&outcome.violations, top)?;
     let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("security_findings"));
@@ -2635,7 +2635,7 @@ fn tool_vulnerabilities(params: &serde_json::Value) -> Result<serde_json::Value,
             .as_ref()
             .and_then(|selected| selected.vulnerabilities.minimum_severity),
     };
-    let top = parse_top_param(params, crate::security::AGENT_DEFAULT_TOP)?;
+    let top = parse_top_param(params, report::security::AGENT_DEFAULT_TOP)?;
     let outcome =
         artifacts::vulnerabilities::assemble(&artifacts::vulnerabilities::VulnerabilityRequest {
             path: PathBuf::from(path),
@@ -2712,7 +2712,7 @@ fn tool_sql_risks(params: &serde_json::Value) -> Result<serde_json::Value, (i64,
             .collect::<Result<Vec<_>, _>>()?,
     };
     let gate = opt_gate_severity(params)?;
-    let top = parse_top_param(params, crate::security::AGENT_DEFAULT_TOP)?;
+    let top = parse_top_param(params, report::security::AGENT_DEFAULT_TOP)?;
     let excludes = config_excludes(config.as_ref());
     let report = artifacts::sql::analyze_sql_path(
         Path::new(path),
@@ -2767,7 +2767,7 @@ fn tool_sql_plan(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
         max_plan_rows_ratio: opt_plan_limit(params, "max_plan_rows_ratio")?,
         max_estimate_error_ratio: opt_plan_limit(params, "max_estimate_error_ratio")?,
     };
-    let top = parse_top_param(params, crate::security::AGENT_DEFAULT_TOP)?;
+    let top = parse_top_param(params, report::security::AGENT_DEFAULT_TOP)?;
     let report =
         artifacts::pg_plan::compare_plan_directories(&current_path, &baseline_path, &limits)
             .map_err(|error| (-32602, error.to_string()))?;
@@ -3382,7 +3382,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let mut first = crate::index::AnalysisIndex::empty(".", "none");
+        let mut first = report::index::AnalysisIndex::empty(".", "none");
         first.scope = "first".to_owned();
         first.save(&dir).unwrap();
         let a = cached_index(&dir);
@@ -3392,7 +3392,7 @@ mod tests {
 
         // A rewrite with a different length must invalidate on its own; the
         // test never sleeps, so a coarse mtime granularity cannot hide it.
-        let mut second = crate::index::AnalysisIndex::empty(".", "none");
+        let mut second = report::index::AnalysisIndex::empty(".", "none");
         second.scope = "second-with-a-longer-scope".to_owned();
         second.save(&dir).unwrap();
         let c = cached_index(&dir);
@@ -3400,7 +3400,7 @@ mod tests {
         assert_eq!(c.scope, "second-with-a-longer-scope");
 
         // A deleted index must not keep serving the last parsed value.
-        std::fs::remove_file(dir.join(crate::index::INDEX_FILE_NAME)).unwrap();
+        std::fs::remove_file(dir.join(report::index::INDEX_FILE_NAME)).unwrap();
         let d = cached_index(&dir);
         assert!(!Arc::ptr_eq(&c, &d));
         assert!(d.files.is_empty());

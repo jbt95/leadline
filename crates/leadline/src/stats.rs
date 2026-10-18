@@ -7,8 +7,8 @@
 //! served. The transport, including the `Host`/`Origin` guards, lives in
 //! [`crate::http`]; routing and the embedded page live here.
 
-use crate::analytics::ProjectRequest;
 use crate::http::{DEFAULT_HOST, DEFAULT_PORT, JSON_CONTENT_TYPE, Request, Response, parse_port};
+use report::analytics::ProjectRequest;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -242,7 +242,7 @@ impl Server {
     /// Builds the canonical model and serializes it once per analysis.
     fn analyze(request: &ProjectRequest) -> model::Result<Snapshot> {
         let started = std::time::Instant::now();
-        let project = crate::analytics::build(request)?;
+        let project = report::analytics::build(request)?;
         // Pretty JSON plus a trailing newline: byte-identical to
         // `project --json`, which prints through the same encoding.
         let mut bytes = serde_json::to_vec_pretty(&project)?;

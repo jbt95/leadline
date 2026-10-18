@@ -1,4 +1,4 @@
-use leadline::snapshots::{SNAPSHOT_SCHEMA_VERSION, SnapshotOutcome, TrendPoint, TrendStore};
+use report::snapshots::{SNAPSHOT_SCHEMA_VERSION, SnapshotOutcome, TrendPoint, TrendStore};
 
 fn point(commit: &str, fingerprint: &str) -> TrendPoint {
     TrendPoint {

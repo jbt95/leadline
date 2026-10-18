@@ -2,12 +2,12 @@ use analysis::duplication::detect;
 use analysis::graph::{DependencyEdge, DependencyFile, DependencyReport};
 use codegraph::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow};
 use config::DuplicationConfig;
-use leadline::project::{PROJECT_SCHEMA_VERSION, ProjectInputs, build};
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
     MetricSpecs, OUTPUT_SCHEMA_VERSION,
 };
 use parse::source_snapshot::SourceEntry;
+use report::project::{PROJECT_SCHEMA_VERSION, ProjectInputs, build};
 
 fn function(name: &str, cognitive: u32, loc: u32) -> FunctionAnalysis {
     FunctionAnalysis {

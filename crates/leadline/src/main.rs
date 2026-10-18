@@ -3,13 +3,13 @@ use codegraph::coupling::CouplingOptions;
 use codegraph::history::HistoryWindow;
 use codegraph::ownership::OwnershipMode;
 use config::{self, Config, RegressionLimits};
-use leadline::agent::{Budget, SortKey};
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, METRIC_PROFILE, MetricSpecs,
     OUTPUT_SCHEMA_VERSION, Thresholds,
 };
 use parse::coverage::CoverageMap;
 use parse::source_snapshot::SnapshotTarget;
+use report::agent::{Budget, SortKey};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -332,10 +332,10 @@ fn index_command(args: &[String]) -> Result<ExitCode, CliError> {
         .as_ref()
         .map(|selected| selected.analysis_excludes.clone())
         .unwrap_or_default();
-    let outcome = leadline::index::build(&leadline::index::IndexRequest {
+    let outcome = report::index::build(&report::index::IndexRequest {
         root: &root,
         index_dir: &dir,
-        scope: &leadline::index::scope_label(&root),
+        scope: &report::index::scope_label(&root),
         config_fingerprint: &fingerprint,
         excludes: &excludes,
         verify,
@@ -424,7 +424,7 @@ fn function_command(args: &[String]) -> Result<ExitCode, CliError> {
         files: vec![analyzed],
     };
     if explain && options.agent_json {
-        let mut value = leadline::agent::analyze_agent_json_budgeted(&report, &options.budget);
+        let mut value = report::agent::analyze_agent_json_budgeted(&report, &options.budget);
         inject_contributions(&mut value, &report);
         print_json(&&value, false)?;
     } else {
@@ -593,13 +593,13 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
     budget.explain = explain;
     if agent_json {
         print_json(
-            &leadline::agent::changed_agent_json_budgeted(&report, &budget),
+            &report::agent::changed_agent_json_budgeted(&report, &budget),
             false,
         )?;
     } else if json {
         print_json(&report, false)?;
     } else {
-        let terminal = leadline::report::terminal_changed(&report);
+        let terminal = report::report::terminal_changed(&report);
         if terminal.is_empty() {
             println!("No changed functions or parse errors found.");
         } else {
@@ -728,11 +728,11 @@ fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     let report = analysis::hotspots::build(&analysis, &history, parsed.window, parsed.limit);
     if parsed.agent_json {
-        print_json(&leadline::agent::hotspots_agent_json(&report), false)?;
+        print_json(&report::agent::hotspots_agent_json(&report), false)?;
     } else if parsed.json {
         print_json(&report, true)?;
     } else {
-        print!("{}", leadline::report::terminal_hotspots(&report));
+        print!("{}", report::report::terminal_hotspots(&report));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -744,17 +744,17 @@ fn risk_command(args: &[String]) -> Result<ExitCode, CliError> {
     let excludes = analysis_excludes(config.as_ref());
     let (analysis, _) = analyze_ranked(&parsed.path, parsed.coverage.as_ref(), excludes)?;
     let mut report =
-        leadline::analytics::analyze_risk(&analysis, &parsed.path, excludes, parsed.window)
+        report::analytics::analyze_risk(&analysis, &parsed.path, excludes, parsed.window)
             .map_err(|error| CliError::incomplete(error.to_string()))?;
     if parsed.agent_json {
         report.risks.truncate(parsed.limit);
-        print_json(&leadline::agent::risk_agent_json(&report), false)?;
+        print_json(&report::agent::risk_agent_json(&report), false)?;
     } else if parsed.json {
         print_json(&report, true)?;
     } else {
         let total = report.risks.len();
         report.risks.truncate(parsed.limit);
-        print!("{}", leadline::report::terminal_risk(&report));
+        print!("{}", report::report::terminal_risk(&report));
         if report.risks.len() < total {
             println!(
                 "Showing the top {} of {} files (raise --limit for more).\n",
@@ -769,14 +769,14 @@ fn risk_command(args: &[String]) -> Result<ExitCode, CliError> {
 /// Canonical project build across every analytics section.
 fn project_command(args: &[String]) -> Result<ExitCode, CliError> {
     let parsed = parse_project_args(args, "project")?;
-    let report = leadline::analytics::build(&parsed.request)
+    let report = report::analytics::build(&parsed.request)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     if parsed.agent_json {
-        print_json(&leadline::agent::project_agent_json(&report), false)?;
+        print_json(&report::agent::project_agent_json(&report), false)?;
     } else if parsed.json {
         print_json(&report, true)?;
     } else {
-        print!("{}", leadline::report::terminal_project(&report));
+        print!("{}", report::report::terminal_project(&report));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -806,7 +806,7 @@ fn stats_command(args: &[String]) -> Result<ExitCode, CliError> {
 
 /// The one analysis request `project` and `stats` share.
 struct ProjectArgs {
-    request: leadline::analytics::ProjectRequest,
+    request: report::analytics::ProjectRequest,
     json: bool,
     agent_json: bool,
 }
@@ -916,7 +916,7 @@ fn parse_project_args(args: &[String], command: &str) -> Result<ProjectArgs, Cli
         ));
     }
     Ok(ProjectArgs {
-        request: leadline::analytics::ProjectRequest {
+        request: report::analytics::ProjectRequest {
             path,
             target,
             window,
@@ -1017,7 +1017,7 @@ fn debt_command(args: &[String]) -> Result<ExitCode, CliError> {
         index += 1;
     }
     check_output_format(json, agent_json, false, None)?;
-    let request = leadline::analytics::DebtRequest {
+    let request = report::analytics::DebtRequest {
         path,
         base,
         target,
@@ -1025,15 +1025,15 @@ fn debt_command(args: &[String]) -> Result<ExitCode, CliError> {
         window,
         fail_on_regression,
     };
-    let report = leadline::analytics::analyze_debt(&request)
+    let report = report::analytics::analyze_debt(&request)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     leadline::telemetry::record_debt("cli", &report.summary);
     if agent_json {
-        print_json(&leadline::agent::debt_agent_json(&report), false)?;
+        print_json(&report::agent::debt_agent_json(&report), false)?;
     } else if json {
         print_json(&report, true)?;
     } else {
-        print!("{}", leadline::report::terminal_debt(&report));
+        print!("{}", report::report::terminal_debt(&report));
     }
     if fail_on_regression && (report.summary.new > 0 || report.summary.risk_increased > 0) {
         return Ok(ExitCode::from(1));
@@ -1097,12 +1097,12 @@ fn snapshot_command(args: &[String]) -> Result<ExitCode, CliError> {
     }
     let output = output.ok_or_else(|| CliError::usage("snapshot requires --output FILE"))?;
     let outcome =
-        leadline::analytics::capture_trend(&path, &output, window, &mutation_inputs, replace)
+        report::analytics::capture_trend(&path, &output, window, &mutation_inputs, replace)
             .map_err(|error| CliError::incomplete(error.to_string()))?;
     let label = match outcome {
-        leadline::snapshots::SnapshotOutcome::Added => "added",
-        leadline::snapshots::SnapshotOutcome::Unchanged => "unchanged",
-        leadline::snapshots::SnapshotOutcome::Replaced => "replaced",
+        report::snapshots::SnapshotOutcome::Added => "added",
+        report::snapshots::SnapshotOutcome::Unchanged => "unchanged",
+        report::snapshots::SnapshotOutcome::Replaced => "replaced",
     };
     println!("snapshot: {label} {}", output.display());
     Ok(ExitCode::SUCCESS)
@@ -1155,7 +1155,7 @@ fn mutation_command(args: &[String]) -> Result<ExitCode, CliError> {
             "mutation requires at least one --pit/--stryker/--test-map input",
         ));
     }
-    let (mutation, relationships) = leadline::analytics::analyze_mutation(
+    let (mutation, relationships) = report::analytics::analyze_mutation(
         &path,
         SnapshotTarget::Worktree,
         &mutation_inputs,
@@ -1171,7 +1171,7 @@ fn mutation_command(args: &[String]) -> Result<ExitCode, CliError> {
     } else {
         print!(
             "{}",
-            leadline::report::terminal_mutation(&mutation, relationships.as_ref())
+            report::report::terminal_mutation(&mutation, relationships.as_ref())
         );
     }
     Ok(ExitCode::SUCCESS)
@@ -1206,22 +1206,22 @@ fn duplication_command(args: &[String]) -> Result<ExitCode, CliError> {
         index += 1;
     }
     let outcome =
-        leadline::analytics::analyze_duplication(&path, SnapshotTarget::Worktree, base.as_deref())
+        report::analytics::analyze_duplication(&path, SnapshotTarget::Worktree, base.as_deref())
             .map_err(|error| CliError::incomplete(error.to_string()))?;
     let complete = match &outcome {
-        leadline::analytics::DuplicationOutcome::Single(report) => {
+        report::analytics::DuplicationOutcome::Single(report) => {
             if json {
                 print_json(report, true)?;
             } else {
-                print!("{}", leadline::report::terminal_duplication(report));
+                print!("{}", report::report::terminal_duplication(report));
             }
             report.complete
         }
-        leadline::analytics::DuplicationOutcome::Drift(report) => {
+        report::analytics::DuplicationOutcome::Drift(report) => {
             if json {
                 print_json(report, true)?;
             } else {
-                print!("{}", leadline::report::terminal_duplication_drift(report));
+                print!("{}", report::report::terminal_duplication_drift(report));
             }
             report.complete
         }
@@ -1263,12 +1263,12 @@ fn policy_command(args: &[String]) -> Result<ExitCode, CliError> {
         index += 1;
     }
     let report =
-        leadline::analytics::analyze_policy(&path, SnapshotTarget::Worktree, base.as_deref())
+        report::analytics::analyze_policy(&path, SnapshotTarget::Worktree, base.as_deref())
             .map_err(|error| CliError::incomplete(error.to_string()))?;
     if json {
         print_json(&report, true)?;
     } else {
-        print!("{}", leadline::report::terminal_policy(&report));
+        print!("{}", report::report::terminal_policy(&report));
     }
     if fail_on_violation {
         let current_errors = report
@@ -1298,7 +1298,7 @@ fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut json = false;
     let mut agent_json = false;
     let mut sarif = false;
-    let mut ci_format: Option<leadline::render::CiFormat> = None;
+    let mut ci_format: Option<report::render::CiFormat> = None;
     let mut top: Option<usize> = None;
     let mut index = 0;
     while index < args.len() {
@@ -1369,18 +1369,13 @@ fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
         print_json(
             &artifacts::pg_plan::agent_json(
                 &report,
-                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP),
+                top.unwrap_or(report::security::AGENT_DEFAULT_TOP),
             ),
             false,
         )?;
     } else if let Some(format) = ci_format {
         let document = serde_json::json!({ "sql_violations": &report.violations });
-        print_ci_document(
-            &document,
-            0,
-            &leadline::render::GateLimits::default(),
-            format,
-        )?;
+        print_ci_document(&document, 0, &report::render::GateLimits::default(), format)?;
     } else if sarif {
         print_json(&artifacts::sarif::pg_plan_to_sarif(&report), false)?;
     } else if json {
@@ -1415,7 +1410,7 @@ fn security_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut json = false;
     let mut agent_json = false;
     let mut sarif = false;
-    let mut ci_format: Option<leadline::render::CiFormat> = None;
+    let mut ci_format: Option<report::render::CiFormat> = None;
     let mut top: Option<usize> = None;
     let mut index = 0;
     while index < args.len() {
@@ -1485,38 +1480,33 @@ fn security_command(args: &[String]) -> Result<ExitCode, CliError> {
     }
     // One assembly path shared with `check` and the MCP tool: read, enrich,
     // gate. The CLI only chooses the request, then prints the outcome.
-    let outcome = leadline::security::assemble(&leadline::security::SecurityRequest {
+    let outcome = report::security::assemble(&report::security::SecurityRequest {
         path,
         sarif: sarifs,
         baseline_sarif: baseline_sarifs,
         comparison: comparison_from_flags(&base, staged, &target, changed_only)?,
-        gate: fail_on_severity.map(|minimum| leadline::security::SecurityGate {
+        gate: fail_on_severity.map(|minimum| report::security::SecurityGate {
             minimum,
             new_only,
             changed_only,
         }),
     })
     .map_err(|error| match error {
-        leadline::security::SecurityError::Input(message) => CliError::input(message),
-        leadline::security::SecurityError::Incomplete(message) => CliError::incomplete(message),
+        report::security::SecurityError::Input(message) => CliError::input(message),
+        report::security::SecurityError::Incomplete(message) => CliError::incomplete(message),
     })?;
     let report = outcome.report;
     if agent_json {
         print_json(
-            &leadline::security::agent_json(
+            &report::security::agent_json(
                 &report,
-                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP),
+                top.unwrap_or(report::security::AGENT_DEFAULT_TOP),
             ),
             false,
         )?;
     } else if let Some(format) = ci_format {
         let document = serde_json::json!({ "security_violations": &report.findings });
-        print_ci_document(
-            &document,
-            0,
-            &leadline::render::GateLimits::default(),
-            format,
-        )?;
+        print_ci_document(&document, 0, &report::render::GateLimits::default(), format)?;
     } else if sarif {
         print_json(
             &artifacts::sarif::security_findings_to_sarif(&report.findings),
@@ -1525,7 +1515,7 @@ fn security_command(args: &[String]) -> Result<ExitCode, CliError> {
     } else if json {
         print_json(&report, true)?;
     } else {
-        print!("{}", leadline::security::terminal_text(&report));
+        print!("{}", report::security::terminal_text(&report));
     }
     if outcome.violations.is_empty() {
         Ok(ExitCode::SUCCESS)
@@ -1571,8 +1561,8 @@ fn comparison_from_flags(
 }
 
 /// Maps the gate's thresholds onto the renderer's limits.
-fn gate_limits(thresholds: &Thresholds) -> leadline::render::GateLimits {
-    leadline::render::GateLimits {
+fn gate_limits(thresholds: &Thresholds) -> report::render::GateLimits {
+    report::render::GateLimits {
         cognitive: thresholds.cognitive.map(f64::from),
         cyclomatic: thresholds.cyclomatic.map(f64::from),
         max_nesting: thresholds.max_nesting.map(f64::from),
@@ -1585,19 +1575,19 @@ fn gate_limits(thresholds: &Thresholds) -> leadline::render::GateLimits {
 fn print_ci_document(
     document: &serde_json::Value,
     files: usize,
-    limits: &leadline::render::GateLimits,
-    format: leadline::render::CiFormat,
+    limits: &report::render::GateLimits,
+    format: report::render::CiFormat,
 ) -> Result<(), CliError> {
     let findings =
-        leadline::render::findings_from_check_json(document, limits).map_err(CliError::usage)?;
-    let quality_gate = leadline::render::gate_verdict(document);
-    let summary = leadline::render::GateSummary {
+        report::render::findings_from_check_json(document, limits).map_err(CliError::usage)?;
+    let quality_gate = report::render::gate_verdict(document);
+    let summary = report::render::GateSummary {
         passed: findings.is_empty() && quality_gate.as_ref().is_none_or(|gate| !gate.failed()),
         files,
         violations: findings.len(),
         quality_gate,
     };
-    print!("{}", leadline::render::render(&findings, &summary, format));
+    print!("{}", report::render::render(&findings, &summary, format));
     Ok(())
 }
 
@@ -1607,13 +1597,13 @@ fn parse_scan_format(
     raw: Option<&String>,
     agent_json: &mut bool,
     sarif: &mut bool,
-    ci_format: &mut Option<leadline::render::CiFormat>,
+    ci_format: &mut Option<report::render::CiFormat>,
 ) -> Result<(), CliError> {
     let value = raw.ok_or_else(|| CliError::usage("--format requires a value"))?;
     match value.as_str() {
         "agent-json" => *agent_json = true,
         "sarif" => *sarif = true,
-        _ => match leadline::render::parse_format(value) {
+        _ => match report::render::parse_format(value) {
             Some(format) => *ci_format = Some(format),
             None => {
                 return Err(CliError::usage(format!(
@@ -1709,7 +1699,7 @@ fn vulnerabilities_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut json = false;
     let mut agent_json = false;
     let mut sarif = false;
-    let mut ci_format: Option<leadline::render::CiFormat> = None;
+    let mut ci_format: Option<report::render::CiFormat> = None;
     let mut top: Option<usize> = None;
     let mut index = 0;
     while index < args.len() {
@@ -1786,18 +1776,13 @@ fn vulnerabilities_command(args: &[String]) -> Result<ExitCode, CliError> {
         print_json(
             &artifacts::vulnerabilities::agent_json(
                 &report,
-                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP),
+                top.unwrap_or(report::security::AGENT_DEFAULT_TOP),
             ),
             false,
         )?;
     } else if let Some(format) = ci_format {
         let document = serde_json::json!({ "vulnerability_violations": &report.findings });
-        print_ci_document(
-            &document,
-            0,
-            &leadline::render::GateLimits::default(),
-            format,
-        )?;
+        print_ci_document(&document, 0, &report::render::GateLimits::default(), format)?;
     } else if sarif {
         print_json(
             &artifacts::sarif::vulnerability_findings_to_sarif(&report.findings),
@@ -1829,7 +1814,7 @@ fn sql_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut json = false;
     let mut agent_json = false;
     let mut sarif = false;
-    let mut ci_format: Option<leadline::render::CiFormat> = None;
+    let mut ci_format: Option<report::render::CiFormat> = None;
     let mut top: Option<usize> = None;
     let mut index = 0;
     while index < args.len() {
@@ -1900,18 +1885,13 @@ fn sql_command(args: &[String]) -> Result<ExitCode, CliError> {
         print_json(
             &artifacts::sql::agent_json(
                 &report,
-                top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP),
+                top.unwrap_or(report::security::AGENT_DEFAULT_TOP),
             ),
             false,
         )?;
     } else if let Some(format) = ci_format {
         let document = serde_json::json!({ "sql_violations": &report.findings });
-        print_ci_document(
-            &document,
-            0,
-            &leadline::render::GateLimits::default(),
-            format,
-        )?;
+        print_ci_document(&document, 0, &report::render::GateLimits::default(), format)?;
     } else if sarif {
         print_json(
             &artifacts::sarif::sql_findings_to_sarif(&report.findings),
@@ -2002,11 +1982,11 @@ fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
     let report = codegraph::coupling::analyze_coupling(&root, &key, &options)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     if agent_json {
-        print_json(&leadline::agent::coupling_agent_json(&report), false)?;
+        print_json(&report::agent::coupling_agent_json(&report), false)?;
     } else if json {
         print_json(&report, true)?;
     } else {
-        print!("{}", leadline::report::terminal_coupling(&report));
+        print!("{}", report::report::terminal_coupling(&report));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -2066,11 +2046,11 @@ fn unused_command(args: &[String]) -> Result<ExitCode, CliError> {
         return Err(no_supported_files(&path));
     }
     if agent_json {
-        print_json(&leadline::agent::unused_agent_json(&report), false)?;
+        print_json(&report::agent::unused_agent_json(&report), false)?;
     } else if json {
         print_json(&report, true)?;
     } else {
-        print!("{}", leadline::report::terminal_unused(&report));
+        print!("{}", report::report::terminal_unused(&report));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -2080,8 +2060,8 @@ fn unused_command(args: &[String]) -> Result<ExitCode, CliError> {
 /// saved document carries metrics but not the reasons a row failed.
 fn report_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut from: Option<PathBuf> = None;
-    let mut format: Option<leadline::render::CiFormat> = None;
-    let mut limits = leadline::render::GateLimits::default();
+    let mut format: Option<report::render::CiFormat> = None;
+    let mut limits = report::render::GateLimits::default();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -2097,7 +2077,7 @@ fn report_command(args: &[String]) -> Result<ExitCode, CliError> {
                 let value = args
                     .get(index)
                     .ok_or_else(|| CliError::usage("--format requires a value"))?;
-                format = leadline::render::parse_format(value);
+                format = report::render::parse_format(value);
                 if format.is_none() {
                     return Err(CliError::usage(format!(
                         "unknown --format '{value}': expected 'codeclimate', \
@@ -2176,11 +2156,11 @@ fn dependencies_command(args: &[String]) -> Result<ExitCode, CliError> {
         return Err(no_supported_files(&path));
     }
     if agent_json {
-        print_json(&leadline::agent::dependencies_agent_json(&report), false)?;
+        print_json(&report::agent::dependencies_agent_json(&report), false)?;
     } else if json {
         print_json(&report, true)?;
     } else {
-        print!("{}", leadline::report::terminal_dependencies(&report));
+        print!("{}", report::report::terminal_dependencies(&report));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -2246,11 +2226,11 @@ fn impact_command(args: &[String]) -> Result<ExitCode, CliError> {
         )));
     };
     if agent_json {
-        print_json(&leadline::agent::impact_agent_json(&report), false)?;
+        print_json(&report::agent::impact_agent_json(&report), false)?;
     } else if json {
         print_json(&report, true)?;
     } else {
-        print!("{}", leadline::report::terminal_impact(&report));
+        print!("{}", report::report::terminal_impact(&report));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -2613,7 +2593,7 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
 
 /// Outcomes of the scanner inputs `check` was asked to run.
 struct CheckScanners {
-    security: Option<leadline::security::SecurityOutcome>,
+    security: Option<report::security::SecurityOutcome>,
     vulnerabilities: Option<artifacts::vulnerabilities::VulnerabilityOutcome>,
     sql: Option<artifacts::sql::SqlOutcome>,
 }
@@ -2630,7 +2610,7 @@ fn assemble_scanners(
     } else {
         let gate = args
             .fail_on_severity
-            .map(|minimum| leadline::security::SecurityGate {
+            .map(|minimum| report::security::SecurityGate {
                 minimum,
                 new_only: args.new_only,
                 changed_only: args.changed_only,
@@ -2640,7 +2620,7 @@ fn assemble_scanners(
             .as_ref()
             .map(|revision| model::security::ChangeComparison::Base(revision.clone()));
         Some(
-            leadline::security::assemble(&leadline::security::SecurityRequest {
+            report::security::assemble(&report::security::SecurityRequest {
                 path: options.path.clone(),
                 sarif: args.sarifs.clone(),
                 baseline_sarif: args.baseline_sarifs.clone(),
@@ -3489,17 +3469,17 @@ fn analyze_with_index(
         return parse::analyze_path_with_excludes(path, coverage, excludes)
             .map_err(|error| CliError::incomplete(error.to_string()));
     };
-    let previous = leadline::index::AnalysisIndex::open(dir);
+    let previous = report::index::AnalysisIndex::open(dir);
     let fingerprint = config::fingerprint(&config_dir(path));
     let (report, index, reuse) = if path.is_file() {
-        leadline::index::refresh_file_index(path, &previous, &fingerprint)
+        report::index::refresh_file_index(path, &previous, &fingerprint)
             .map_err(|error| CliError::incomplete(error.to_string()))?
     } else {
-        let entries = leadline::index::load_entries(path, excludes)
+        let entries = report::index::load_entries(path, excludes)
             .map_err(|error| CliError::incomplete(error.to_string()))?;
-        leadline::index::refresh_files(
+        report::index::refresh_files(
             Some(&previous),
-            &leadline::index::scope_label(path),
+            &report::index::scope_label(path),
             &fingerprint,
             &entries,
         )
@@ -3531,7 +3511,7 @@ struct CommonOptions {
     sarif: bool,
     /// CI-facing renderer selected by `--format`; mutually exclusive with the
     /// json, agent-json, and sarif projections.
-    ci_format: Option<leadline::render::CiFormat>,
+    ci_format: Option<report::render::CiFormat>,
     pretty: bool,
     coverage: Option<CoverageMap>,
     budget: Budget,
@@ -3541,7 +3521,7 @@ struct CommonOptions {
 /// Optional scanner finding families merged into `check` output.
 #[derive(Clone, Copy, Default)]
 struct ScannerReports<'a> {
-    security: Option<&'a leadline::security::SecurityOutcome>,
+    security: Option<&'a report::security::SecurityOutcome>,
     vulnerabilities: Option<&'a artifacts::vulnerabilities::VulnerabilityOutcome>,
     sql: Option<&'a artifacts::sql::SqlOutcome>,
 }
@@ -3571,7 +3551,7 @@ impl CommonOptions {
         let mut json = false;
         let mut agent_json = false;
         let mut sarif = false;
-        let mut ci_format: Option<leadline::render::CiFormat> = None;
+        let mut ci_format: Option<report::render::CiFormat> = None;
         let mut coverage = CoverageMap::default();
         let mut has_coverage = false;
         let mut has_path = path != Path::new(".");
@@ -3682,7 +3662,7 @@ impl CommonOptions {
     ) -> Result<(), CliError> {
         if self.agent_json {
             print_json(
-                &leadline::agent::analyze_agent_json_budgeted(report, &self.budget),
+                &report::agent::analyze_agent_json_budgeted(report, &self.budget),
                 false,
             )?;
         } else if self.sarif {
@@ -3693,7 +3673,7 @@ impl CommonOptions {
         } else if self.json {
             print_json(report, self.pretty)?;
         } else if has_findings {
-            let terminal = leadline::report::terminal(report);
+            let terminal = report::report::terminal(report);
             if terminal.is_empty() {
                 println!("No supported functions or parse errors found.");
             } else {
@@ -3824,7 +3804,7 @@ impl CommonOptions {
                 format,
             )?;
         } else if self.agent_json {
-            let mut value = serde_json::to_value(leadline::agent::analyze_agent_json_budgeted(
+            let mut value = serde_json::to_value(report::agent::analyze_agent_json_budgeted(
                 report,
                 &self.budget,
             ))
@@ -3925,7 +3905,7 @@ fn stamp_quality_gate(
 
 /// Print scanner terminal sections for findings that exist.
 fn has_scanner_findings(
-    security: Option<&leadline::security::SecurityOutcome>,
+    security: Option<&report::security::SecurityOutcome>,
     vulnerabilities: Option<&artifacts::vulnerabilities::VulnerabilityOutcome>,
     sql: Option<&artifacts::sql::SqlOutcome>,
 ) -> bool {
@@ -3982,14 +3962,14 @@ fn gate_value(value: &serde_json::Value) -> String {
 
 /// Print scanner terminal sections for findings that exist.
 fn print_scanner_sections(
-    security: Option<&leadline::security::SecurityOutcome>,
+    security: Option<&report::security::SecurityOutcome>,
     vulnerabilities: Option<&artifacts::vulnerabilities::VulnerabilityOutcome>,
     sql: Option<&artifacts::sql::SqlOutcome>,
 ) {
     if let Some(security) = security
         && !security.report.findings.is_empty()
     {
-        print!("{}", leadline::security::terminal_text(&security.report));
+        print!("{}", report::security::terminal_text(&security.report));
     }
     if let Some(vulnerabilities) = vulnerabilities
         && !vulnerabilities.report.findings.is_empty()

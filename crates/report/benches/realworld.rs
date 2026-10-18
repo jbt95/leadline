@@ -89,7 +89,7 @@ fn join_smoke(path: &std::path::Path) {
     );
     assert!(!risk.risks.is_empty(), "realworld join: empty risk rows");
     let duplication = analysis::duplication::detect(&[], &config::DuplicationConfig::default());
-    let project = leadline::project::build(leadline::project::ProjectInputs {
+    let project = report::project::build(report::project::ProjectInputs {
         analysis: &analysis,
         generated_from: "realworld".to_owned(),
         git: None,

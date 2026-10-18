@@ -1,7 +1,7 @@
-use leadline::security::{
+use model::security::{FindingState, SecurityFinding, SecuritySeverity};
+use report::security::{
     SecurityGate, SecurityInputs, SecurityReport, enrich, read_security_reports,
 };
-use model::security::{FindingState, SecurityFinding, SecuritySeverity};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 mod common;
@@ -237,7 +237,7 @@ fn finding(path: &str, line: u32) -> SecurityFinding {
     }
 }
 
-fn enrich_project(root: &std::path::Path) -> leadline::project::Project {
+fn enrich_project(root: &std::path::Path) -> report::project::Project {
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(
         root.join("src/auth.ts"),
@@ -245,7 +245,7 @@ fn enrich_project(root: &std::path::Path) -> leadline::project::Project {
     )
     .unwrap();
     std::fs::write(root.join("src/empty.ts"), "export const ready = true;\n").unwrap();
-    leadline::analytics::build(&leadline::analytics::ProjectRequest {
+    report::analytics::build(&report::analytics::ProjectRequest {
         path: root.to_path_buf(),
         target: parse::source_snapshot::SnapshotTarget::Worktree,
         window: codegraph::history::HistoryWindow::Days90,
@@ -406,25 +406,25 @@ fn gate_violations_respect_minimum_new_and_changed() {
         new_only: false,
         changed_only: false,
     };
-    assert_eq!(leadline::security::gate_violations(&report, &gate).len(), 3);
+    assert_eq!(report::security::gate_violations(&report, &gate).len(), 3);
     let gate = SecurityGate {
         minimum: SecuritySeverity::High,
         new_only: true,
         changed_only: false,
     };
-    assert_eq!(leadline::security::gate_violations(&report, &gate).len(), 2);
+    assert_eq!(report::security::gate_violations(&report, &gate).len(), 2);
     let gate = SecurityGate {
         minimum: SecuritySeverity::High,
         new_only: false,
         changed_only: true,
     };
-    assert_eq!(leadline::security::gate_violations(&report, &gate).len(), 2);
+    assert_eq!(report::security::gate_violations(&report, &gate).len(), 2);
     let gate = SecurityGate {
         minimum: SecuritySeverity::Critical,
         new_only: true,
         changed_only: true,
     };
-    assert_eq!(leadline::security::gate_violations(&report, &gate).len(), 1);
+    assert_eq!(report::security::gate_violations(&report, &gate).len(), 1);
     // Unknown severities never meet a threshold.
     let report = SecurityReport {
         findings: vec![gated_finding(
@@ -438,7 +438,7 @@ fn gate_violations_respect_minimum_new_and_changed() {
         new_only: false,
         changed_only: false,
     };
-    assert!(leadline::security::gate_violations(&report, &gate).is_empty());
+    assert!(report::security::gate_violations(&report, &gate).is_empty());
 }
 
 #[test]
@@ -461,7 +461,7 @@ fn gitleaks_findings_without_severity_default_to_high() {
         new_only: false,
         changed_only: false,
     };
-    assert_eq!(leadline::security::gate_violations(&report, &gate).len(), 1);
+    assert_eq!(report::security::gate_violations(&report, &gate).len(), 1);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -488,10 +488,10 @@ fn agent_json_caps_rows_with_truncated_flag() {
             gated_finding(SecuritySeverity::Low, FindingState::New, Some(true)),
         ],
     };
-    let full = leadline::security::agent_json(&report, 50);
+    let full = report::security::agent_json(&report, 50);
     assert_eq!(full["truncated"], false);
     assert_eq!(full["findings"].as_array().unwrap().len(), 2);
-    let capped = leadline::security::agent_json(&report, 1);
+    let capped = report::security::agent_json(&report, 1);
     assert_eq!(capped["truncated"], true);
     assert_eq!(capped["findings"].as_array().unwrap().len(), 1);
 }

@@ -23,6 +23,7 @@ model = { path = "../model" }
 parse = { path = "../parse" }
 quick-xml.workspace = true
 rayon.workspace = true
+report = { path = "../report" }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
@@ -37,19 +38,8 @@ tree-sitter-rust.workspace = true
 tree-sitter-typescript.workspace = true
 tree-sitter-zig.workspace = true
 
-[dev-dependencies]
-criterion.workspace = true
-
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
-
-[[bench]]
-name = "index"
-harness = false
-
-[[bench]]
-name = "realworld"
-harness = false

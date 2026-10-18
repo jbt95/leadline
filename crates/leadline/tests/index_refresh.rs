@@ -1,4 +1,4 @@
-use leadline::index::{Reuse, load_entries, refresh_files, scope_label};
+use report::index::{Reuse, load_entries, refresh_files, scope_label};
 use std::path::{Path, PathBuf};
 
 mod common;
@@ -100,7 +100,7 @@ fn warm_refresh_preserves_stored_history_when_usable() {
     let root = fixture();
     let entries = load_entries(&root, &[]).unwrap();
     let (_, mut index, _) = refresh_files(None, ".", "cfg", &entries).unwrap();
-    index.history = Some(leadline::index::HistoryFacts {
+    index.history = Some(report::index::HistoryFacts {
         head_commit: Some("abc".to_owned()),
         head_timestamp: Some(1),
         files: Vec::new(),
@@ -119,5 +119,5 @@ fn warm_refresh_preserves_stored_history_when_usable() {
 #[test]
 fn history_is_unavailable_outside_a_repository() {
     let dir = temporary_directory();
-    assert!(leadline::index::refresh_history(None, &dir).is_none());
+    assert!(report::index::refresh_history(None, &dir).is_none());
 }
