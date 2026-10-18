@@ -1,14 +1,25 @@
 //! Test selection: a change set plus a dependency graph, turned into the test
 //! files a change can affect.
 //!
-//! The ladder is the whole design. Every changed file is placed on a tier, and
-//! a file that cannot be reasoned about escalates instead of being skipped:
+//! The ladder is the whole design. Every changed file is placed on a step, and
+//! a file that cannot be reasoned about escalates instead of being silently
+//! dropped. The table is in the order the steps are evaluated, which is what
+//! makes `always_run` win over the documentation skip:
 //!
-//! | Tier | Condition | Action |
+//! | Step | Condition | Action |
 //! | --- | --- | --- |
-//! | T2 `graph` | the file is a graph node | test files in its reverse closure, and itself when it is one |
-//! | T3 `directory` | unsupported extension, a parse error, absent from the graph, or no test reached it | every test file under its top-level directory |
 //! | T4 `all` | it matches `always_run` | every test file |
+//! | skip | a documentation or data extension | nothing, and no escalation |
+//! | T3 `directory` | unsupported extension, a parse error, absent from the graph, or no test reached it | every test file under its top-level directory |
+//! | T2 `graph` | the file is a graph node | test files in its reverse closure, and itself when it is one |
+//!
+//! The skip is a decision, not a gap: a changed file whose extension is in
+//! [`NON_BEHAVIORAL_EXTENSIONS`] cannot change program behavior, so it selects
+//! nothing and does not escalate. It is never a seed, so it is also excluded
+//! from the `no test found` check below, which exists to catch a hole in the
+//! conventions. A repository whose docs feed codegen declares
+//! `always_run = ["**/*.md"]` and gets the full suite back, because T4 is
+//! tested first.
 //!
 //! "Always produces something" is enforced rather than assumed: after the
 //! conventions, the content check, and the closure have run, a changed file
@@ -69,6 +80,15 @@ use std::path::Path;
 pub const SELECTION_SCHEMA_VERSION: u32 = 1;
 pub const SELECTION_MODEL: &str = "test-selection";
 
+/// Extensions whose bytes cannot change program behavior: prose (`.md`,
+/// `.markdown`, `.rst`, `.adoc`, `.txt`, `.pdf`) and images. A changed file
+/// with one of these is skipped — nothing selected, no escalation — unless it
+/// also matches `always_run`, which is evaluated first and wins.
+const NON_BEHAVIORAL_EXTENSIONS: &[&str] = &[
+    "md", "markdown", "rst", "adoc", "txt", "pdf", "png", "jpg", "jpeg", "gif", "svg", "webp",
+    "ico", "bmp",
+];
+
 /// The escalation ladder tier one selected test was reached by.
 ///
 /// Ordered by strength, so the strongest tier a test was reached by is the one
@@ -94,6 +114,15 @@ pub struct SelectedTest {
     pub path: String,
     pub tier: Tier,
     pub via: BTreeSet<String>,
+}
+
+/// One changed file the ladder deliberately did not reason about, with the
+/// class that explains it (currently always `documentation`). The entry is what
+/// turns "nothing was selected" into an explanation.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SkippedFile {
+    pub path: String,
+    pub reason: String,
 }
 
 /// The strongest escalation the selection needed, with one reason per changed
@@ -137,6 +166,8 @@ pub struct Selection {
     pub base: String,
     pub changed: BTreeSet<String>,
     pub selected: Vec<SelectedTest>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<SkippedFile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub escalation: Option<Escalation>,
     pub totals: Totals,
@@ -198,6 +229,7 @@ pub fn select(request: &SelectionRequest<'_>) -> Result<Selection> {
 /// filesystem beyond `source_of`.
 pub fn select_from(inputs: &SelectionInputs<'_>) -> Selection {
     let mut selected: BTreeMap<String, (Tier, BTreeSet<String>)> = BTreeMap::new();
+    let mut skipped = Vec::new();
     let mut reasons = Vec::new();
     let mut escalation: Option<Tier> = None;
     let mut seeds: BTreeSet<&str> = BTreeSet::new();
@@ -206,13 +238,25 @@ pub fn select_from(inputs: &SelectionInputs<'_>) -> Selection {
     let always_run = ExcludeMatcher::new(&inputs.config.always_run);
     for path in inputs.changed {
         // T4 first: a root config or lockfile edit has no edge to any test, and
-        // this list is the only thing that keeps it from selecting nothing.
+        // this list is the only thing that keeps it from selecting nothing. It
+        // is checked before the documentation skip so a repository whose docs
+        // feed codegen can pull them back onto the full suite.
         if always_run.matches(path) {
             escalation = strongest(escalation, Tier::All);
             reasons.push(format!("always run: {path}"));
             for test in inputs.test_files {
                 record(&mut selected, test, Tier::All, path);
             }
+            continue;
+        }
+        // Documentation and data: bytes that cannot change program behavior, so
+        // no test can be affected. Skipped rather than escalated, and never a
+        // seed, so the `no test found` check below cannot see it.
+        if is_documentation_or_data(path) {
+            skipped.push(SkippedFile {
+                path: path.clone(),
+                reason: "documentation".to_owned(),
+            });
             continue;
         }
         // T3: a file the ladder cannot reason about escalates to its top-level
@@ -288,6 +332,7 @@ pub fn select_from(inputs: &SelectionInputs<'_>) -> Selection {
             },
         },
         selected,
+        skipped,
         escalation: escalation.map(|tier| Escalation { tier, reasons }),
         confidence: Confidence {
             graph_files: inputs.graph.files.len(),
@@ -316,6 +361,17 @@ fn analysis_root(path: &Path) -> &Path {
     } else {
         path
     }
+}
+
+/// True when `path`'s extension marks it as documentation or data, matched
+/// case-insensitively the way `detect_language` matches its own.
+fn is_documentation_or_data(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            NON_BEHAVIORAL_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+        })
 }
 
 /// True when the file parses with errors, which means it can only escalate.
@@ -546,7 +602,7 @@ mod tests {
         ];
         let selection = select_over(
             &TiaConfig::default(),
-            &changed(&["docs/notes.txt"]),
+            &changed(&["docs/notes.hbs"]),
             &sources(&pairs),
             &["docs/docs.test.ts", "service/service.test.ts"],
             &bytes(&pairs),
@@ -554,12 +610,13 @@ mod tests {
 
         assert_eq!(selected_paths(&selection), ["docs/docs.test.ts"]);
         assert_eq!(selection.selected[0].tier, Tier::Directory);
-        assert_eq!(selection.selected[0].via, changed(&["docs/notes.txt"]));
+        assert_eq!(selection.selected[0].via, changed(&["docs/notes.hbs"]));
+        assert!(selection.skipped.is_empty());
         assert_eq!(
             selection.escalation,
             Some(Escalation {
                 tier: Tier::Directory,
-                reasons: vec!["unsupported extension: docs/notes.txt".to_owned()],
+                reasons: vec!["unsupported extension: docs/notes.hbs".to_owned()],
             })
         );
     }
@@ -606,6 +663,143 @@ mod tests {
             selection.escalation.as_ref().map(|it| it.reasons.clone()),
             Some(vec!["not in graph: tools/generate.ts".to_owned()])
         );
+    }
+
+    #[test]
+    fn a_documentation_change_selects_nothing_and_does_not_escalate() {
+        let pairs = [
+            ("src/a.ts", "export const a = 1;\n"),
+            (
+                "src/a.test.ts",
+                "import './a';\nexport const checked = 1;\n",
+            ),
+        ];
+        let selection = select_over(
+            &TiaConfig::default(),
+            &changed(&["README.md"]),
+            &sources(&pairs),
+            &["src/a.test.ts"],
+            &bytes(&pairs),
+        );
+
+        assert!(selected_paths(&selection).is_empty());
+        assert_eq!(selection.escalation, None);
+        assert_eq!(
+            selection.skipped,
+            vec![SkippedFile {
+                path: "README.md".to_owned(),
+                reason: "documentation".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn an_image_or_a_text_change_is_skipped_the_same_way() {
+        let pairs = [
+            ("src/a.ts", "export const a = 1;\n"),
+            (
+                "src/a.test.ts",
+                "import './a';\nexport const checked = 1;\n",
+            ),
+        ];
+        for path in ["assets/logo.png", "GUIDE.MD", "docs/notes.txt"] {
+            let selection = select_over(
+                &TiaConfig::default(),
+                &changed(&[path]),
+                &sources(&pairs),
+                &["src/a.test.ts"],
+                &bytes(&pairs),
+            );
+            assert!(selected_paths(&selection).is_empty(), "{path}");
+            assert_eq!(selection.escalation, None, "{path}");
+            assert_eq!(
+                selection.skipped,
+                vec![SkippedFile {
+                    path: path.to_owned(),
+                    reason: "documentation".to_owned(),
+                }],
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_code_extension_still_escalates() {
+        // The regression guard: the skip narrows one case without weakening
+        // the unsupported-extension escalation `.hbs` and `.proto` rely on.
+        let pairs = [
+            ("src/a.ts", "export const a = 1;\n"),
+            (
+                "src/a.test.ts",
+                "import './a';\nexport const checked = 1;\n",
+            ),
+        ];
+        let selection = select_over(
+            &TiaConfig::default(),
+            &changed(&["src/page.hbs"]),
+            &sources(&pairs),
+            &["src/a.test.ts"],
+            &bytes(&pairs),
+        );
+
+        assert!(selection.skipped.is_empty());
+        assert_eq!(selected_paths(&selection), ["src/a.test.ts"]);
+        assert_eq!(
+            selection.escalation.as_ref().map(|it| it.reasons.clone()),
+            Some(vec!["unsupported extension: src/page.hbs".to_owned()])
+        );
+    }
+
+    #[test]
+    fn always_run_overrides_the_documentation_skip() {
+        let pairs = [
+            ("src/a.test.ts", "export const a = 1;\n"),
+            ("web/b.test.ts", "export const b = 1;\n"),
+        ];
+        let config = TiaConfig {
+            always_run: vec!["**/*.md".to_owned()],
+            ..TiaConfig::default()
+        };
+        let selection = select_over(
+            &config,
+            &changed(&["docs/effect.md"]),
+            &sources(&pairs),
+            &["src/a.test.ts", "web/b.test.ts"],
+            &bytes(&pairs),
+        );
+
+        assert_eq!(
+            selected_paths(&selection),
+            ["src/a.test.ts", "web/b.test.ts"]
+        );
+        assert!(selection.selected.iter().all(|test| test.tier == Tier::All));
+        assert!(selection.skipped.is_empty());
+        assert_eq!(
+            selection.escalation,
+            Some(Escalation {
+                tier: Tier::All,
+                reasons: vec!["always run: docs/effect.md".to_owned()],
+            })
+        );
+    }
+
+    #[test]
+    fn a_readme_only_change_does_not_report_no_test_found() {
+        // `no test found` catches a hole in the conventions, not a deliberate
+        // skip: a skipped file never becomes a seed, so the coverage check
+        // cannot reach it.
+        let pairs = [("tests/a.test.ts", "export const checked = 1;\n")];
+        let selection = select_over(
+            &TiaConfig::default(),
+            &changed(&["README.md"]),
+            &sources(&pairs),
+            &["tests/a.test.ts"],
+            &bytes(&pairs),
+        );
+
+        assert_eq!(selection.escalation, None);
+        assert_eq!(selection.totals.test_files, 1);
+        assert_eq!(selection.totals.selected, 0);
     }
 
     #[test]
@@ -758,7 +952,7 @@ mod tests {
         ];
         let selection = select_over(
             &TiaConfig::default(),
-            &changed(&["src/base.ts", "src/notes.txt"]),
+            &changed(&["src/base.ts", "src/notes.hbs"]),
             &sources(&pairs),
             &["src/uses.test.ts"],
             &bytes(&pairs),
@@ -768,7 +962,7 @@ mod tests {
         assert_eq!(selection.selected[0].tier, Tier::Directory);
         assert_eq!(
             selection.selected[0].via,
-            changed(&["src/base.ts", "src/notes.txt"])
+            changed(&["src/base.ts", "src/notes.hbs"])
         );
         assert_eq!(selection.totals.test_files, 1);
         assert_eq!(selection.confidence.graph_files, 2);

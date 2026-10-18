@@ -29,13 +29,29 @@ The point of the command is that under-selection is never silent. Every changed
 file is placed on a tier, and the strongest tier any file needed is reported on
 the selection.
 
-| Tier | Condition | Action |
+| Step | Condition | Action |
 | --- | --- | --- |
-| T2 `graph` | the file is a node in the dependency graph | the test files in its reverse closure, and itself when it is one |
-| T3 `directory` | unsupported extension, a parse error, absent from the graph, or no selected test reached it | every test file under its top-level directory |
 | T4 `all` | the file matches an `always_run` pattern | every test file |
+| skip | a documentation or data extension | nothing, and no escalation |
+| T3 `directory` | unsupported extension, a parse error, absent from the graph, or no selected test reached it | every test file under its top-level directory |
+| T2 `graph` | the file is a node in the dependency graph | the test files in its reverse closure, and itself when it is one |
+
+The table is in the order the steps are evaluated, not in strength order: a
+`tier` name is the strength a selected test is reported with
+(`all` > `directory` > `graph`), while the skip is checked after `always_run`
+(so an opt-in still wins) and before the unsupported-extension rule (so a `.md`
+is not escalated).
 
 T1 — recorded coverage — arrives with the recorders and does not exist yet.
+
+**The skip.** A file whose extension marks it as documentation or data cannot
+change program behavior, so it selects nothing and does not escalate: prose —
+`.md`, `.markdown`, `.rst`, `.adoc`, `.txt`, `.pdf` — and images — `.png`,
+`.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp`, `.ico`, `.bmp`. A typo fix in a
+`README` runs no test instead of the whole suite. The skip is recorded on the
+selection as `skipped` (below), so an empty selection is always explained. An
+unknown *code* extension is not in this list and keeps its T3 escalation: a
+`.hbs` or `.proto` change is not documentation.
 
 **T2, the graph.** Reverse reachability over the import graph, walked once for
 the whole change set and never truncated. A changed file that is itself a test
@@ -72,15 +88,16 @@ Escalation: directory (unsupported extension: package.json)
 The run prints all 45 rows; the list is elided here.
 
 A file one directory down escalates to that directory only — here an untracked
-`tests/notes.txt`, which also trips `--max-ratio`:
+`tests/notes.hbs` (an unknown code extension; `.txt` would be skipped), which
+also trips `--max-ratio`:
 
 ```console
 $ leadline select-tests --base HEAD --explain --max-ratio 0.25
 leadline: warning: selected 19 of 45 test files (ratio 0.422) exceeds --max-ratio 0.25
 Test selection (1 changed, 19 of 45 test files, ratio 0.422) against HEAD
-Escalation: directory (unsupported extension: tests/notes.txt)
-  tests/core-helpers.test.ts [directory] via tests/notes.txt
-  tests/core.test.ts [directory] via tests/notes.txt
+Escalation: directory (unsupported extension: tests/notes.hbs)
+  tests/core-helpers.test.ts [directory] via tests/notes.hbs
+  tests/core.test.ts [directory] via tests/notes.hbs
 ```
 
 All 19 rows are printed.
@@ -89,7 +106,8 @@ The fourth reason, `no test found`, is what makes "a changed file always
 produces something" true by construction rather than dependent on every
 convention row being complete: after the conventions, the content check, and
 the closure have run, a changed file that contributed no selected test escalates
-the same way.
+the same way. A skipped file never reaches this check: the skip is a decision,
+not a gap in the conventions.
 
 **T4, everything.** A changed file matching `always_run` selects every test
 file. A *root* manifest is already caught: its top-level directory is the
@@ -111,8 +129,10 @@ Escalation: all (always run: docs/effect.md)
 
 All 45 rows are printed.
 
-An empty `always_run` leaves a nested documentation edit at T3, which selects
-whatever tests sit in `docs/` — usually none. That is the gap the list fills.
+A documentation edit does not need the list to avoid the whole suite — it is
+skipped and selects nothing. The list is still the escape hatch for a repository
+where the docs *do* matter: `always_run = ["**/*.md"]` pulls them back onto T4
+and runs everything, which is exactly what the key exists for.
 
 ## Test-file conventions
 
@@ -185,11 +205,14 @@ a single line.
   "schema_version": 1,
   "model": "test-selection",
   "base": "HEAD~1",
-  "changed": ["tests/notes.txt"],
+  "changed": ["README.md", "tests/notes.hbs"],
   "selected": [
-    { "path": "tests/core.test.ts", "tier": "directory", "via": ["tests/notes.txt"] }
+    { "path": "tests/core.test.ts", "tier": "directory", "via": ["tests/notes.hbs"] }
   ],
-  "escalation": { "tier": "directory", "reasons": ["unsupported extension: tests/notes.txt"] },
+  "skipped": [
+    { "path": "README.md", "reason": "documentation" }
+  ],
+  "escalation": { "tier": "directory", "reasons": ["unsupported extension: tests/notes.hbs"] },
   "totals": { "test_files": 45, "selected": 19, "ratio": 0.4222222222222222 },
   "confidence": { "graph_files": 122, "graph_edges": 220, "unresolved": 6, "parse_errors": 0 }
 }
@@ -198,6 +221,10 @@ a single line.
 - `selected` is sorted by path. `tier` is the strongest tier that reached that
   test, and `via` is every changed file that reached it, so `--explain`
   re-derives nothing.
+- `skipped` is **absent** when every changed file was placed on a tier. Each
+  entry names a changed file the ladder deliberately skipped and its class
+  (`documentation`). Skipped files are not reasons inside `escalation` — they
+  did not escalate — so a README-only change leaves `escalation` absent.
 - `escalation` is **absent** when no file escalated. `tier` is the strongest
   tier the run needed and `reasons` names one per affected file.
 - `totals.test_files` is the denominator: the path-convention test files plus
@@ -208,7 +235,8 @@ a single line.
   changed files failed to parse. It exists so a small selection is never
   mistaken for a confident one.
 - `--format list` prints bare paths and nothing else. Terminal output prints the
-  totals line, the escalation, and one row per test.
+  totals line, the escalation, one `Skipped:` line per skipped file, and one row
+  per test.
 
 Exit codes: `0` with a selection, `2` for a usage error, `3` when the diff or
 the graph cannot be read.
@@ -244,6 +272,12 @@ thing Stage 0 produced. The third was found reviewing that fix.
 
 Read these before trusting a selection. Stage 0 proves the mechanism; it does
 not prove the safety.
+
+- **Documentation and data are assumed not to affect tests.** A `.md`, `.rst`,
+  `.txt`, or image change selects nothing instead of escalating, on the
+  assumption that those bytes cannot change program behavior. A repository where
+  they can — docs that feed codegen, a site whose build is tested — declares
+  `always_run = ["**/*.md"]` and gets the full suite back.
 
 - **File-level selection only.** Test-case granularity needs the recorders, so
   the "test case level, file fallback" decision is realized as its fallback half

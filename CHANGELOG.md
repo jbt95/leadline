@@ -14,11 +14,14 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
   in its reverse closure; a file the ladder cannot reason about — unsupported
   extension, parse error, absent from the graph, or no test reached it —
   escalates to every test under its top-level directory; an `always_run` match
-  selects the whole suite. Conventions are per language and additive to
+  selects the whole suite. A documentation or data extension (`.md`, `.rst`,
+  `.txt`, `.pdf`, images) selects nothing and does not escalate, unless
+  `always_run` matches it first. Conventions are per language and additive to
   `[tia] test_globs`; data trees (`fixtures`, `testdata`, `snapshots`,
   `__mocks__`) and helper trees (`common`, `helpers`, `support`) are never
   targets. `--format json`/`agent-json` carry `selected` (path, tier, `via`),
-  `escalation` with its reasons, `totals` with the ratio, and `confidence`
+  `skipped` for the documentation/data files, `escalation` with its reasons,
+  `totals` with the ratio, and `confidence`
   counting graph files, edges, unresolved imports, and parse errors in changed
   files; `--format list` prints bare paths for piping into a runner; `--explain`
   names the tier and its causes; `--max-ratio N` warns without failing. Selection

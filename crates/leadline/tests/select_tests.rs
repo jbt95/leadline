@@ -129,16 +129,16 @@ fn a_changed_module_selects_the_test_that_transitively_imports_it() {
 #[test]
 fn an_unsupported_extension_escalates_to_the_directory() {
     let root = graph_repository();
-    write(&root, "src/notes.txt", "no convention claims this file\n");
+    write(&root, "src/notes.hbs", "no convention claims this file\n");
     let value = json(&select_tests(
         &root,
         &["--base", "HEAD", "--format", "json"],
     ));
-    assert_eq!(value["changed"], serde_json::json!(["src/notes.txt"]));
+    assert_eq!(value["changed"], serde_json::json!(["src/notes.hbs"]));
     assert_eq!(value["escalation"]["tier"], "directory");
     assert_eq!(
         value["escalation"]["reasons"],
-        serde_json::json!(["unsupported extension: src/notes.txt"])
+        serde_json::json!(["unsupported extension: src/notes.hbs"])
     );
     assert_eq!(
         selected(&value),
@@ -146,7 +146,34 @@ fn an_unsupported_extension_escalates_to_the_directory() {
     );
     assert_eq!(
         value["selected"][0]["via"],
-        serde_json::json!(["src/notes.txt"])
+        serde_json::json!(["src/notes.hbs"])
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_documentation_only_change_is_skipped_and_never_silent() {
+    let root = graph_repository();
+    write(&root, "README.md", "prose that cannot change behavior\n");
+    let value = json(&select_tests(
+        &root,
+        &["--base", "HEAD", "--format", "json"],
+    ));
+    assert_eq!(value["changed"], serde_json::json!(["README.md"]));
+    assert_eq!(value["selected"], serde_json::json!([]));
+    assert_eq!(
+        value["skipped"],
+        serde_json::json!([{ "path": "README.md", "reason": "documentation" }])
+    );
+    assert!(
+        value.get("escalation").is_none(),
+        "a skipped file is a decision, not an escalation: {value}"
+    );
+    let text =
+        String::from_utf8_lossy(&select_tests(&root, &["--base", "HEAD"]).stdout).into_owned();
+    assert!(
+        text.contains("Skipped: README.md (documentation)") && text.contains("Escalation: none"),
+        "the terminal view must explain an empty selection: {text}"
     );
     std::fs::remove_dir_all(root).unwrap();
 }

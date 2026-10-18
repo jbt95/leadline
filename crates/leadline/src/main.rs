@@ -3388,6 +3388,9 @@ fn terminal_selection(selection: &Selection, explain: bool) -> String {
         }
         None => output.push_str("Escalation: none\n"),
     }
+    for skipped in &selection.skipped {
+        let _ = writeln!(output, "Skipped: {} ({})", skipped.path, skipped.reason);
+    }
     if selection.selected.is_empty() {
         output.push_str("No test files selected.\n");
         return output;
