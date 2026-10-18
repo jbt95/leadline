@@ -1,5 +1,5 @@
-use leadline::pg_plan::{PlanLimits, PlanRegressionKind, QueryPlan, compare_plan_directories};
-use leadline::pg_plan::{ScanKind, extract_plan_facts, load_plan_directory};
+use artifacts::pg_plan::{PlanLimits, PlanRegressionKind, QueryPlan, compare_plan_directories};
+use artifacts::pg_plan::{ScanKind, extract_plan_facts, load_plan_directory};
 mod common;
 use common::{temporary_directory, write_temp};
 
@@ -225,7 +225,7 @@ fn rejects_control_character_stems() {
 fn extracts_sort_join_scans_and_estimate_error() {
     let query = QueryPlan {
         query_id: "q".to_owned(),
-        plan: leadline::pg_plan::PgPlanNode {
+        plan: artifacts::pg_plan::PgPlanNode {
             node_type: "Hash Join".to_owned(),
             relation_name: None,
             index_name: None,
@@ -234,7 +234,7 @@ fn extracts_sort_join_scans_and_estimate_error() {
             actual_rows: None,
             actual_loops: None,
             children: vec![
-                leadline::pg_plan::PgPlanNode {
+                artifacts::pg_plan::PgPlanNode {
                     node_type: "Index Scan".to_owned(),
                     relation_name: Some("users".to_owned()),
                     index_name: Some("users_email_idx".to_owned()),
@@ -244,7 +244,7 @@ fn extracts_sort_join_scans_and_estimate_error() {
                     actual_loops: Some(1),
                     children: vec![],
                 },
-                leadline::pg_plan::PgPlanNode {
+                artifacts::pg_plan::PgPlanNode {
                     node_type: "Sort".to_owned(),
                     relation_name: None,
                     index_name: None,
@@ -252,7 +252,7 @@ fn extracts_sort_join_scans_and_estimate_error() {
                     plan_rows: Some(50),
                     actual_rows: Some(50),
                     actual_loops: Some(2),
-                    children: vec![leadline::pg_plan::PgPlanNode {
+                    children: vec![artifacts::pg_plan::PgPlanNode {
                         node_type: "Seq Scan".to_owned(),
                         relation_name: Some("orders".to_owned()),
                         index_name: None,
@@ -290,7 +290,7 @@ fn estimate_error_compares_per_loop_rows() {
     // no matter how often it ran.
     let query = QueryPlan {
         query_id: "q".to_owned(),
-        plan: leadline::pg_plan::PgPlanNode {
+        plan: artifacts::pg_plan::PgPlanNode {
             node_type: "Index Scan".to_owned(),
             relation_name: Some("users".to_owned()),
             index_name: Some("users_pkey".to_owned()),
@@ -308,7 +308,7 @@ fn estimate_error_compares_per_loop_rows() {
 
 #[test]
 fn extracts_scan_variants_join_kinds_and_repeated_relations() {
-    let scan = |node_type: &str, relation: &str| leadline::pg_plan::PgPlanNode {
+    let scan = |node_type: &str, relation: &str| artifacts::pg_plan::PgPlanNode {
         node_type: node_type.to_owned(),
         relation_name: Some(relation.to_owned()),
         index_name: None,
@@ -320,7 +320,7 @@ fn extracts_scan_variants_join_kinds_and_repeated_relations() {
     };
     let query = QueryPlan {
         query_id: "q".to_owned(),
-        plan: leadline::pg_plan::PgPlanNode {
+        plan: artifacts::pg_plan::PgPlanNode {
             node_type: "Merge Join".to_owned(),
             relation_name: None,
             index_name: None,
@@ -329,7 +329,7 @@ fn extracts_scan_variants_join_kinds_and_repeated_relations() {
             actual_rows: None,
             actual_loops: None,
             children: vec![
-                leadline::pg_plan::PgPlanNode {
+                artifacts::pg_plan::PgPlanNode {
                     node_type: "Nested Loop".to_owned(),
                     relation_name: None,
                     index_name: None,
@@ -342,7 +342,7 @@ fn extracts_scan_variants_join_kinds_and_repeated_relations() {
                         scan("Bitmap Heap Scan", "orders"),
                     ],
                 },
-                leadline::pg_plan::PgPlanNode {
+                artifacts::pg_plan::PgPlanNode {
                     node_type: "Incremental Sort".to_owned(),
                     relation_name: None,
                     index_name: None,
@@ -373,7 +373,7 @@ fn extracts_scan_variants_join_kinds_and_repeated_relations() {
 fn extracts_unbounded_and_missing_estimate_error() {
     let node = |plan_rows: Option<u64>, actual_rows: Option<u64>| QueryPlan {
         query_id: "q".to_owned(),
-        plan: leadline::pg_plan::PgPlanNode {
+        plan: artifacts::pg_plan::PgPlanNode {
             node_type: "Seq Scan".to_owned(),
             relation_name: Some("t".to_owned()),
             index_name: None,

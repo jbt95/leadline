@@ -4,7 +4,6 @@
 //! analysis, graph, Git analytics, ownership, external reports, risk) so CLI
 //! and future frontends share one pipeline.
 
-use crate::mutation::{MutationInput, ingest as ingest_mutation};
 use crate::project::{Project, ProjectInputs, build as build_project};
 use crate::snapshots::{SnapshotOutcome, TrendPoint, TrendStore};
 use analysis::debt::{
@@ -15,6 +14,7 @@ use analysis::graph::{analyze_dependencies, analyze_dependencies_from_sources};
 use analysis::policy::{PolicyReport, evaluate as evaluate_policy};
 use analysis::risk::{RiskReport, build as build_risk};
 use analysis::test_relationships::ingest as ingest_test_relationships;
+use artifacts::mutation::{MutationInput, ingest as ingest_mutation};
 use codegraph::history::{
     HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow, analyze_git_at_with_mailmap,
 };
@@ -538,7 +538,7 @@ pub fn analyze_mutation(
     mutation_inputs: &[MutationInput],
     test_maps: &[PathBuf],
 ) -> Result<(
-    crate::mutation::MutationReport,
+    artifacts::mutation::MutationReport,
     Option<analysis::test_relationships::TestRelationshipReport>,
 )> {
     let (_, snapshot) = load(path, target)?;

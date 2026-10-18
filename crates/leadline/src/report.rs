@@ -631,7 +631,7 @@ pub fn terminal_policy(report: &analysis::policy::PolicyReport) -> String {
 
 /// Terminal summary of normalized mutation and test-map inputs.
 pub fn terminal_mutation(
-    report: &crate::mutation::MutationReport,
+    report: &artifacts::mutation::MutationReport,
     relationships: Option<&analysis::test_relationships::TestRelationshipReport>,
 ) -> String {
     let mut output = String::new();

@@ -4,12 +4,12 @@
 //! thin. Every section is deterministic, every optional section is `None` when
 //! unavailable, and the DTO is published whole (no piecemeal schema growth).
 
-use crate::mutation::MutationReport;
 use analysis::duplication::DuplicationReport;
 use analysis::graph::DependencyReport;
 use analysis::policy::{PolicyReport, PolicyViolation};
 use analysis::risk::RiskReport;
 use analysis::test_relationships::TestRelationshipReport;
+use artifacts::mutation::MutationReport;
 use codegraph::history::{FileHistory, GitAnalyticsSnapshot};
 use codegraph::ownership::OwnershipReport;
 use model::core::{AnalysisReport, Language};

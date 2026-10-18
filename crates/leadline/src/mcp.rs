@@ -1436,7 +1436,7 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
     } else {
         let baseline = match baseline_path {
             Some(file) => Some(
-                crate::baseline::Baseline::read(Path::new(file))
+                artifacts::baseline::Baseline::read(Path::new(file))
                     .map_err(|error| (-32602, error.to_string()))?,
             ),
             None => None,
@@ -2112,10 +2112,10 @@ fn tool_project(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
     };
     let mut mutation_inputs = Vec::new();
     for pit in artifact_paths(params, "project", "pit", false)? {
-        mutation_inputs.push(crate::mutation::MutationInput::Pit(pit));
+        mutation_inputs.push(artifacts::mutation::MutationInput::Pit(pit));
     }
     for stryker in artifact_paths(params, "project", "stryker", false)? {
-        mutation_inputs.push(crate::mutation::MutationInput::Stryker(stryker));
+        mutation_inputs.push(artifacts::mutation::MutationInput::Stryker(stryker));
     }
     let test_maps = artifact_paths(params, "project", "test_map", false)?;
     let snapshots_path = opt_str(params, "snapshots")?
@@ -2636,17 +2636,18 @@ fn tool_vulnerabilities(params: &serde_json::Value) -> Result<serde_json::Value,
             .and_then(|selected| selected.vulnerabilities.minimum_severity),
     };
     let top = parse_top_param(params, crate::security::AGENT_DEFAULT_TOP)?;
-    let outcome = crate::vulnerabilities::assemble(&crate::vulnerabilities::VulnerabilityRequest {
-        path: PathBuf::from(path),
-        osv,
-        trivy,
-        baseline_osv,
-        baseline_trivy,
-        comparison,
-        gate,
-    })
-    .map_err(|error| (-32602, error.to_string()))?;
-    let agent = crate::vulnerabilities::agent_json(&outcome.report, top);
+    let outcome =
+        artifacts::vulnerabilities::assemble(&artifacts::vulnerabilities::VulnerabilityRequest {
+            path: PathBuf::from(path),
+            osv,
+            trivy,
+            baseline_osv,
+            baseline_trivy,
+            comparison,
+            gate,
+        })
+        .map_err(|error| (-32602, error.to_string()))?;
+    let agent = artifacts::vulnerabilities::agent_json(&outcome.report, top);
     let (violations, violations_truncated) = cap_violations(&outcome.violations, top)?;
     let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("vulnerabilities"));
@@ -2713,7 +2714,7 @@ fn tool_sql_risks(params: &serde_json::Value) -> Result<serde_json::Value, (i64,
     let gate = opt_gate_severity(params)?;
     let top = parse_top_param(params, crate::security::AGENT_DEFAULT_TOP)?;
     let excludes = config_excludes(config.as_ref());
-    let report = crate::sql::analyze_sql_path(
+    let report = artifacts::sql::analyze_sql_path(
         Path::new(path),
         &config::SqlConfig {
             large_offset,
@@ -2722,8 +2723,8 @@ fn tool_sql_risks(params: &serde_json::Value) -> Result<serde_json::Value, (i64,
         &excludes,
     )
     .map_err(|error| (-32602, error.to_string()))?;
-    let outcome = crate::sql::outcome(report, gate);
-    let agent = crate::sql::agent_json(&outcome.report, top);
+    let outcome = artifacts::sql::outcome(report, gate);
+    let agent = artifacts::sql::agent_json(&outcome.report, top);
     let (violations, violations_truncated) = cap_violations(&outcome.violations, top)?;
     let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("sql_risks"));
@@ -2761,15 +2762,16 @@ fn tool_sql_plan(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
         opt_str(params, "baseline")?.ok_or((-32602, "sql_plan requires 'baseline'".to_owned()))?;
     let current_path = artifact_path("sql_plan", "current", current)?;
     let baseline_path = artifact_path("sql_plan", "baseline", baseline)?;
-    let limits = crate::pg_plan::PlanLimits {
+    let limits = artifacts::pg_plan::PlanLimits {
         max_cost_increase_percent: opt_plan_limit(params, "max_cost_increase_percent")?,
         max_plan_rows_ratio: opt_plan_limit(params, "max_plan_rows_ratio")?,
         max_estimate_error_ratio: opt_plan_limit(params, "max_estimate_error_ratio")?,
     };
     let top = parse_top_param(params, crate::security::AGENT_DEFAULT_TOP)?;
-    let report = crate::pg_plan::compare_plan_directories(&current_path, &baseline_path, &limits)
-        .map_err(|error| (-32602, error.to_string()))?;
-    let agent = crate::pg_plan::agent_json(&report, top);
+    let report =
+        artifacts::pg_plan::compare_plan_directories(&current_path, &baseline_path, &limits)
+            .map_err(|error| (-32602, error.to_string()))?;
+    let agent = artifacts::pg_plan::agent_json(&report, top);
     let (violations, violations_truncated) = cap_violations(&report.violations, top)?;
     let mut fields = serde_json::Map::new();
     fields.insert("tool".to_owned(), serde_json::json!("sql_plan"));

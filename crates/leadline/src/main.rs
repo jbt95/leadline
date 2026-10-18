@@ -1,9 +1,9 @@
+use artifacts::mutation::MutationInput;
 use codegraph::coupling::CouplingOptions;
 use codegraph::history::HistoryWindow;
 use codegraph::ownership::OwnershipMode;
 use config::{self, Config, RegressionLimits};
 use leadline::agent::{Budget, SortKey};
-use leadline::mutation::MutationInput;
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, METRIC_PROFILE, MetricSpecs,
     OUTPUT_SCHEMA_VERSION, Thresholds,
@@ -1294,7 +1294,7 @@ fn policy_command(args: &[String]) -> Result<ExitCode, CliError> {
 fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut current: Option<String> = None;
     let mut baseline: Option<String> = None;
-    let mut limits = leadline::pg_plan::PlanLimits::default();
+    let mut limits = artifacts::pg_plan::PlanLimits::default();
     let mut json = false;
     let mut agent_json = false;
     let mut sarif = false;
@@ -1359,7 +1359,7 @@ fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
             "sql-plan requires --current DIR and --baseline DIR",
         ));
     };
-    let report = leadline::pg_plan::compare_plan_directories(
+    let report = artifacts::pg_plan::compare_plan_directories(
         Path::new(&current),
         Path::new(&baseline),
         &limits,
@@ -1367,7 +1367,7 @@ fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
     .map_err(|error| CliError::input(error.to_string()))?;
     if agent_json {
         print_json(
-            &leadline::pg_plan::agent_json(
+            &artifacts::pg_plan::agent_json(
                 &report,
                 top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP),
             ),
@@ -1382,11 +1382,11 @@ fn sql_plan_command(args: &[String]) -> Result<ExitCode, CliError> {
             format,
         )?;
     } else if sarif {
-        print_json(&leadline::sarif::pg_plan_to_sarif(&report), false)?;
+        print_json(&artifacts::sarif::pg_plan_to_sarif(&report), false)?;
     } else if json {
         print_json(&report, true)?;
     } else {
-        print!("{}", leadline::pg_plan::terminal_text(&report));
+        print!("{}", artifacts::pg_plan::terminal_text(&report));
     }
     if report.violations.is_empty() {
         Ok(ExitCode::SUCCESS)
@@ -1519,7 +1519,7 @@ fn security_command(args: &[String]) -> Result<ExitCode, CliError> {
         )?;
     } else if sarif {
         print_json(
-            &leadline::sarif::security_findings_to_sarif(&report.findings),
+            &artifacts::sarif::security_findings_to_sarif(&report.findings),
             false,
         )?;
     } else if json {
@@ -1771,7 +1771,7 @@ fn vulnerabilities_command(args: &[String]) -> Result<ExitCode, CliError> {
         .and_then(|selected| selected.vulnerabilities.minimum_severity));
     let comparison = comparison_from_flags(&base, staged, &target, false)?;
     let outcome =
-        leadline::vulnerabilities::assemble(&leadline::vulnerabilities::VulnerabilityRequest {
+        artifacts::vulnerabilities::assemble(&artifacts::vulnerabilities::VulnerabilityRequest {
             path: path.clone(),
             osv: artifacts.osv,
             trivy: artifacts.trivy,
@@ -1784,7 +1784,7 @@ fn vulnerabilities_command(args: &[String]) -> Result<ExitCode, CliError> {
     let report = outcome.report;
     if agent_json {
         print_json(
-            &leadline::vulnerabilities::agent_json(
+            &artifacts::vulnerabilities::agent_json(
                 &report,
                 top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP),
             ),
@@ -1800,13 +1800,13 @@ fn vulnerabilities_command(args: &[String]) -> Result<ExitCode, CliError> {
         )?;
     } else if sarif {
         print_json(
-            &leadline::sarif::vulnerability_findings_to_sarif(&report.findings),
+            &artifacts::sarif::vulnerability_findings_to_sarif(&report.findings),
             false,
         )?;
     } else if json {
         print_json(&report, true)?;
     } else {
-        print!("{}", leadline::vulnerabilities::terminal_text(&report));
+        print!("{}", artifacts::vulnerabilities::terminal_text(&report));
     }
     if minimum.is_some() && !outcome.violations.is_empty() {
         Ok(ExitCode::from(1))
@@ -1894,11 +1894,11 @@ fn sql_command(args: &[String]) -> Result<ExitCode, CliError> {
         sql_config.migration_roots = roots;
     }
     let excludes = analysis_excludes(config.as_ref());
-    let report = leadline::sql::analyze_sql_path(&path, &sql_config, excludes)
+    let report = artifacts::sql::analyze_sql_path(&path, &sql_config, excludes)
         .map_err(|error| CliError::input(error.to_string()))?;
     if agent_json {
         print_json(
-            &leadline::sql::agent_json(
+            &artifacts::sql::agent_json(
                 &report,
                 top.unwrap_or(leadline::security::AGENT_DEFAULT_TOP),
             ),
@@ -1914,16 +1914,16 @@ fn sql_command(args: &[String]) -> Result<ExitCode, CliError> {
         )?;
     } else if sarif {
         print_json(
-            &leadline::sarif::sql_findings_to_sarif(&report.findings),
+            &artifacts::sarif::sql_findings_to_sarif(&report.findings),
             false,
         )?;
     } else if json {
         print_json(&report, true)?;
     } else {
-        print!("{}", leadline::sql::terminal_text(&report));
+        print!("{}", artifacts::sql::terminal_text(&report));
     }
     if fail_on_severity
-        .is_some_and(|minimum| !leadline::sql::sql_gate_violations(&report, minimum).is_empty())
+        .is_some_and(|minimum| !artifacts::sql::sql_gate_violations(&report, minimum).is_empty())
     {
         Ok(ExitCode::from(1))
     } else {
@@ -2614,8 +2614,8 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
 /// Outcomes of the scanner inputs `check` was asked to run.
 struct CheckScanners {
     security: Option<leadline::security::SecurityOutcome>,
-    vulnerabilities: Option<leadline::vulnerabilities::VulnerabilityOutcome>,
-    sql: Option<leadline::sql::SqlOutcome>,
+    vulnerabilities: Option<artifacts::vulnerabilities::VulnerabilityOutcome>,
+    sql: Option<artifacts::sql::SqlOutcome>,
 }
 
 /// Run the requested `--sarif`, `--osv`/`--trivy`, and `--sql` inputs, in that
@@ -2659,15 +2659,17 @@ fn assemble_scanners(
             .as_ref()
             .map(|revision| model::security::ChangeComparison::Base(revision.clone()));
         Some(
-            leadline::vulnerabilities::assemble(&leadline::vulnerabilities::VulnerabilityRequest {
-                path: options.path.clone(),
-                osv: args.artifacts.osv.clone(),
-                trivy: args.artifacts.trivy.clone(),
-                baseline_osv: args.artifacts.baseline_osv.clone(),
-                baseline_trivy: args.artifacts.baseline_trivy.clone(),
-                comparison,
-                gate: minimum,
-            })
+            artifacts::vulnerabilities::assemble(
+                &artifacts::vulnerabilities::VulnerabilityRequest {
+                    path: options.path.clone(),
+                    osv: args.artifacts.osv.clone(),
+                    trivy: args.artifacts.trivy.clone(),
+                    baseline_osv: args.artifacts.baseline_osv.clone(),
+                    baseline_trivy: args.artifacts.baseline_trivy.clone(),
+                    comparison,
+                    gate: minimum,
+                },
+            )
             .map_err(|error| CliError::input(error.to_string()))?,
         )
     } else {
@@ -2680,9 +2682,9 @@ fn assemble_scanners(
         let excludes: &[String] = config
             .map(|selected| selected.analysis_excludes.as_slice())
             .unwrap_or(&[]);
-        let report = leadline::sql::analyze_sql_path(&options.path, &sql_config, excludes)
+        let report = artifacts::sql::analyze_sql_path(&options.path, &sql_config, excludes)
             .map_err(|error| CliError::input(error.to_string()))?;
-        Some(leadline::sql::outcome(report, args.sql_fail_on_severity))
+        Some(artifacts::sql::outcome(report, args.sql_fail_on_severity))
     } else {
         None
     };
@@ -2920,7 +2922,7 @@ fn check_changed(
         scoped,
         scanners,
     );
-    let regressions: Vec<leadline::sarif::FunctionViolation<'_>> = regression_limits
+    let regressions: Vec<artifacts::sarif::FunctionViolation<'_>> = regression_limits
         .map(|limits| {
             changed
                 .functions
@@ -2928,7 +2930,7 @@ fn check_changed(
                 .filter_map(|change| {
                     let before = change.before.as_ref()?;
                     let after = change.after.as_ref()?;
-                    Some(leadline::sarif::regression_violations(
+                    Some(artifacts::sarif::regression_violations(
                         before,
                         after,
                         limits,
@@ -2985,7 +2987,7 @@ fn check_baseline(
     gate: Option<&config::QualityGateConfig>,
     scanners: &CheckScanners,
 ) -> Result<ExitCode, CliError> {
-    let baseline = leadline::baseline::Baseline::read(Path::new(baseline_path))
+    let baseline = artifacts::baseline::Baseline::read(Path::new(baseline_path))
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     let config = load_config_for(&options.path)?;
     let excludes = analysis_excludes(config.as_ref());
@@ -3008,12 +3010,12 @@ fn check_baseline(
         .iter()
         .map(|finding| (finding.path.clone(), finding.id.clone()))
         .collect();
-    let violations: Vec<leadline::sarif::FunctionViolation<'_>> = regression_limits
+    let violations: Vec<artifacts::sarif::FunctionViolation<'_>> = regression_limits
         .map(|limits| {
             regressions
                 .iter()
                 .flat_map(|finding| {
-                    leadline::sarif::regression_violations(
+                    artifacts::sarif::regression_violations(
                         &finding.before.to_analysis(),
                         &finding.after,
                         limits,
@@ -3125,7 +3127,7 @@ fn baseline_command(args: &[String]) -> Result<ExitCode, CliError> {
     if report.files.is_empty() {
         return Err(no_supported_files(&path));
     }
-    let baseline = leadline::baseline::Baseline::from_report(&report);
+    let baseline = artifacts::baseline::Baseline::from_report(&report);
     let count = baseline.functions.len();
     baseline
         .write(Path::new(&output))
@@ -3540,8 +3542,8 @@ struct CommonOptions {
 #[derive(Clone, Copy, Default)]
 struct ScannerReports<'a> {
     security: Option<&'a leadline::security::SecurityOutcome>,
-    vulnerabilities: Option<&'a leadline::vulnerabilities::VulnerabilityOutcome>,
-    sql: Option<&'a leadline::sql::SqlOutcome>,
+    vulnerabilities: Option<&'a artifacts::vulnerabilities::VulnerabilityOutcome>,
+    sql: Option<&'a artifacts::sql::SqlOutcome>,
 }
 
 /// Metric gate inputs for one `check` run: the real absolute thresholds plus
@@ -3552,7 +3554,7 @@ struct ScannerReports<'a> {
 #[derive(Clone, Copy)]
 struct MetricGate<'a> {
     thresholds: &'a Thresholds,
-    regressions: &'a [leadline::sarif::FunctionViolation<'a>],
+    regressions: &'a [artifacts::sarif::FunctionViolation<'a>],
     quality_gate: Option<&'a analysis::quality::QualityGateReport>,
 }
 
@@ -3685,7 +3687,7 @@ impl CommonOptions {
             )?;
         } else if self.sarif {
             print_json(
-                &leadline::sarif::analysis_to_sarif(report, thresholds),
+                &artifacts::sarif::analysis_to_sarif(report, thresholds),
                 false,
             )?;
         } else if self.json {
@@ -3845,23 +3847,23 @@ impl CommonOptions {
             // Scanner families contribute gate violations only: `check`
             // exits 0 when nothing failed, so emitting informational findings
             // would contradict the exit code and the documented contract.
-            let mut document = serde_json::to_value(leadline::sarif::gate_to_sarif(
+            let mut document = serde_json::to_value(artifacts::sarif::gate_to_sarif(
                 report,
                 gate.thresholds,
                 gate.regressions,
             ))
             .map_err(internal)?;
             if let Some(security) = security {
-                let findings = leadline::sarif::security_findings_to_sarif(&security.violations);
+                let findings = artifacts::sarif::security_findings_to_sarif(&security.violations);
                 merge_sarif_run(&mut document, &findings);
             }
             if let Some(vulnerabilities) = vulnerabilities {
                 let findings =
-                    leadline::sarif::vulnerability_findings_to_sarif(&vulnerabilities.violations);
+                    artifacts::sarif::vulnerability_findings_to_sarif(&vulnerabilities.violations);
                 merge_sarif_run(&mut document, &findings);
             }
             if let Some(sql) = sql {
-                let findings = leadline::sarif::sql_findings_to_sarif(&sql.violations);
+                let findings = artifacts::sarif::sql_findings_to_sarif(&sql.violations);
                 merge_sarif_run(&mut document, &findings);
             }
             println!("{document}");
@@ -3924,8 +3926,8 @@ fn stamp_quality_gate(
 /// Print scanner terminal sections for findings that exist.
 fn has_scanner_findings(
     security: Option<&leadline::security::SecurityOutcome>,
-    vulnerabilities: Option<&leadline::vulnerabilities::VulnerabilityOutcome>,
-    sql: Option<&leadline::sql::SqlOutcome>,
+    vulnerabilities: Option<&artifacts::vulnerabilities::VulnerabilityOutcome>,
+    sql: Option<&artifacts::sql::SqlOutcome>,
 ) -> bool {
     security.is_some_and(|outcome| !outcome.report.findings.is_empty())
         || vulnerabilities.is_some_and(|outcome| !outcome.report.findings.is_empty())
@@ -3981,8 +3983,8 @@ fn gate_value(value: &serde_json::Value) -> String {
 /// Print scanner terminal sections for findings that exist.
 fn print_scanner_sections(
     security: Option<&leadline::security::SecurityOutcome>,
-    vulnerabilities: Option<&leadline::vulnerabilities::VulnerabilityOutcome>,
-    sql: Option<&leadline::sql::SqlOutcome>,
+    vulnerabilities: Option<&artifacts::vulnerabilities::VulnerabilityOutcome>,
+    sql: Option<&artifacts::sql::SqlOutcome>,
 ) {
     if let Some(security) = security
         && !security.report.findings.is_empty()
@@ -3994,13 +3996,13 @@ fn print_scanner_sections(
     {
         print!(
             "{}",
-            leadline::vulnerabilities::terminal_text(&vulnerabilities.report)
+            artifacts::vulnerabilities::terminal_text(&vulnerabilities.report)
         );
     }
     if let Some(sql) = sql
         && !sql.report.findings.is_empty()
     {
-        print!("{}", leadline::sql::terminal_text(&sql.report));
+        print!("{}", artifacts::sql::terminal_text(&sql.report));
     }
 }
 

@@ -154,8 +154,8 @@ fn complex_scanner_reports_deduplicate_enrich_and_gate() {
     let current_osv = [fixture("scanners/vulnerabilities/current-osv.json")];
     let current_trivy = [fixture("scanners/vulnerabilities/current-trivy.json")];
     let baseline_osv = [fixture("scanners/vulnerabilities/baseline-osv.json")];
-    let mut vulnerabilities = leadline::vulnerabilities::read_vulnerability_reports(
-        leadline::vulnerabilities::VulnerabilityInputs {
+    let mut vulnerabilities = artifacts::vulnerabilities::read_vulnerability_reports(
+        artifacts::vulnerabilities::VulnerabilityInputs {
             osv: &current_osv,
             trivy: &current_trivy,
             baseline_osv: &baseline_osv,
@@ -169,7 +169,7 @@ fn complex_scanner_reports_deduplicate_enrich_and_gate() {
             bytes: std::fs::read(fixture("scanners/vulnerabilities/changed.ts")).unwrap(),
         }])
         .unwrap();
-    leadline::vulnerabilities::add_changed_import_evidence(&mut vulnerabilities, &imports, true);
+    artifacts::vulnerabilities::add_changed_import_evidence(&mut vulnerabilities, &imports, true);
 
     assert_eq!(vulnerabilities.findings.len(), 3);
     let minimist = vulnerabilities
@@ -183,7 +183,7 @@ fn complex_scanner_reports_deduplicate_enrich_and_gate() {
     );
     assert_eq!(minimist.reachable_from_changed, Some(true));
     assert_eq!(
-        leadline::vulnerabilities::vulnerability_gate_violations(
+        artifacts::vulnerabilities::vulnerability_gate_violations(
             &vulnerabilities,
             model::security::SecuritySeverity::High,
         )
@@ -200,7 +200,7 @@ fn complex_sql_fixture_covers_static_host_and_schema_rules() {
         migration_roots: vec!["migrations".to_owned()],
     };
 
-    let report = leadline::sql::analyze_sql_path(&root, &config, &[]).unwrap();
+    let report = artifacts::sql::analyze_sql_path(&root, &config, &[]).unwrap();
     let rules: std::collections::BTreeSet<&str> = report
         .findings
         .iter()
@@ -235,19 +235,19 @@ fn complex_sql_fixture_covers_static_host_and_schema_rules() {
     );
     assert_eq!(
         report,
-        leadline::sql::analyze_sql_path(&root, &config, &[]).unwrap()
+        artifacts::sql::analyze_sql_path(&root, &config, &[]).unwrap()
     );
 }
 
 #[test]
 fn complex_plan_fixture_reports_every_regression_and_query_status() {
-    let limits = leadline::pg_plan::PlanLimits {
+    let limits = artifacts::pg_plan::PlanLimits {
         max_cost_increase_percent: Some(50.0),
         max_plan_rows_ratio: Some(2.0),
         max_estimate_error_ratio: Some(5.0),
     };
 
-    let report = leadline::pg_plan::compare_plan_directories(
+    let report = artifacts::pg_plan::compare_plan_directories(
         &fixture("plans/current"),
         &fixture("plans/baseline"),
         &limits,
@@ -261,10 +261,13 @@ fn complex_plan_fixture_reports_every_regression_and_query_status() {
             .map(|query| (query.query_id.as_str(), query.status))
             .collect::<Vec<_>>(),
         [
-            ("checkout", leadline::pg_plan::QueryPlanStatus::Changed),
-            ("new-query", leadline::pg_plan::QueryPlanStatus::New),
-            ("removed-query", leadline::pg_plan::QueryPlanStatus::Removed),
-            ("stable", leadline::pg_plan::QueryPlanStatus::Unchanged),
+            ("checkout", artifacts::pg_plan::QueryPlanStatus::Changed),
+            ("new-query", artifacts::pg_plan::QueryPlanStatus::New),
+            (
+                "removed-query",
+                artifacts::pg_plan::QueryPlanStatus::Removed
+            ),
+            ("stable", artifacts::pg_plan::QueryPlanStatus::Unchanged),
         ]
     );
     assert_eq!(
@@ -274,12 +277,12 @@ fn complex_plan_fixture_reports_every_regression_and_query_status() {
             .map(|change| change.kind)
             .collect::<std::collections::BTreeSet<_>>(),
         std::collections::BTreeSet::from([
-            leadline::pg_plan::PlanRegressionKind::IndexToSequentialScan,
-            leadline::pg_plan::PlanRegressionKind::CostIncrease,
-            leadline::pg_plan::PlanRegressionKind::RowGrowth,
-            leadline::pg_plan::PlanRegressionKind::EstimateError,
-            leadline::pg_plan::PlanRegressionKind::AddedSort,
-            leadline::pg_plan::PlanRegressionKind::JoinStrategyChange,
+            artifacts::pg_plan::PlanRegressionKind::IndexToSequentialScan,
+            artifacts::pg_plan::PlanRegressionKind::CostIncrease,
+            artifacts::pg_plan::PlanRegressionKind::RowGrowth,
+            artifacts::pg_plan::PlanRegressionKind::EstimateError,
+            artifacts::pg_plan::PlanRegressionKind::AddedSort,
+            artifacts::pg_plan::PlanRegressionKind::JoinStrategyChange,
         ])
     );
     assert_eq!(report.violations.len(), 7);

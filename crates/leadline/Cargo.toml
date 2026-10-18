@@ -13,6 +13,7 @@ categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 analysis = { path = "../analysis" }
+artifacts = { path = "../artifacts" }
 blake3.workspace = true
 codegraph = { path = "../codegraph" }
 config = { path = "../config" }

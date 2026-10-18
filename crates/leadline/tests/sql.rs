@@ -1,4 +1,4 @@
-use leadline::sql::{accepts_sql, tokenize_statements};
+use artifacts::sql::{accepts_sql, tokenize_statements};
 use parse::discovery::discover_matching;
 use std::path::Path;
 mod common;
@@ -97,7 +97,7 @@ fn tokenize_keeps_no_literal_text() {
         statements[0]
             .tokens
             .iter()
-            .any(|token| token.kind == leadline::sql::TokenKind::Int(90210))
+            .any(|token| token.kind == artifacts::sql::TokenKind::Int(90210))
     );
 }
 
@@ -123,7 +123,7 @@ fn rejects_unclosed_constructs_and_limits() {
 
 #[test]
 fn detects_update_delete_without_where() {
-    use leadline::sql::{SqlOptions, analyze_sql_bytes};
+    use artifacts::sql::{SqlOptions, analyze_sql_bytes};
     let options = SqlOptions::default();
     let risky = analyze_sql_bytes("q.sql", b"UPDATE users SET active = false;", &options).unwrap();
     assert_eq!(risky.findings.len(), 1);
@@ -175,7 +175,7 @@ fn detects_update_delete_without_where() {
 
 #[test]
 fn foreign_key_on_delete_clauses_are_not_unbounded_deletes() {
-    use leadline::sql::{SqlOptions, analyze_sql_bytes};
+    use artifacts::sql::{SqlOptions, analyze_sql_bytes};
     let options = SqlOptions::default();
     for source in [
         b"ALTER TABLE orders ADD CONSTRAINT orders_user_fk FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE RESTRICT;".as_slice(),
@@ -197,7 +197,7 @@ fn foreign_key_on_delete_clauses_are_not_unbounded_deletes() {
 
 #[test]
 fn detects_leading_wildcard() {
-    use leadline::sql::{SqlOptions, analyze_sql_bytes};
+    use artifacts::sql::{SqlOptions, analyze_sql_bytes};
     let options = SqlOptions::default();
     let risky = analyze_sql_bytes(
         "q.sql",
@@ -238,7 +238,7 @@ fn detects_leading_wildcard() {
 
 #[test]
 fn detects_nonsargable_predicates() {
-    use leadline::sql::{SqlOptions, analyze_sql_bytes};
+    use artifacts::sql::{SqlOptions, analyze_sql_bytes};
     let options = SqlOptions::default();
     let wrapped = analyze_sql_bytes(
         "q.sql",
@@ -268,7 +268,7 @@ fn detects_nonsargable_predicates() {
 
 #[test]
 fn detects_large_offset() {
-    use leadline::sql::{SqlOptions, analyze_sql_bytes};
+    use artifacts::sql::{SqlOptions, analyze_sql_bytes};
     let options = SqlOptions::default();
     let big = analyze_sql_bytes(
         "q.sql",
@@ -290,7 +290,7 @@ fn detects_large_offset() {
 
 #[test]
 fn statement_rule_sort_by_path_line_rule() {
-    use leadline::sql::{SqlOptions, analyze_sql_bytes};
+    use artifacts::sql::{SqlOptions, analyze_sql_bytes};
     let source = b"UPDATE users SET active = false;
 SELECT * FROM u WHERE e LIKE '%x';
 SELECT * FROM u WHERE lower(e) = 'x';
@@ -312,16 +312,16 @@ SELECT * FROM u ORDER BY id LIMIT 1 OFFSET 2000;
     );
 }
 
-fn sql_file(path: &str, source: &[u8]) -> leadline::sql::SqlFile {
-    leadline::sql::SqlFile {
+fn sql_file(path: &str, source: &[u8]) -> artifacts::sql::SqlFile {
+    artifacts::sql::SqlFile {
         path: path.to_owned(),
-        statements: leadline::sql::tokenize_statements(source).unwrap(),
+        statements: artifacts::sql::tokenize_statements(source).unwrap(),
     }
 }
 
 #[test]
 fn migration_collects_declared_tables() {
-    use leadline::sql::collect_declared_tables;
+    use artifacts::sql::collect_declared_tables;
     let files = vec![
         sql_file("migrations/001.sql", b"CREATE TABLE public.users (id integer);"),
         sql_file(
@@ -350,7 +350,7 @@ fn migration_collects_declared_tables() {
 
 #[test]
 fn renames_declare_the_new_table_name() {
-    use leadline::sql::collect_declared_tables;
+    use artifacts::sql::collect_declared_tables;
     let files = vec![
         sql_file(
             "migrations/001.sql",
@@ -396,7 +396,7 @@ fn renames_declare_the_new_table_name() {
 
 #[test]
 fn references_after_a_rename_are_known_tables() {
-    use leadline::sql::{
+    use artifacts::sql::{
         SqlOptions, add_unknown_table_findings, analyze_sql_bytes, collect_declared_tables,
     };
     let migration = sql_file(
@@ -432,7 +432,7 @@ fn references_after_a_rename_are_known_tables() {
 
 #[test]
 fn every_cte_name_in_a_statement_is_known() {
-    use leadline::sql::{SqlOptions, add_unknown_table_findings, analyze_sql_bytes};
+    use artifacts::sql::{SqlOptions, add_unknown_table_findings, analyze_sql_bytes};
     let source = b"WITH a AS (SELECT 1), b AS (SELECT * FROM a) SELECT * FROM b;";
     let mut report = analyze_sql_bytes("q.sql", source, &SqlOptions::default()).unwrap();
     let files = vec![sql_file("q.sql", source)];
@@ -472,7 +472,7 @@ fn analyze_sql_path_accepts_an_explicit_sql_file() {
     let root = temporary_directory();
     let file = root.join("query.sql");
     std::fs::write(&file, "UPDATE users SET active = false;").unwrap();
-    let report = leadline::sql::analyze_sql_path(&file, &config::SqlConfig::default(), &[])
+    let report = artifacts::sql::analyze_sql_path(&file, &config::SqlConfig::default(), &[])
         .expect("explicit .sql files must analyze");
     assert!(
         report
@@ -487,7 +487,7 @@ fn analyze_sql_path_accepts_an_explicit_sql_file() {
 
 #[test]
 fn reports_tables_absent_from_migrations() {
-    use leadline::sql::{SqlOptions, add_unknown_table_findings, analyze_sql_bytes};
+    use artifacts::sql::{SqlOptions, add_unknown_table_findings, analyze_sql_bytes};
     let mut report = analyze_sql_bytes(
         "q.sql",
         b"SELECT * FROM users; SELECT * FROM ghost; WITH mine AS (SELECT 1) SELECT * FROM mine;",
@@ -538,7 +538,7 @@ fn host_functions(path: &str, source: &[u8]) -> Vec<model::core::FunctionAnalysi
 
 #[test]
 fn unknown_table_ignores_scalar_function_from_and_reads_comma_lists() {
-    use leadline::sql::{SqlOptions, add_unknown_table_findings, analyze_sql_bytes};
+    use artifacts::sql::{SqlOptions, add_unknown_table_findings, analyze_sql_bytes};
     let source = b"SELECT extract(epoch FROM ts) FROM known;
 SELECT trim(both from name) FROM known;
 SELECT * FROM known, ghost_a g, ghost_b;
@@ -572,7 +572,7 @@ CLUSTER known USING known_pkey;
 
 #[test]
 fn host_sql_matrix_across_languages() {
-    use leadline::sql::analyze_host_sql;
+    use artifacts::sql::analyze_host_sql;
     let ts = "export function run(db: any, ids: number[]) {\n  for (const id of ids) {\n    db.execute('SELECT ' + id);\n  }\n}\n";
     let js = "function run(db, ids) {\n  let i = 0;\n  while (i < ids.length) {\n    db.query('SELECT ' + ids[i]);\n    i++;\n  }\n}\n";
     let tsx = "export function run(db: any, x: string) {\n  return db.raw(`SELECT ${x}`);\n}\n";
@@ -698,7 +698,7 @@ fn host_sql_matrix_across_languages() {
 
 #[test]
 fn host_sql_python_dynamic_arguments_and_loops() {
-    use leadline::sql::analyze_host_sql;
+    use artifacts::sql::analyze_host_sql;
     // Python builds query text four ways, none of which the shared probes see:
     // an f-string, `%` formatting, `.format(...)`, and `+` concatenation.
     for source in [
@@ -756,7 +756,7 @@ fn host_sql_python_dynamic_arguments_and_loops() {
 
 #[test]
 fn host_sql_parameterized_calls_are_quiet() {
-    use leadline::sql::analyze_host_sql;
+    use artifacts::sql::analyze_host_sql;
     let source = "export async function get(pool: any, id: number) {\n  return pool.query('SELECT * FROM users WHERE id = $1', [id]);\n}\n";
     let functions = host_functions("src/db.ts", source.as_bytes());
     let findings = analyze_host_sql("src/db.ts", source.as_bytes(), &functions).unwrap();
@@ -765,7 +765,7 @@ fn host_sql_parameterized_calls_are_quiet() {
 
 #[test]
 fn host_sql_nested_function_stops_loop_attribution() {
-    use leadline::sql::analyze_host_sql;
+    use artifacts::sql::analyze_host_sql;
     let source = "export function outer(db: any, ids: number[]) {\n  for (const id of ids) {\n    const run = () => db.query('SELECT ' + id);\n    run();\n  }\n}\n";
     let functions = host_functions("src/db.ts", source.as_bytes());
     let findings = analyze_host_sql("src/db.ts", source.as_bytes(), &functions).unwrap();
@@ -784,7 +784,7 @@ fn host_sql_nested_function_stops_loop_attribution() {
 
 #[test]
 fn host_sql_non_calls_are_ignored() {
-    use leadline::sql::analyze_host_sql;
+    use artifacts::sql::analyze_host_sql;
     let source = "const query = 'SELECT 1';\nexport function get() {\n  return query;\n}\n";
     let functions = host_functions("src/db.ts", source.as_bytes());
     let findings = analyze_host_sql("src/db.ts", source.as_bytes(), &functions).unwrap();

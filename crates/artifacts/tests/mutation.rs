@@ -1,4 +1,4 @@
-use leadline::mutation::{MutationInput, MutationStatus, ingest};
+use artifacts::mutation::{MutationInput, MutationStatus, ingest};
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
     MetricSpecs, OUTPUT_SCHEMA_VERSION,

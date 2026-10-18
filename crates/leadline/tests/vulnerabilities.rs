@@ -1,4 +1,4 @@
-use leadline::vulnerabilities::{VulnerabilityInputs, read_vulnerability_reports};
+use artifacts::vulnerabilities::{VulnerabilityInputs, read_vulnerability_reports};
 use model::security::{FindingState, SecuritySeverity};
 use std::path::PathBuf;
 mod common;
@@ -162,7 +162,7 @@ fn rejects_invalid_paths_depth_size_and_row_counts() {
 #[test]
 fn changed_import_evidence_marks_direct_matches() {
     use analysis::graph::external_packages_from_sources;
-    use leadline::vulnerabilities::add_changed_import_evidence;
+    use artifacts::vulnerabilities::add_changed_import_evidence;
     use parse::source_snapshot::SourceEntry;
     let osv = [fixture("osv.json")];
     let trivy = [fixture("trivy.json")];
@@ -202,7 +202,7 @@ fn changed_import_evidence_marks_direct_matches() {
 #[test]
 fn changed_import_evidence_stays_unknown_without_comparison() {
     use analysis::graph::external_packages_from_sources;
-    use leadline::vulnerabilities::add_changed_import_evidence;
+    use artifacts::vulnerabilities::add_changed_import_evidence;
     use parse::source_snapshot::SourceEntry;
     let root = temporary_directory();
     let java = r#"{"results": [{"source": {"path": "pom.xml"}, "packages": [{"package": {"name": "org.example:lib", "version": "1.0", "ecosystem": "Maven"}, "vulnerabilities": [{"id": "CVE-2024-0001", "database_specific": {"severity": "HIGH"}}]}]}]}"#;
@@ -244,8 +244,8 @@ fn gated_row(
     severity: SecuritySeverity,
     state: FindingState,
     reachable: Option<bool>,
-) -> leadline::vulnerabilities::VulnerabilityFinding {
-    leadline::vulnerabilities::VulnerabilityFinding {
+) -> artifacts::vulnerabilities::VulnerabilityFinding {
+    artifacts::vulnerabilities::VulnerabilityFinding {
         ecosystem: "npm".to_owned(),
         package: "pkg".to_owned(),
         installed_version: "1.0".to_owned(),
@@ -262,7 +262,7 @@ fn gated_row(
 
 #[test]
 fn gate_violations_select_new_reachable_findings() {
-    use leadline::vulnerabilities::{VulnerabilityReport, vulnerability_gate_violations};
+    use artifacts::vulnerabilities::{VulnerabilityReport, vulnerability_gate_violations};
     let report = VulnerabilityReport {
         findings: vec![
             gated_row(

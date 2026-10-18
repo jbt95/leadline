@@ -764,7 +764,7 @@ fn check_gates_baseline_regressions() {
     let path = dir.to_str().unwrap().to_owned();
     let report = parse::analyze_path(std::path::Path::new(&path), None).unwrap();
     let snapshot = dir.join("baseline.json");
-    leadline::baseline::Baseline::from_report(&report)
+    artifacts::baseline::Baseline::from_report(&report)
         .write(&snapshot)
         .unwrap();
     std::fs::write(
