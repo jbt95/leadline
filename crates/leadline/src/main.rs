@@ -97,7 +97,7 @@ fn main() -> ExitCode {
 /// are recorded individually. CPU time and resident memory are sampled for the
 /// duration of the command when metrics are enabled.
 fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
-    leadline::telemetry::arm();
+    surfaces::telemetry::arm();
     let operation = args
         .first()
         .map_or("none", |raw| cli_operation(raw))
@@ -106,13 +106,13 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
     // `mcp` serves for the whole session, so its cost is sampled per tool call
     // rather than around the server loop.
     let sampler =
-        (operation != "mcp").then(|| leadline::telemetry::Sampler::start("cli", &operation));
+        (operation != "mcp").then(|| surfaces::telemetry::Sampler::start("cli", &operation));
     let result = dispatch_command(args);
     if let Some(sampler) = sampler {
         let cost = sampler.finish();
         let outcome = outcome_label(&result);
-        leadline::telemetry::record_process_cost("cli", &operation, outcome, &cost);
-        leadline::telemetry::record_invocation("cli", &operation, outcome, started.elapsed());
+        surfaces::telemetry::record_process_cost("cli", &operation, outcome, &cost);
+        surfaces::telemetry::record_invocation("cli", &operation, outcome, started.elapsed());
     }
     result
 }
@@ -276,10 +276,10 @@ fn dispatch_command(args: Vec<String>) -> Result<ExitCode, CliError> {
 }
 
 fn mcp_command(args: &[String]) -> Result<ExitCode, CliError> {
-    let options = leadline::mcp::parse_mcp_args(args).map_err(CliError::usage)?;
+    let options = surfaces::mcp::parse_mcp_args(args).map_err(CliError::usage)?;
     let result = match options {
-        None => leadline::mcp::serve(),
-        Some(http) => leadline::mcp::serve_http(&http.host, http.port),
+        None => surfaces::mcp::serve(),
+        Some(http) => surfaces::mcp::serve_http(&http.host, http.port),
     };
     match result {
         Ok(()) => Ok(ExitCode::SUCCESS),
@@ -784,7 +784,7 @@ fn project_command(args: &[String]) -> Result<ExitCode, CliError> {
 /// Serves the canonical project model over loopback, with a page that shows
 /// it and `POST /api/refresh` to re-analyze.
 fn stats_command(args: &[String]) -> Result<ExitCode, CliError> {
-    let (rest, options) = leadline::stats::parse_serve_flags(args).map_err(CliError::usage)?;
+    let (rest, options) = surfaces::stats::parse_serve_flags(args).map_err(CliError::usage)?;
     if rest
         .iter()
         .any(|argument| matches!(argument.as_str(), "--json" | "--format"))
@@ -795,8 +795,8 @@ fn stats_command(args: &[String]) -> Result<ExitCode, CliError> {
         ));
     }
     let parsed = parse_project_args(&rest, "stats")?;
-    leadline::stats::serve(parsed.request, options).map_err(|error| {
-        match error.downcast::<leadline::stats::AnalysisError>() {
+    surfaces::stats::serve(parsed.request, options).map_err(|error| {
+        match error.downcast::<surfaces::stats::AnalysisError>() {
             Ok(analysis) => CliError::incomplete(analysis.to_string()),
             Err(error) => CliError::internal(error.to_string()),
         }
@@ -1027,7 +1027,7 @@ fn debt_command(args: &[String]) -> Result<ExitCode, CliError> {
     };
     let report = report::analytics::analyze_debt(&request)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
-    leadline::telemetry::record_debt("cli", &report.summary);
+    surfaces::telemetry::record_debt("cli", &report.summary);
     if agent_json {
         print_json(&report::agent::debt_agent_json(&report), false)?;
     } else if json {
@@ -3757,9 +3757,9 @@ impl CommonOptions {
                 None => languages.push((language, count)),
             }
         }
-        leadline::telemetry::record_check_findings(
+        surfaces::telemetry::record_check_findings(
             "cli",
-            &leadline::telemetry::CheckFindings {
+            &surfaces::telemetry::CheckFindings {
                 functions: report
                     .files
                     .iter()

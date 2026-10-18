@@ -19,7 +19,7 @@ fn counter_read_stays_within_budget() {
     const CALLS: u32 = 100_000;
     let started = Instant::now();
     for _ in 0..CALLS {
-        assert!(leadline::telemetry::process_sample().is_some());
+        assert!(surfaces::telemetry::process_sample().is_some());
     }
     let per_call = started.elapsed().as_secs_f64() / f64::from(CALLS);
     println!("counters::read(): {:.0} ns/call", per_call * 1e9);
@@ -30,12 +30,12 @@ fn idle_sampler_stays_within_budget() {
     // Let the counter-read loop above settle before measuring this process's
     // CPU again.
     std::thread::sleep(Duration::from_millis(200));
-    let before = leadline::telemetry::process_sample()
+    let before = surfaces::telemetry::process_sample()
         .expect("counters")
         .cpu_seconds;
-    let sampler = leadline::telemetry::sampler_for_measurement("cli", "idle-budget");
+    let sampler = surfaces::telemetry::sampler_for_measurement("cli", "idle-budget");
     std::thread::sleep(Duration::from_secs(5));
-    let after = leadline::telemetry::process_sample()
+    let after = surfaces::telemetry::process_sample()
         .expect("counters")
         .cpu_seconds;
     let cost = sampler.finish();

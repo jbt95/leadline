@@ -1,9 +1,9 @@
 mod common;
 
-use leadline::mcp::handle_request;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use surfaces::mcp::handle_request;
 
 fn request(method: &str, params: Value) -> String {
     serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string()
@@ -2043,8 +2043,8 @@ fn sql_risks_rejects_bad_arguments() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-fn mcp_args(args: &[&str]) -> Result<Option<leadline::mcp::HttpOptions>, String> {
-    leadline::mcp::parse_mcp_args(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+fn mcp_args(args: &[&str]) -> Result<Option<surfaces::mcp::HttpOptions>, String> {
+    surfaces::mcp::parse_mcp_args(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
 }
 
 #[test]
@@ -2056,9 +2056,9 @@ fn mcp_args_default_to_stdio() {
 fn mcp_args_parse_port_and_host() {
     assert_eq!(
         mcp_args(&["--port"]),
-        Ok(Some(leadline::mcp::HttpOptions {
+        Ok(Some(surfaces::mcp::HttpOptions {
             host: "127.0.0.1".to_owned(),
-            port: leadline::http::DEFAULT_PORT,
+            port: surfaces::http::DEFAULT_PORT,
         }))
     );
     assert_eq!(mcp_args(&["--port", "0"]).unwrap().unwrap().port, 0);
@@ -2078,7 +2078,7 @@ fn mcp_args_parse_port_and_host() {
 fn http_bind_falls_back_to_free_port_when_taken() {
     let guard = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let taken = guard.local_addr().unwrap().port();
-    let (_listener, actual, fell_back) = leadline::http::bind("127.0.0.1", taken).unwrap();
+    let (_listener, actual, fell_back) = surfaces::http::bind("127.0.0.1", taken).unwrap();
     assert!(fell_back);
     assert_ne!(actual, taken);
 }

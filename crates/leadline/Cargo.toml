@@ -26,6 +26,7 @@ rayon.workspace = true
 report = { path = "../report" }
 serde.workspace = true
 serde_json.workspace = true
+surfaces = { path = "../surfaces" }
 toml.workspace = true
 tree-sitter.workspace = true
 tree-sitter-c.workspace = true
