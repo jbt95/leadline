@@ -5,8 +5,8 @@
 //! per-file identity touches, and whole-project coupling from the same commit
 //! stream.
 
-use leadline::coupling::{CouplingEdge, CouplingOptions, MAX_COMMIT_FILES, analyze_coupling};
-use leadline::history::{
+use codegraph::coupling::{CouplingEdge, CouplingOptions, MAX_COMMIT_FILES, analyze_coupling};
+use codegraph::history::{
     FileTouches, GitAnalyticsSnapshot, analyze_git_at, analyze_git_at_with_mailmap,
 };
 use parse::source_snapshot::{SnapshotContext, SnapshotTarget, load};

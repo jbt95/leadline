@@ -1,5 +1,5 @@
-use leadline::history::FileTouches;
-use leadline::ownership::{OwnershipMode, build};
+use codegraph::history::FileTouches;
+use codegraph::ownership::{OwnershipMode, build};
 
 fn touches(path: &str, rows: &[(&str, u64)]) -> FileTouches {
     FileTouches {

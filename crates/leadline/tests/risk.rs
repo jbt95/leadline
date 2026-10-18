@@ -1,11 +1,11 @@
 mod common;
 
+use codegraph::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow};
+use codegraph::ownership::{OwnershipMode, OwnershipReport, build as build_ownership};
 use config::Severity;
 use leadline::graph::{
     DEPENDENCY_SCHEMA_VERSION, DependencyEdge, DependencyFile, DependencyReport,
 };
-use leadline::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow};
-use leadline::ownership::{OwnershipMode, OwnershipReport, build as build_ownership};
 use leadline::policy::{PolicyReport, PolicyStatus, PolicyViolation, evaluate};
 use leadline::risk::{COMPONENT_WEIGHTS, RISK_MODEL, RiskReport, build};
 use model::core::{
@@ -108,7 +108,7 @@ fn history(files: Vec<FileHistory>) -> HistoryReport {
 }
 
 fn ownership(path: &str, identities: &[(&str, u64)]) -> OwnershipReport {
-    let touches = leadline::history::FileTouches {
+    let touches = codegraph::history::FileTouches {
         path: path.to_owned(),
         identities: identities
             .iter()

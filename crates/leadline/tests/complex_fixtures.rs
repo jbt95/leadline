@@ -1,6 +1,6 @@
+use codegraph::history::HistoryWindow;
+use codegraph::ownership::OwnershipMode;
 use leadline::analytics::{ProjectRequest, build};
-use leadline::history::HistoryWindow;
-use leadline::ownership::OwnershipMode;
 use parse::coverage::CoverageMap;
 use parse::source_snapshot::SnapshotTarget;
 use std::path::{Path, PathBuf};
@@ -306,7 +306,7 @@ fn complex_history_fixture_joins_changes_coupling_hotspots_and_debt() {
     apply_history_snapshot(&root, "03-current");
     commit(&root, "current", "2026-02-01T12:00:00Z");
 
-    let history = leadline::history::analyze_history(&root).unwrap();
+    let history = codegraph::history::analyze_history(&root).unwrap();
     let service_history = history
         .files
         .iter()
@@ -315,10 +315,10 @@ fn complex_history_fixture_joins_changes_coupling_hotspots_and_debt() {
     assert_eq!(service_history.commits, 3);
     assert_eq!(service_history.contributors, 2);
 
-    let coupling = leadline::coupling::analyze_coupling(
+    let coupling = codegraph::coupling::analyze_coupling(
         &root,
         "src/service.ts",
-        &leadline::coupling::CouplingOptions::default(),
+        &codegraph::coupling::CouplingOptions::default(),
     )
     .unwrap();
     let store = coupling

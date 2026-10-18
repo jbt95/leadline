@@ -5,7 +5,7 @@
 
 mod common;
 
-use leadline::coupling::{
+use codegraph::coupling::{
     COUPLING_SCHEMA_VERSION, CouplingOptions, MAX_COMMIT_FILES, analyze_coupling,
 };
 use std::path::{Path, PathBuf};
@@ -61,7 +61,7 @@ fn options(min_co_changes: u64, limit: usize) -> CouplingOptions {
     }
 }
 
-fn related_paths(report: &leadline::coupling::CouplingReport) -> Vec<&str> {
+fn related_paths(report: &codegraph::coupling::CouplingReport) -> Vec<&str> {
     report
         .related
         .iter()

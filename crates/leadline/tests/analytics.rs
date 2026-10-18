@@ -1,6 +1,6 @@
+use codegraph::history::HistoryWindow;
+use codegraph::ownership::OwnershipMode;
 use leadline::analytics::{DebtRequest, ProjectRequest, analyze_debt, build, capture_trend};
-use leadline::history::HistoryWindow;
-use leadline::ownership::OwnershipMode;
 use leadline::snapshots::SnapshotOutcome;
 use parse::source_snapshot::SnapshotTarget;
 use std::path::{Path, PathBuf};

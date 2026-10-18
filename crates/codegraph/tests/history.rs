@@ -4,7 +4,7 @@
 //! that the recency windows are stable. Windows are relative to the HEAD
 //! commit time, never to the wall clock.
 
-use leadline::history::analyze_history;
+use codegraph::history::analyze_history;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};

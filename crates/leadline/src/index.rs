@@ -5,7 +5,7 @@
 //! merges after analysis, so any coverage input bypasses the index. Files with
 //! parse errors are never stored.
 
-use crate::history::FileHistory;
+use codegraph::history::FileHistory;
 use model::core::{
     FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE, MetricContribution,
     OUTPUT_SCHEMA_VERSION, SuppressionMetric,
@@ -495,14 +495,14 @@ fn rebuild(
 /// an error path, so a missing history section only means `git_available:
 /// false` for the commands that consume it.
 pub fn refresh_history(previous: Option<&AnalysisIndex>, scope: &Path) -> Option<HistoryFacts> {
-    let (head, _) = crate::history::scope_head(scope).ok().flatten()?;
+    let (head, _) = codegraph::history::scope_head(scope).ok().flatten()?;
     if let Some(facts) = previous.and_then(|index| index.history.as_ref())
         && facts.head_commit == head
         && !facts.files.is_empty()
     {
         return Some(facts.clone());
     }
-    let report = crate::history::analyze_history(scope).ok()?;
+    let report = codegraph::history::analyze_history(scope).ok()?;
     Some(HistoryFacts {
         head_commit: report.head_commit,
         head_timestamp: report.head_timestamp,

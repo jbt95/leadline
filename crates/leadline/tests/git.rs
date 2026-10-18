@@ -39,7 +39,7 @@ fn adapter_and_existing_consumers_disable_fetch_locks_and_stdin() {
         assert!(changed.functions.is_empty());
         assert!(changed.parse_errors.is_empty());
 
-        let history = leadline::history::analyze_history(&root).unwrap();
+        let history = codegraph::history::analyze_history(&root).unwrap();
         assert!(history.available);
         assert_eq!(history.head_commit.as_deref(), Some(FAKE_COMMIT));
         assert_eq!(history.head_timestamp, Some(123));
@@ -130,7 +130,7 @@ fn history_propagates_an_arbitrary_repository_failure() {
 
     let error = {
         let _env = FakeGitEnv::install(&bin, &log, &root);
-        leadline::history::analyze_history(&root).unwrap_err()
+        codegraph::history::analyze_history(&root).unwrap_err()
     };
     assert!(error.to_string().contains("unsafe repository"));
 
@@ -176,7 +176,7 @@ fn corrupt_git_marker_is_an_error_for_discovery_and_history() {
     std::fs::write(root.join(".git"), "gitdir: missing\n").unwrap();
 
     assert!(git::repo_root(&root).is_err());
-    assert!(leadline::history::analyze_history(&root).is_err());
+    assert!(codegraph::history::analyze_history(&root).is_err());
 
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -187,7 +187,7 @@ fn unborn_head_is_an_expected_absence() {
     let root = temporary_directory("unborn-head");
     git(&root, &["init", "-q"]);
 
-    let report = leadline::history::analyze_history(&root).unwrap();
+    let report = codegraph::history::analyze_history(&root).unwrap();
     assert!(!report.available);
     assert_eq!(report.head_commit, None);
     assert_eq!(report.head_timestamp, None);
@@ -298,7 +298,7 @@ fn history_uses_exactly_two_git_subprocesses() {
 
     {
         let _env = FakeGitEnv::install(&bin, &log, &root);
-        let report = leadline::history::analyze_history(&root).unwrap();
+        let report = codegraph::history::analyze_history(&root).unwrap();
         assert!(report.available);
     }
 

@@ -1912,11 +1912,11 @@ fn tool_coupling(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
     }
     let key =
         parse::resolve_scoped_target(root, target).map_err(|error| (-32602, error.to_string()))?;
-    let options = crate::coupling::CouplingOptions {
+    let options = codegraph::coupling::CouplingOptions {
         min_co_changes: min_cochanges,
         limit: top,
     };
-    let report = crate::coupling::analyze_coupling(root, &key, &options)
+    let report = codegraph::coupling::analyze_coupling(root, &key, &options)
         .map_err(|error| (-32602, error.to_string()))?;
     let agent = crate::agent::coupling_agent_json(&report);
     agent_envelope(
@@ -1937,9 +1937,9 @@ fn tool_hotspots(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
     reject_unknown(params, "hotspots", &["path", "top", "since", "coverage"])?;
     let path = opt_str(params, "path")?.unwrap_or(".");
     let top = parse_top_param(params, 10)?;
-    let window = parse_since(params, crate::history::HistoryWindow::Days90)?;
+    let window = parse_since(params, codegraph::history::HistoryWindow::Days90)?;
     let (analysis, _) = analyze_optional_coverage(params, path)?;
-    let history = crate::history::analyze_history(&config_dir(path))
+    let history = codegraph::history::analyze_history(&config_dir(path))
         .map_err(|error| (-32602, error.to_string()))?;
     let report = crate::hotspots::build(&analysis, &history, window, top);
     let agent = crate::agent::hotspots_agent_json(&report);
@@ -2000,7 +2000,7 @@ fn tool_risk(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Stri
     reject_unknown(params, "risk", &["path", "top", "since", "coverage"])?;
     let path = opt_str(params, "path")?.unwrap_or(".");
     let top = parse_top_param(params, 10)?;
-    let window = parse_since(params, crate::history::HistoryWindow::Days90)?;
+    let window = parse_since(params, codegraph::history::HistoryWindow::Days90)?;
     let (analysis, excludes) = analyze_optional_coverage(params, path)?;
     let mut report = crate::analytics::analyze_risk(&analysis, Path::new(path), &excludes, window)
         .map_err(|error| (-32602, error.to_string()))?;
@@ -2043,7 +2043,7 @@ fn tool_debt(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Stri
         Some(revision) => parse::source_snapshot::SnapshotTarget::Revision(revision.to_owned()),
     };
     let renames = opt_flag(params, "renames", "debt")?;
-    let window = parse_since(params, crate::history::HistoryWindow::Days90)?;
+    let window = parse_since(params, codegraph::history::HistoryWindow::Days90)?;
     let report = crate::analytics::analyze_debt(&crate::analytics::DebtRequest {
         path: std::path::PathBuf::from(path),
         base: base.to_owned(),
@@ -2095,12 +2095,12 @@ fn tool_project(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
         None => parse::source_snapshot::SnapshotTarget::Worktree,
         Some(revision) => parse::source_snapshot::SnapshotTarget::Revision(revision.to_owned()),
     };
-    let window = parse_since(params, crate::history::HistoryWindow::Days90)?;
+    let window = parse_since(params, codegraph::history::HistoryWindow::Days90)?;
     let coverage = optional_coverage(params)?;
     let ownership_mode = match opt_str(params, "ownership")? {
-        None | Some("aggregate") => crate::ownership::OwnershipMode::AggregateOnly,
-        Some("include_authors") => crate::ownership::OwnershipMode::IncludeAuthors,
-        Some("anonymize_authors") => crate::ownership::OwnershipMode::AnonymizeAuthors,
+        None | Some("aggregate") => codegraph::ownership::OwnershipMode::AggregateOnly,
+        Some("include_authors") => codegraph::ownership::OwnershipMode::IncludeAuthors,
+        Some("anonymize_authors") => codegraph::ownership::OwnershipMode::AnonymizeAuthors,
         Some(other) => {
             return Err((
                 -32602,
@@ -2263,11 +2263,11 @@ fn parse_top_param(params: &serde_json::Value, default: usize) -> Result<usize, 
 /// One `since` window: `30d`, `90d`, or `365d`.
 fn parse_since(
     params: &serde_json::Value,
-    default: crate::history::HistoryWindow,
-) -> Result<crate::history::HistoryWindow, (i64, String)> {
+    default: codegraph::history::HistoryWindow,
+) -> Result<codegraph::history::HistoryWindow, (i64, String)> {
     match opt_str(params, "since")? {
         None => Ok(default),
-        Some(raw) => crate::history::HistoryWindow::parse(raw).ok_or((
+        Some(raw) => codegraph::history::HistoryWindow::parse(raw).ok_or((
             -32602,
             format!("unknown since '{raw}': expected '30d', '90d', or '365d'"),
         )),

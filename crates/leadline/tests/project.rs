@@ -1,7 +1,7 @@
+use codegraph::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow};
 use config::DuplicationConfig;
 use leadline::duplication::detect;
 use leadline::graph::{DependencyEdge, DependencyFile, DependencyReport};
-use leadline::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow};
 use leadline::project::{PROJECT_SCHEMA_VERSION, ProjectInputs, build};
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
@@ -146,16 +146,16 @@ fn project_joins_every_section_and_recomputes_aggregates() {
     let graph = graph();
     let duplication = duplication();
     let history = history();
-    let git = leadline::history::GitAnalyticsSnapshot {
+    let git = codegraph::history::GitAnalyticsSnapshot {
         history: history.clone(),
         touches: vec![],
-        coupling: leadline::coupling::ProjectCoupling {
+        coupling: codegraph::coupling::ProjectCoupling {
             available: true,
             reason: None,
             edges: vec![],
         },
     };
-    let ownership = leadline::ownership::OwnershipReport {
+    let ownership = codegraph::ownership::OwnershipReport {
         files: vec![],
         modules: vec![],
     };

@@ -252,7 +252,7 @@ fn projection_matches_score_and_components() {
         unresolved: vec![],
         cycles: vec![],
     };
-    let ownership = leadline::ownership::OwnershipReport {
+    let ownership = codegraph::ownership::OwnershipReport {
         files: vec![],
         modules: vec![],
     };
@@ -265,7 +265,7 @@ fn projection_matches_score_and_components() {
             metric_specs: Default::default(),
             files: vec![file("src/a.ts", vec![function("f", 30, 10, Some(30.0))])],
         },
-        &leadline::history::HistoryReport {
+        &codegraph::history::HistoryReport {
             schema_version: 1,
             analyzer_version: "test",
             available: false,
@@ -277,7 +277,7 @@ fn projection_matches_score_and_components() {
         &graph,
         &ownership,
         &policy,
-        leadline::history::HistoryWindow::Days90,
+        codegraph::history::HistoryWindow::Days90,
     );
     let entries = risk_entries(&report);
     assert_eq!(entries.len(), 1);

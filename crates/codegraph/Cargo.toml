@@ -1,0 +1,19 @@
+[package]
+name = "codegraph"
+description = "Git history, temporal coupling, and ownership concentration for leadline"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+config = { path = "../config" }
+git = { path = "../git" }
+model = { path = "../model" }
+parse = { path = "../parse" }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

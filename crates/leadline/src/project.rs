@@ -6,12 +6,12 @@
 
 use crate::duplication::DuplicationReport;
 use crate::graph::DependencyReport;
-use crate::history::{FileHistory, GitAnalyticsSnapshot};
 use crate::mutation::MutationReport;
-use crate::ownership::OwnershipReport;
 use crate::policy::{PolicyReport, PolicyViolation};
 use crate::risk::RiskReport;
 use crate::test_relationships::TestRelationshipReport;
+use codegraph::history::{FileHistory, GitAnalyticsSnapshot};
+use codegraph::ownership::OwnershipReport;
 use model::core::{AnalysisReport, Language};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -106,7 +106,7 @@ pub struct CouplingSection {
     pub available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    pub edges: Vec<crate::coupling::CouplingEdge>,
+    pub edges: Vec<codegraph::coupling::CouplingEdge>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

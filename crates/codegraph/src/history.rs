@@ -384,7 +384,7 @@ fn worktree_mailmap(start: &Path) -> Option<Vec<u8>> {
 
 /// HEAD commit and timestamp for the repository containing `scope`, or `None`
 /// when `scope` is not inside a repository.
-pub(crate) fn scope_head(scope: &Path) -> Result<Option<(Option<String>, Option<i64>)>> {
+pub fn scope_head(scope: &Path) -> Result<Option<(Option<String>, Option<i64>)>> {
     repository_head(workdir_for(scope))
 }
 

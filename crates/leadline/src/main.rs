@@ -1,9 +1,9 @@
+use codegraph::coupling::CouplingOptions;
+use codegraph::history::HistoryWindow;
+use codegraph::ownership::OwnershipMode;
 use config::{self, Config, RegressionLimits};
 use leadline::agent::{Budget, SortKey};
-use leadline::coupling::CouplingOptions;
-use leadline::history::HistoryWindow;
 use leadline::mutation::MutationInput;
-use leadline::ownership::OwnershipMode;
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, METRIC_PROFILE, MetricSpecs,
     OUTPUT_SCHEMA_VERSION, Thresholds,
@@ -724,7 +724,7 @@ fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
     let config = load_config_for(&parsed.path)?;
     let excludes = analysis_excludes(config.as_ref());
     let (analysis, scope) = analyze_ranked(&parsed.path, parsed.coverage.as_ref(), excludes)?;
-    let history = leadline::history::analyze_history(&scope)
+    let history = codegraph::history::analyze_history(&scope)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     let report = leadline::hotspots::build(&analysis, &history, parsed.window, parsed.limit);
     if parsed.agent_json {
@@ -1999,7 +1999,7 @@ fn coupling_command(args: &[String]) -> Result<ExitCode, CliError> {
         min_co_changes,
         limit: top,
     };
-    let report = leadline::coupling::analyze_coupling(&root, &key, &options)
+    let report = codegraph::coupling::analyze_coupling(&root, &key, &options)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     if agent_json {
         print_json(&leadline::agent::coupling_agent_json(&report), false)?;

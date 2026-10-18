@@ -1,9 +1,9 @@
-use crate::coupling::CouplingReport;
 use crate::diff::ChangedReport;
 use crate::graph::DependencyReport;
 use crate::hotspots::HotspotReport;
 use crate::impact::ImpactReport;
 use crate::risk::RiskReport;
+use codegraph::coupling::CouplingReport;
 use model::core::{AnalysisReport, FunctionAnalysis};
 use std::fmt::Write;
 

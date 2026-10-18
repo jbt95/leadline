@@ -65,8 +65,8 @@ fn join_smoke(path: &std::path::Path) {
     let analysis = analyze_path(path, None).expect("realworld join analysis succeeds");
     let graph =
         leadline::graph::analyze_dependencies(path, &[]).expect("realworld join graph succeeds");
-    let history = leadline::history::HistoryReport {
-        schema_version: leadline::history::HISTORY_SCHEMA_VERSION,
+    let history = codegraph::history::HistoryReport {
+        schema_version: codegraph::history::HISTORY_SCHEMA_VERSION,
         analyzer_version: env!("CARGO_PKG_VERSION"),
         available: false,
         reference: "head-commit-time",
@@ -74,7 +74,7 @@ fn join_smoke(path: &std::path::Path) {
         head_timestamp: None,
         files: Vec::new(),
     };
-    let ownership = leadline::ownership::OwnershipReport {
+    let ownership = codegraph::ownership::OwnershipReport {
         files: Vec::new(),
         modules: Vec::new(),
     };
@@ -85,7 +85,7 @@ fn join_smoke(path: &std::path::Path) {
         &graph,
         &ownership,
         &policy,
-        leadline::history::HistoryWindow::Days90,
+        codegraph::history::HistoryWindow::Days90,
     );
     assert!(!risk.risks.is_empty(), "realworld join: empty risk rows");
     let duplication = leadline::duplication::detect(&[], &config::DuplicationConfig::default());

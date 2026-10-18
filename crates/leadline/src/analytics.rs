@@ -9,16 +9,16 @@ use crate::debt::{
 };
 use crate::duplication::detect;
 use crate::graph::{analyze_dependencies, analyze_dependencies_from_sources};
-use crate::history::{
-    HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow, analyze_git_at_with_mailmap,
-};
 use crate::mutation::{MutationInput, ingest as ingest_mutation};
-use crate::ownership::{OwnershipMode, OwnershipReport, build as build_ownership};
 use crate::policy::{PolicyReport, evaluate as evaluate_policy};
 use crate::project::{Project, ProjectInputs, build as build_project};
 use crate::risk::{RiskReport, build as build_risk};
 use crate::snapshots::{SnapshotOutcome, TrendPoint, TrendStore};
 use crate::test_relationships::ingest as ingest_test_relationships;
+use codegraph::history::{
+    HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow, analyze_git_at_with_mailmap,
+};
+use codegraph::ownership::{OwnershipMode, OwnershipReport, build as build_ownership};
 use model::Result;
 use model::core::AnalysisReport;
 use parse::external::InputBudget;
@@ -192,9 +192,9 @@ fn build_from_parts(
     }))
 }
 
-fn unavailable_history() -> crate::history::HistoryReport {
-    crate::history::HistoryReport {
-        schema_version: crate::history::HISTORY_SCHEMA_VERSION,
+fn unavailable_history() -> codegraph::history::HistoryReport {
+    codegraph::history::HistoryReport {
+        schema_version: codegraph::history::HISTORY_SCHEMA_VERSION,
         analyzer_version: env!("CARGO_PKG_VERSION"),
         available: false,
         reference: "head-commit-time",

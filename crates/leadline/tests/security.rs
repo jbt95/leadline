@@ -248,10 +248,10 @@ fn enrich_project(root: &std::path::Path) -> leadline::project::Project {
     leadline::analytics::build(&leadline::analytics::ProjectRequest {
         path: root.to_path_buf(),
         target: parse::source_snapshot::SnapshotTarget::Worktree,
-        window: leadline::history::HistoryWindow::Days90,
+        window: codegraph::history::HistoryWindow::Days90,
         mutation_inputs: Vec::new(),
         test_maps: Vec::new(),
-        ownership_mode: leadline::ownership::OwnershipMode::AggregateOnly,
+        ownership_mode: codegraph::ownership::OwnershipMode::AggregateOnly,
         snapshots_path: None,
         coverage: None,
     })

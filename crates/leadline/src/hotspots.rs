@@ -13,7 +13,7 @@
 //! changing the dimension fields. Composite risk models belong to a separate,
 //! explainable layer.
 
-use crate::history::{FileHistory, HistoryReport, HistoryWindow};
+use codegraph::history::{FileHistory, HistoryReport, HistoryWindow};
 use model::core::{AnalysisReport, FileAnalysis, Language};
 use serde::Serialize;
 use std::collections::BTreeMap;
