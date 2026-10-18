@@ -18,7 +18,7 @@ const CURRENT: &str = "0.1.0";
 /// The workspace members the release bumps, matching `WORKSPACE_MEMBERS` in
 /// `scripts/release.sh`. Every member inherits `[workspace.package] version`, so
 /// a release moves all of their `Cargo.lock` entries together.
-const WORKSPACE_MEMBERS: [&str; 11] = [
+const WORKSPACE_MEMBERS: [&str; 12] = [
     "analysis",
     "artifacts",
     "codegraph",
@@ -29,6 +29,7 @@ const WORKSPACE_MEMBERS: [&str; 11] = [
     "parse",
     "report",
     "surfaces",
+    "tia",
     "update",
 ];
 

@@ -70,7 +70,7 @@ VERSIONED_FILES=(
 # `Cargo.lock` entries together; a member this list misses dies during the bump
 # instead of leaving the lock inconsistent with the manifests.
 WORKSPACE_MEMBERS=(
-  analysis artifacts codegraph config git leadline model parse report surfaces update
+  analysis artifacts codegraph config git leadline model parse report surfaces tia update
 )
 
 semver() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
