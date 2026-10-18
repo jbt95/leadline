@@ -1,4 +1,4 @@
-use analysis::test_relationships::ingest;
+use analysis::test_relationships::{TEST_RELATIONSHIP_SCHEMA_VERSION, ingest};
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
     MetricSpecs, OUTPUT_SCHEMA_VERSION,
@@ -45,7 +45,7 @@ fn metrics() -> FunctionMetrics {
     }
 }
 
-fn function(name: &str, start: u32) -> FunctionAnalysis {
+fn function(name: &str, symbol_key: &str, start: u32) -> FunctionAnalysis {
     FunctionAnalysis {
         name: name.to_owned(),
         id: format!("{name}@{start}"),
@@ -57,7 +57,7 @@ fn function(name: &str, start: u32) -> FunctionAnalysis {
         metrics: metrics(),
         contributions: vec![],
         suppressed_metrics: vec![],
-        symbol_key: String::new(),
+        symbol_key: symbol_key.to_owned(),
         source_fingerprint: 0,
     }
 }
@@ -72,19 +72,16 @@ fn analysis() -> AnalysisReport {
             FileAnalysis {
                 path: "src/payment.ts".to_owned(),
                 language: model::core::Language::TypeScript,
-                functions: vec![function("charge", 10), function("charge", 30)],
+                functions: vec![
+                    function("charge", "src/payment.ts:charge(int)", 10),
+                    function("charge", "src/payment.ts:charge(string)", 30),
+                ],
                 parse_errors: vec![],
             },
             FileAnalysis {
                 path: "tests/payment.test.ts".to_owned(),
                 language: model::core::Language::TypeScript,
-                functions: vec![function("payment", 1)],
-                parse_errors: vec![],
-            },
-            FileAnalysis {
-                path: "tests/charge.test.ts".to_owned(),
-                language: model::core::Language::TypeScript,
-                functions: vec![function("chargeTest", 1)],
+                functions: vec![function("payment", "tests/payment.test.ts:payment()", 1)],
                 parse_errors: vec![],
             },
         ],
@@ -92,105 +89,207 @@ fn analysis() -> AnalysisReport {
 }
 
 const MAP: &str = r#"{
-  "schema_version": 1,
+  "schema_version": 2,
+  "recorder": "pytest",
+  "recorded_at": "a1b2c3d",
   "relationships": [
-    {"test_path": "tests/payment.test.ts", "target_path": "src/payment.ts"},
-    {"test_path": "tests/charge.test.ts", "target_path": "src/payment.ts", "target_function": "charge"},
-    {"test_path": "tests/missing.test.ts", "target_path": "src/missing.ts"},
-    {"test_path": "../escape.test.ts", "target_path": "src/payment.ts"}
+    {"test_id": "tests/payment.test.ts::charges once", "test_path": "tests/payment.test.ts", "symbol_key": "src/payment.ts:charge(int)", "target_path": "src/payment.ts"},
+    {"test_id": "tests/payment.test.ts::refunds", "test_path": "tests/payment.test.ts", "symbol_key": "src/payment.ts:charge(string)", "target_path": "src/payment.ts"},
+    {"test_id": "tests/missing.test.ts::gone", "test_path": "tests/missing.test.ts", "symbol_key": "src/missing.ts:gone()", "target_path": "src/missing.ts"},
+    {"test_id": "../escape.test.ts::escape", "test_path": "../escape.test.ts", "symbol_key": "src/payment.ts:charge(int)", "target_path": "src/payment.ts"}
   ]
 }"#;
 
 #[test]
-fn resolves_relationships_and_marks_unresolved_rows() {
+fn resolves_symbol_keys_and_marks_unresolved_rows() {
     let root = temporary_directory();
     let map = write(&root, "map.json", MAP);
     let report = ingest(&[map], &analysis(), &mut InputBudget::new()).unwrap();
+    assert_eq!(report.schema_version, TEST_RELATIONSHIP_SCHEMA_VERSION);
+    assert_eq!(report.recorder, "pytest");
+    assert_eq!(report.recorded_at, "a1b2c3d");
     assert_eq!(report.relationships.len(), 4);
-    assert_eq!(report.unresolved, 3);
+    assert_eq!(report.unresolved, 2);
 
-    let plain = report
+    let keyed = report
         .relationships
         .iter()
-        .find(|row| row.test_path.as_deref() == Some("tests/payment.test.ts"))
+        .find(|row| row.test_id == "tests/payment.test.ts::charges once")
         .unwrap();
-    assert!(plain.resolved);
-    assert_eq!(plain.target_path.as_deref(), Some("src/payment.ts"));
-    assert_eq!(plain.target_function_id, None);
+    assert!(keyed.resolved);
+    assert_eq!(keyed.reason, None);
+    assert_eq!(keyed.symbol_key, "src/payment.ts:charge(int)");
+    assert_eq!(keyed.target_path.as_deref(), Some("src/payment.ts"));
 
-    let ambiguous = report
+    let other = report
         .relationships
         .iter()
-        .find(|row| row.test_path.as_deref() == Some("tests/charge.test.ts"))
+        .find(|row| row.test_id == "tests/payment.test.ts::refunds")
         .unwrap();
-    assert!(!ambiguous.resolved);
-    assert_eq!(ambiguous.target_function_id, None);
-    assert!(ambiguous.reason.as_deref().unwrap().contains("ambiguous"));
+    assert!(other.resolved, "each key resolves to its own overload");
 
     let missing = report
         .relationships
         .iter()
-        .find(|row| row.test_path.as_deref() == Some("tests/missing.test.ts"))
+        .find(|row| row.test_id == "tests/missing.test.ts::gone")
         .unwrap();
     assert!(!missing.resolved);
+    assert_eq!(missing.reason.as_deref(), Some("unknown test file"));
+    assert_eq!(missing.test_path.as_deref(), Some("tests/missing.test.ts"));
     assert_eq!(missing.target_path.as_deref(), Some("src/missing.ts"));
 
     let escape = report
         .relationships
         .iter()
-        .find(|row| row.test_path.as_deref() == Some("../escape.test.ts"))
+        .find(|row| row.test_id == "../escape.test.ts::escape")
         .unwrap();
-    assert!(!escape.resolved);
+    assert!(!escape.resolved, "a path escaping the root never resolves");
 
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn unique_function_names_and_duplicate_rows_collapse() {
+fn unmatched_symbol_keys_stay_with_a_stable_reason() {
     let root = temporary_directory();
     let map = write(
         &root,
         "map.json",
-        r#"{"schema_version": 1, "relationships": [
-            {"test_path": "tests/payment.test.ts", "target_path": "src/payment.ts", "target_function": "charge"},
-            {"test_path": "tests/payment.test.ts", "target_path": "src/payment.ts", "target_function": "charge"}
-        ]}"#,
+        r#"{"schema_version": 2, "recorder": "pytest", "recorded_at": "a1b2c3d",
+            "relationships": [
+              {"test_id": "tests/payment.test.ts::vanished", "test_path": "tests/payment.test.ts", "symbol_key": "src/payment.ts:vanished(int)", "target_path": "src/payment.ts"},
+              {"test_id": "tests/payment.test.ts::moved", "test_path": "tests/payment.test.ts", "symbol_key": "src/payment.ts:charge(int)", "target_path": "src/elsewhere.ts"}
+            ]}"#,
     );
-    let report = ingest(&[map], &analysis(), &mut InputBudget::new()).unwrap();
-    assert_eq!(report.relationships.len(), 1, "exact duplicates collapse");
+    let report = ingest(
+        std::slice::from_ref(&map),
+        &analysis(),
+        &mut InputBudget::new(),
+    )
+    .unwrap();
+    assert_eq!(report.relationships.len(), 2, "no row is dropped");
+
+    let vanished = report
+        .relationships
+        .iter()
+        .find(|row| row.test_id == "tests/payment.test.ts::vanished")
+        .unwrap();
+    assert!(!vanished.resolved);
+    assert_eq!(vanished.reason.as_deref(), Some("unknown symbol key"));
+
+    let moved = report
+        .relationships
+        .iter()
+        .find(|row| row.test_id == "tests/payment.test.ts::moved")
+        .unwrap();
     assert!(
-        !report.relationships[0].resolved,
-        "ambiguous name stays unresolved"
+        moved.resolved,
+        "the symbol key is authoritative, so a stale target_path does not unresolve the row"
     );
 
-    let unique = write(
-        &root,
-        "unique.json",
-        r#"{"schema_version": 1, "relationships": [
-            {"test_path": "tests/payment.test.ts", "target_path": "src/payment.ts", "target_function": "charge"}
-        ]}"#,
-    );
-    let mut single = analysis();
-    single.files[0].functions.truncate(1);
-    let report = ingest(&[unique], &single, &mut InputBudget::new()).unwrap();
-    assert!(report.relationships[0].resolved);
-    assert_eq!(
-        report.relationships[0].target_function_id.as_deref(),
-        Some("charge@10")
-    );
+    let mut collided = analysis();
+    collided.files[0].functions[1].symbol_key = "src/payment.ts:charge(int)".to_owned();
+    let report = ingest(
+        std::slice::from_ref(&map),
+        &collided,
+        &mut InputBudget::new(),
+    )
+    .unwrap();
+    let ambiguous = report
+        .relationships
+        .iter()
+        .find(|row| row.test_id == "tests/payment.test.ts::moved")
+        .unwrap();
+    assert!(!ambiguous.resolved);
+    assert_eq!(ambiguous.reason.as_deref(), Some("ambiguous symbol key"));
+
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn rejects_unknown_schemas_and_missing_arrays() {
+fn rejects_version_one_maps_naming_the_version() {
     let root = temporary_directory();
-    let bad = write(
+    let v1 = write(
         &root,
-        "bad.json",
-        r#"{"schema_version": 2, "relationships": []}"#,
+        "v1.json",
+        r#"{"schema_version": 1, "relationships": [
+            {"test_path": "tests/payment.test.ts", "target_path": "src/payment.ts", "target_function": "charge"}
+        ]}"#,
     );
-    assert!(ingest(&[bad], &analysis(), &mut InputBudget::new()).is_err());
-    let missing = write(&root, "missing.json", r#"{"schema_version": 1}"#);
+    let error = ingest(&[v1], &analysis(), &mut InputBudget::new())
+        .expect_err("a v1 map must not be read as v2");
+    let message = error.to_string();
+    assert!(
+        message.contains("unsupported schema_version 1"),
+        "the error names the version the file carried: {message}"
+    );
+    assert!(message.contains("v1.json"), "{message}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn duplicate_rows_collapse_but_distinct_test_ids_do_not() {
+    let root = temporary_directory();
+    let map = write(
+        &root,
+        "map.json",
+        r#"{"schema_version": 2, "recorder": "pytest", "recorded_at": "a1b2c3d",
+            "relationships": [
+              {"test_id": "tests/payment.test.ts::charges", "test_path": "tests/payment.test.ts", "symbol_key": "src/payment.ts:charge(int)", "target_path": "src/payment.ts"},
+              {"test_id": "tests/payment.test.ts::charges", "test_path": "tests/payment.test.ts", "symbol_key": "src/payment.ts:charge(int)", "target_path": "src/payment.ts"},
+              {"test_id": "tests/payment.test.ts::refunds", "test_path": "tests/payment.test.ts", "symbol_key": "src/payment.ts:charge(int)", "target_path": "src/payment.ts"}
+            ]}"#,
+    );
+    let report = ingest(&[map], &analysis(), &mut InputBudget::new()).unwrap();
+    assert_eq!(report.relationships.len(), 2, "one row per test id");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rejects_unknown_schemas_malformed_rows_and_missing_arrays() {
+    let root = temporary_directory();
+    let newer = write(
+        &root,
+        "newer.json",
+        r#"{"schema_version": 3, "recorder": "pytest", "recorded_at": "a1b2c3d", "relationships": []}"#,
+    );
+    assert!(ingest(&[newer], &analysis(), &mut InputBudget::new()).is_err());
+    let missing = write(
+        &root,
+        "missing.json",
+        r#"{"schema_version": 2, "recorder": "pytest", "recorded_at": "a1b2c3d"}"#,
+    );
     assert!(ingest(&[missing], &analysis(), &mut InputBudget::new()).is_err());
+    let no_id = write(
+        &root,
+        "no-id.json",
+        r#"{"schema_version": 2, "recorder": "pytest", "recorded_at": "a1b2c3d", "relationships": [
+            {"test_path": "tests/payment.test.ts", "symbol_key": "src/payment.ts:charge(int)"}
+        ]}"#,
+    );
+    let error = ingest(&[no_id], &analysis(), &mut InputBudget::new()).unwrap_err();
+    assert!(error.to_string().contains("missing test_id"), "{error}");
+    let no_key = write(
+        &root,
+        "no-key.json",
+        r#"{"schema_version": 2, "recorder": "pytest", "recorded_at": "a1b2c3d", "relationships": [
+            {"test_id": "tests/payment.test.ts::charges", "test_path": "tests/payment.test.ts"}
+        ]}"#,
+    );
+    let error = ingest(&[no_key], &analysis(), &mut InputBudget::new()).unwrap_err();
+    assert!(error.to_string().contains("missing symbol_key"), "{error}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rejects_maps_recorded_at_different_commits() {
+    let root = temporary_directory();
+    let first = write(&root, "first.json", MAP);
+    let second = write(
+        &root,
+        "second.json",
+        r#"{"schema_version": 2, "recorder": "pytest", "recorded_at": "d4e5f6a", "relationships": []}"#,
+    );
+    let error = ingest(&[first, second], &analysis(), &mut InputBudget::new()).unwrap_err();
+    assert!(error.to_string().contains("d4e5f6a"), "{error}");
     std::fs::remove_dir_all(root).unwrap();
 }

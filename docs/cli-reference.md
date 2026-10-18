@@ -143,7 +143,7 @@ leadline skill
 | `--max-estimate-error-ratio N` | sql-plan | Fail queries whose estimate error grows past ratio `N`. |
 | `--pit FILE` | project, mutation | PIT report input. Repeatable. |
 | `--stryker FILE` | project, mutation | Stryker report input. Repeatable. |
-| `--test-map FILE` | project, mutation | Explicit test-to-code map. Repeatable. |
+| `--test-map FILE` | project, mutation | Explicit test-to-code map, `schema_version: 2`. Repeatable. |
 | `--snapshots FILE` | project | Trend points to attach. |
 | `--include-authors` / `--anonymize-authors` / `--exclude-git-identities` | project | Identity handling; mutually exclusive. |
 | `--fail-on-violation` | policy | Exit `1` when error-severity violations exist. |

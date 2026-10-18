@@ -60,6 +60,19 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ### Changed
 
+- The test map (`--test-map`, `test_relationships` in `project`, `mutation`,
+  and `stats` output) is `schema_version: 2`. A row is
+  `{ test_id, test_path, symbol_key, target_path }` and the file names its
+  `recorder` and the `recorded_at` commit, so a map can identify the test cases
+  that exercised a `symbol_key` instead of only the files that could reach it.
+  The `symbol_key` is authoritative and is resolved against the current
+  analysis; a key that matches nothing keeps its row with a `reason` rather
+  than being dropped. A `schema_version: 1` map is **rejected** with an error
+  naming the version it carried, so an existing hand-written map has to be
+  rewritten; there is no compatibility reader. The report envelope is
+  unchanged — `schema_version` `3` for the analysis envelopes and `1` for the
+  other report families — because the relationship rows carry their own
+  version next to them.
 - The analyze/function/check output schema is `3`: a function row may carry
   `suppressed_metrics`, and `check` output may carry `quality_gate`.
 - The `index.json` schema is `2`: the index mirrors the suppressed dimensions,

@@ -659,9 +659,11 @@ pub fn terminal_mutation(
     if let Some(relationships) = relationships {
         let _ = writeln!(
             output,
-            "  test relationships: {} resolved, {} unresolved",
+            "  test relationships: {} resolved, {} unresolved (recorder {}, recorded at {})",
             relationships.relationships.len() as u64 - relationships.unresolved,
-            relationships.unresolved
+            relationships.unresolved,
+            relationships.recorder,
+            relationships.recorded_at
         );
     }
     output

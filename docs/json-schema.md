@@ -336,6 +336,53 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
   per file (`path`, `score`, `components` with the same six keys);
   it drops `metric_profile`, `analyzer_version`, `head_commit`, and `raw`.
 
+## Test map
+
+`--test-map FILE` (`project`, `mutation`, and `stats`; repeatable) supplies
+explicit test-to-code relationships, rendered as `test_relationships` in
+`project` and `mutation` output. The file is versioned on its own:
+
+```json
+{
+  "schema_version": 2,
+  "recorder": "pytest",
+  "recorded_at": "a1b2c3d",
+  "relationships": [
+    {
+      "test_id": "tests/test_store.py::test_charge_is_idempotent",
+      "test_path": "tests/test_store.py",
+      "symbol_key": "src/store.py:charge(int)",
+      "target_path": "src/store.py"
+    }
+  ]
+}
+```
+
+- `test_id` is the namespaced `path::name` test identifier, supplied by the
+  map and never derived from `test_path`.
+- `symbol_key` is the target, in the key form the analyzer builds
+  (`path:Qualifier.name(Types)` or `path:name/arity`). It is authoritative: it
+  is matched against the analyzed functions, while `target_path` is carried for
+  readability and for the directory escalation, so a stale `target_path` does
+  not unresolve a row whose key still matches.
+- `recorded_at` is the commit the recorded suite ran against and `recorder`
+  names the producer. Maps merged into one report must agree on both.
+- `test_id` and `symbol_key` are required on every row; a v2 file that omits
+  either is rejected.
+- A row whose `symbol_key` matches no analyzed function is kept with
+  `"resolved": false` and a stable `reason`: `unknown symbol key` when nothing
+  matches, `ambiguous symbol key` when more than one function carries it, and
+  `unknown test file` when the test path resolves to nothing. A row is never
+  dropped for being stale: a map recorded in one checkout is read in another.
+- A `schema_version: 1` map is rejected outright with an error naming the
+  version it carried. There is no compatibility reader.
+
+The rendered section is `{ "schema_version": 2, "analyzer_version",
+"recorder", "recorded_at", "relationships", "unresolved" }`, where each
+`relationships` row adds `resolved` and an optional `reason` to the file fields
+above. Only this section's own `schema_version` moves; the envelope around it
+does not.
+
 ## Other reports
 
 The top-level `schema_version` `3` above covers the analyze/function/check
@@ -348,6 +395,8 @@ and changed/diff envelopes. Every other report family carries its own
 - `duplication`: profile `tokens`; normalization and defaults in [metrics.md](metrics.md).
 - `mutation` and `policy`: normalized PIT/Stryker rows and architecture-rule
   drift, described in [cli-reference.md](cli-reference.md).
+- `test_relationships`: the test map above, emitted inside `project` and
+  `mutation` output at its own `schema_version` `2`.
 - Scanner reports: [security-findings.md](security-findings.md),
   [vulnerabilities.md](vulnerabilities.md), [postgresql-risks.md](postgresql-risks.md),
   and [postgresql-plans.md](postgresql-plans.md).

@@ -5,7 +5,7 @@
 | Schema | Current | Bumped when |
 | --- | --- | --- |
 | CLI (flags, commands, exit codes) | 1.6 | A flag, command, or exit code is added, changed, or removed. |
-| JSON schema (`schema_version`) | `3` analysis + `test-targets` / `1` other reports / none in scanner reports | An envelope or function field is added, changed, or removed. |
+| JSON schema (`schema_version`) | `3` analysis + `test-targets` / `1` other reports / `2` test map / none in scanner reports | An envelope or function field is added, changed, or removed. |
 | Metric spec (`metric_profile`, `metric_specs`) | `default` | Any metric rule changes. The profile name does not version; metric changes ride the release version plus a changelog entry describing the delta. |
 | MCP tools | 1.8 | A tool, input, or output shape changes. |
 
