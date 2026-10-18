@@ -69,6 +69,9 @@ impl BaselineFunction {
             },
             contributions: Vec::new(),
             suppressed_metrics: Vec::new(),
+            // A baseline stores no symbol key, and this row never came from a
+            // parse: it exists only to carry the gate metrics into
+            // `regression_violates`, which reads none of the identity fields.
             symbol_key: String::new(),
             source_fingerprint: 0,
         }

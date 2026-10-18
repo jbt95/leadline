@@ -685,10 +685,13 @@ fn analyze_node(
     let name = function_name(node, language, source);
     let recursive = !name.starts_with('<') && calls_self(node, language, &name, source);
     let parameters = function_parameters(node, language, source);
-    // The key needs both the path and the resolved name, so it is built here
-    // where `function_id` is built too, not in the parser arms.
+    let qualifier = enclosing_scope(node, language, source);
+    // The key needs the path, the enclosing scope, and the resolved name, so
+    // it is built here where `function_id` is built too, not in the parser
+    // arms.
     let symbol_key = model::symbol::symbol_key(&model::symbol::SymbolParts {
         path: display_path,
+        qualifier: qualifier.as_deref(),
         name: &name,
         arity: parameters.count,
         parameter_types: &parameters.types,
@@ -713,6 +716,120 @@ fn analyze_node(
         },
         source,
     )
+}
+
+/// The enclosing named scopes of `node`, outermost first, joined with `.`.
+///
+/// Only names enter the chain. A position or index would move the key on an
+/// unrelated edit above the function, and surviving those edits is the key's
+/// whole point. An enclosing anonymous function is named
+/// `<anonymous@LINE:COLUMN>`, so it is skipped rather than spelled; the chain
+/// keeps the nearest named scopes above it.
+fn enclosing_scope(node: Node<'_>, language: Language, source: &[u8]) -> Option<String> {
+    let mut names = Vec::new();
+    // Go is the one grammar whose qualifier sits on the function node itself:
+    // a method's receiver type. Elsewhere the node is the function, and a
+    // function must never name its own scope.
+    if language == Language::Go
+        && let Some(name) = go_receiver_type(node, source)
+    {
+        names.push(name);
+    }
+    let mut ancestor = node.parent();
+    while let Some(current) = ancestor {
+        if let Some(name) = scope_name(node, current, language, source) {
+            names.push(name);
+        }
+        ancestor = current.parent();
+    }
+    if names.is_empty() {
+        return None;
+    }
+    names.reverse();
+    Some(names.join("."))
+}
+
+/// The receiver type of a Go `method_declaration`, `None` for any other node.
+///
+/// The receiver is a `parameter_list` holding one parameter declaration, so
+/// the spelling is that declaration's type: `User` or `*User`.
+fn go_receiver_type(node: Node<'_>, source: &[u8]) -> Option<String> {
+    if node.kind() != "method_declaration" {
+        return None;
+    }
+    let receiver = node.child_by_field_name("receiver")?;
+    let mut cursor = receiver.walk();
+    let parameter = receiver.named_children(&mut cursor).next()?;
+    parameter
+        .child_by_field_name("type")
+        .map(|kind| node_text(kind, source).to_owned())
+}
+
+/// The name `ancestor` contributes to the scope chain around `node`, if any.
+///
+/// One named scope per language, plus every enclosing function: two
+/// same-named methods on different receivers, or two classes in one file, are
+/// ordinary rather than exotic, and the qualifier is what separates them.
+fn scope_name(
+    node: Node<'_>,
+    ancestor: Node<'_>,
+    language: Language,
+    source: &[u8],
+) -> Option<String> {
+    if is_function_kind(ancestor, ancestor.kind(), language) {
+        let name = function_name(ancestor, language, source);
+        return (!name.starts_with('<')).then_some(name);
+    }
+    let field = match language {
+        Language::Go => return None,
+        Language::Java => match ancestor.kind() {
+            "class_declaration"
+            | "interface_declaration"
+            | "enum_declaration"
+            | "record_declaration" => "name",
+            _ => return None,
+        },
+        Language::Rust => match ancestor.kind() {
+            // `impl Trait for Type` keys under the implemented type, the way
+            // `rust_is_method` reads the same pair.
+            "impl_item" => "type",
+            "trait_item" => "name",
+            _ => return None,
+        },
+        Language::JavaScript | Language::TypeScript | Language::Tsx => match ancestor.kind() {
+            "class_declaration" | "class" => "name",
+            // A member of a bound object (`const store = { save() {} }`) keys
+            // under the binding, and a nested object under each of its keys.
+            // A function bound directly to the declarator already takes that
+            // name from `function_name`, so it is skipped rather than
+            // repeated.
+            "variable_declarator" | "pair" => {
+                let field = if ancestor.kind() == "pair" {
+                    "key"
+                } else {
+                    "name"
+                };
+                let value = ancestor.child_by_field_name("value");
+                if value.is_some_and(|value| value.id() == node.id()) {
+                    return None;
+                }
+                field
+            }
+            _ => return None,
+        },
+        Language::Python => match ancestor.kind() {
+            "class_definition" => "name",
+            _ => return None,
+        },
+        Language::C | Language::Cpp => match ancestor.kind() {
+            "class_specifier" | "struct_specifier" | "namespace_definition" => "name",
+            _ => return None,
+        },
+        Language::Zig => return None,
+    };
+    ancestor
+        .child_by_field_name(field)
+        .map(|name| node_text(name, source).to_owned())
 }
 
 fn function_kind(node: Node<'_>, language: Language) -> FunctionKind {
@@ -2374,9 +2491,113 @@ mod tests {
         assert_eq!(
             keys,
             [
-                "src/Billing.java:charge(int)",
-                "src/Billing.java:charge(String)",
+                "src/Billing.java:Billing.charge(int)",
+                "src/Billing.java:Billing.charge(String)",
             ]
+        );
+    }
+
+    #[test]
+    fn symbol_key_qualifies_same_named_methods_on_different_receivers() {
+        let go = crate::analyze_source(
+            "store.go",
+            b"package store\n\ntype User struct{}\n\ntype Order struct{}\n\nfunc (u User) Save() {}\n\nfunc (o Order) Save() {}\n",
+        )
+        .unwrap();
+        let keys: Vec<&str> = go
+            .functions
+            .iter()
+            .map(|function| function.symbol_key.as_str())
+            .collect();
+        assert_eq!(keys, ["store.go:User.Save/0", "store.go:Order.Save/0"]);
+    }
+
+    #[test]
+    fn symbol_key_qualifies_two_classes_in_one_file() {
+        let java = crate::analyze_source(
+            "src/Charge.java",
+            b"class A {\n  void charge(int cents) {}\n}\nclass B {\n  void charge(int cents) {}\n}\n",
+        )
+        .unwrap();
+        let keys: Vec<&str> = java
+            .functions
+            .iter()
+            .map(|function| function.symbol_key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "src/Charge.java:A.charge(int)",
+                "src/Charge.java:B.charge(int)"
+            ]
+        );
+    }
+
+    #[test]
+    fn symbol_key_chains_the_enclosing_function_of_a_nested_function() {
+        let python = crate::analyze_source(
+            "src/jobs.py",
+            b"class Worker:\n    def run(self):\n        def step():\n            pass\n        return step\n",
+        )
+        .unwrap();
+        let keys: Vec<&str> = python
+            .functions
+            .iter()
+            .map(|function| function.symbol_key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            ["src/jobs.py:Worker.run/1", "src/jobs.py:Worker.run.step/0",]
+        );
+    }
+
+    #[test]
+    fn symbol_key_qualifies_rust_impl_and_typescript_class_members() {
+        let rust = crate::analyze_source(
+            "src/store.rs",
+            b"struct User;\nstruct Order;\nimpl User {\n    fn save(&self) {}\n}\nimpl Order {\n    fn save(&self) {}\n}\n",
+        )
+        .unwrap();
+        let keys: Vec<&str> = rust
+            .functions
+            .iter()
+            .map(|function| function.symbol_key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            ["src/store.rs:User.save/0", "src/store.rs:Order.save/0"]
+        );
+
+        let typescript = crate::analyze_source(
+            "src/store.ts",
+            b"class User {\n  save(cents: number) {}\n}\nconst order = {\n  save: (cents: number) => cents,\n};\n",
+        )
+        .unwrap();
+        let keys: Vec<&str> = typescript
+            .functions
+            .iter()
+            .map(|function| function.symbol_key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "src/store.ts:User.save(number)",
+                "src/store.ts:order.save(number)",
+            ]
+        );
+    }
+
+    #[test]
+    fn symbol_key_leaves_a_top_level_function_unqualified() {
+        let rust = crate::analyze_source("src/lib.rs", b"fn charge(cents: u32) {}\n").unwrap();
+        assert_eq!(rust.functions[0].symbol_key, "src/lib.rs:charge(u32)");
+
+        let typescript =
+            crate::analyze_source("web/app.ts", b"const charge = (cents: number) => cents;\n")
+                .unwrap();
+        assert_eq!(
+            typescript.functions[0].symbol_key,
+            "web/app.ts:charge(number)"
         );
     }
 
