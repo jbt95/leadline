@@ -26,4 +26,5 @@ report = { path = "../report" }
 serde.workspace = true
 serde_json.workspace = true
 surfaces = { path = "../surfaces" }
+tia = { path = "../tia" }
 update = { path = "../update" }

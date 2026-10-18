@@ -426,6 +426,7 @@ dependencies = [
  "serde",
  "serde_json",
  "surfaces",
+ "tia",
  "update",
 ]
 

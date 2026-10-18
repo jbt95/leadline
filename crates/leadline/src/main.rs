@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
+use tia::select::{Selection, SelectionRequest, Tier, select};
 
 /// CLI failure carrying a stable exit code.
 ///
@@ -118,7 +119,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, CliError> {
 }
 
 /// Every command [`dispatch_command`] accepts, so metric labels stay bounded.
-const CLI_OPERATIONS: [&str; 32] = [
+const CLI_OPERATIONS: [&str; 33] = [
     "analyze",
     "function",
     "changed",
@@ -133,6 +134,7 @@ const CLI_OPERATIONS: [&str; 32] = [
     "unused",
     "report",
     "impact",
+    "select-tests",
     "test-targets",
     "project",
     "debt",
@@ -241,6 +243,7 @@ fn dispatch_command(args: Vec<String>) -> Result<ExitCode, CliError> {
         "report" => report_command(&args[1..]),
         "unused" => unused_command(&args[1..]),
         "impact" => impact_command(&args[1..]),
+        "select-tests" => select_tests_command(&args[1..]),
         "test-targets" => test_targets_command(&args[1..]),
         "project" => project_command(&args[1..]),
         "debt" => debt_command(&args[1..]),
@@ -3214,6 +3217,198 @@ fn test_targets_command(args: &[String]) -> Result<ExitCode, CliError> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Selects the test files a change can affect, without running anything.
+///
+/// `--staged` fixes the base at `HEAD` through [`analysis::diff::comparison_options`],
+/// the shared definition of what a staged comparison means, and an explicit
+/// `--base` is exclusive with it. `--max-ratio` is a diagnostic: it warns on
+/// stderr and never changes the exit code, so a selection that got wide stays
+/// pipable into a runner.
+fn select_tests_command(args: &[String]) -> Result<ExitCode, CliError> {
+    let mut path = PathBuf::from(".");
+    let mut seen_path = false;
+    let mut base: Option<String> = None;
+    let mut staged = false;
+    let mut json = false;
+    let mut agent_json = false;
+    let mut list = false;
+    let mut explain = false;
+    let mut max_ratio: Option<f64> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--staged" => staged = true,
+            "--explain" => explain = true,
+            "--base" => {
+                index += 1;
+                base = Some(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--base requires a revision"))?
+                        .clone(),
+                );
+            }
+            "--format" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::usage("--format requires a value"))?;
+                match value.as_str() {
+                    "json" => json = true,
+                    "agent-json" => agent_json = true,
+                    "list" => list = true,
+                    other => {
+                        return Err(CliError::usage(format!(
+                            "unknown --format '{other}': expected 'json', 'agent-json', or 'list'"
+                        )));
+                    }
+                }
+            }
+            "--path" => {
+                index += 1;
+                path = PathBuf::from(
+                    args.get(index)
+                        .ok_or_else(|| CliError::usage("--path requires a directory"))?,
+                );
+                seen_path = true;
+            }
+            "--max-ratio" => {
+                index += 1;
+                max_ratio = Some(parse_ratio(args.get(index), "--max-ratio")?);
+            }
+            value if !value.starts_with('-') && !seen_path => {
+                path = PathBuf::from(value);
+                seen_path = true;
+            }
+            value => {
+                return Err(unknown_option("select-tests", value));
+            }
+        }
+        index += 1;
+    }
+    if staged && base.is_some() {
+        return Err(CliError::usage("--staged and --base are exclusive"));
+    }
+    let (base, target) = if staged {
+        analysis::diff::comparison_options(&model::security::ChangeComparison::Staged)
+    } else {
+        (
+            base.unwrap_or_else(|| "HEAD~1".to_owned()),
+            analysis::diff::ComparisonTarget::Worktree,
+        )
+    };
+    let config = load_config_for(&path)?;
+    let tia = config
+        .as_ref()
+        .map(|selected| selected.tia.clone())
+        .unwrap_or_default();
+    let excludes = analysis_excludes(config.as_ref());
+    let options = analysis::diff::ChangeOptions {
+        base,
+        target,
+        detect_renames: false,
+    };
+    let selection = select(&SelectionRequest {
+        path: &path,
+        options: &options,
+        config: &tia,
+        excludes,
+    })
+    .map_err(|error| CliError::incomplete(error.to_string()))?;
+    if let Some(max) = max_ratio
+        && selection.totals.ratio > max
+    {
+        eprintln!(
+            "leadline: warning: selected {} of {} test files (ratio {:.3}) exceeds --max-ratio {max}",
+            selection.totals.selected, selection.totals.test_files, selection.totals.ratio
+        );
+    }
+    if list {
+        // Bare paths, one per line, and nothing else: this is the pipeline form,
+        // and a header or an escalation summary here would break the runner it
+        // is piped into.
+        for test in &selection.selected {
+            println!("{}", test.path);
+        }
+    } else if agent_json {
+        let value = serde_json::to_value(&selection)
+            .map_err(|error| CliError::internal(error.to_string()))?;
+        print_json(&value, false)?;
+    } else if json {
+        print_json(&selection, true)?;
+    } else {
+        print!("{}", terminal_selection(&selection, explain));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Parse `--max-ratio N` as a fraction of the test files.
+fn parse_ratio(raw: Option<&String>, flag: &str) -> Result<f64, CliError> {
+    let value = parse_floor(raw, flag)?;
+    if !(0.0..=1.0).contains(&value) {
+        return Err(CliError::usage(format!(
+            "{flag} must be a fraction between 0.0 and 1.0"
+        )));
+    }
+    Ok(value)
+}
+
+/// The ladder tier as the contract JSON spells it, so the terminal `--explain`
+/// line and `--format json` cannot name the same tier differently.
+fn tier_label(tier: Tier) -> &'static str {
+    match tier {
+        Tier::Graph => "graph",
+        Tier::Directory => "directory",
+        Tier::All => "all",
+    }
+}
+
+/// Human view of a selection: the totals, the escalation, and one row per
+/// selected test. `--explain` adds the tier and the changed files that reached
+/// the test, which the selection already carries.
+fn terminal_selection(selection: &Selection, explain: bool) -> String {
+    use std::fmt::Write;
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "Test selection ({} changed, {} of {} test files, ratio {:.3}) against {}",
+        selection.changed.len(),
+        selection.totals.selected,
+        selection.totals.test_files,
+        selection.totals.ratio,
+        selection.base
+    );
+    match &selection.escalation {
+        Some(escalation) => {
+            let _ = writeln!(
+                output,
+                "Escalation: {} ({})",
+                tier_label(escalation.tier),
+                escalation.reasons.join("; ")
+            );
+        }
+        None => output.push_str("Escalation: none\n"),
+    }
+    if selection.selected.is_empty() {
+        output.push_str("No test files selected.\n");
+        return output;
+    }
+    for test in &selection.selected {
+        if explain {
+            let via: Vec<&str> = test.via.iter().map(String::as_str).collect();
+            let _ = writeln!(
+                output,
+                "  {} [{}] via {}",
+                test.path,
+                tier_label(test.tier),
+                via.join(", ")
+            );
+        } else {
+            let _ = writeln!(output, "  {}", test.path);
+        }
+    }
+    output
+}
+
 fn doctor_command(args: &[String]) -> Result<ExitCode, CliError> {
     let mut path = PathBuf::from(".");
     let mut seen_path = false;
@@ -4052,7 +4247,7 @@ fn usage() -> &'static str {
     "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE] [--index DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--sarif FILE] [--baseline-sarif FILE] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--osv FILE] [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--sql] [--sql-fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE] [--index DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE]
   leadline security [PATH] --sarif FILE [--baseline-sarif FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--json] [--format agent-json|sarif] [--top N]\n  leadline risk [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE]\n  leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]
   leadline dependencies [PATH] [--json] [--format agent-json]
-  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline sql [PATH] [--large-offset N] [--migration-root DIR] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline vulnerabilities [PATH] --osv FILE [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline sql-plan --current DIR --baseline DIR [--max-cost-increase-percent N] [--max-plan-rows-ratio N] [--max-estimate-error-ratio N] [--json] [--format agent-json|sarif] [--top N]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE | --cobertura FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE]\n  leadline mcp [--port [N] [--host ADDR]]\n  leadline stats [PATH] [--port [N]] [--host ADDR] [--open] [--since 30d|90d|365d] [--target REV] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE]\n  leadline index [PATH] [--output DIR] [--verify] [--json]\n  leadline skill\n  leadline update [--integrations]\n  leadline version\n  leadline --version"
+  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline select-tests [PATH] [--base REV] [--staged] [--format json|agent-json|list] [--explain] [--max-ratio N]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline sql [PATH] [--large-offset N] [--migration-root DIR] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline vulnerabilities [PATH] --osv FILE [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline sql-plan --current DIR --baseline DIR [--max-cost-increase-percent N] [--max-plan-rows-ratio N] [--max-estimate-error-ratio N] [--json] [--format agent-json|sarif] [--top N]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE | --cobertura FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE]\n  leadline mcp [--port [N] [--host ADDR]]\n  leadline stats [PATH] [--port [N]] [--host ADDR] [--open] [--since 30d|90d|365d] [--target REV] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE]\n  leadline index [PATH] [--output DIR] [--verify] [--json]\n  leadline skill\n  leadline update [--integrations]\n  leadline version\n  leadline --version"
 }
 
 #[cfg(test)]
