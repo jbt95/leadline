@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Leadline measures function-level complexity locally and deterministically — before you open the PR. It does not verify behaviour; your tests still own that."
+    />
+    <title>leadline · measure complexity before the PR</title>
+    <link rel="icon" type="image/svg+xml" href="./logo.svg" />
+  </head>
+  <body class="bg-void text-ink antialiased">
+    <a
+      href="#main"
+      class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded focus:border focus:border-accent focus:bg-void focus:px-3 focus:py-2"
+      >Skip to content</a
+    >
+
+    <!-- Essential content without JavaScript -->
+    <noscript>
+      <header class="border-b border-rule px-4 py-6 font-mono text-sm">
+        <p class="text-accent">leadline</p>
+        <h1 class="mt-2 text-xl text-ink">Measure complexity before the PR.</h1>
+        <p class="mt-2 max-w-xl text-muted">
+          Leadline measures complexity. It doesn&rsquo;t verify behaviour &mdash; your tests still own that.
+        </p>
+        <p class="mt-4">
+          <a class="text-accent underline" href="https://github.com/jbt95/leadline">GitHub</a>
+        </p>
+        <pre class="mt-4 overflow-x-auto rounded border border-rule bg-panel p-3 text-xs">curl -fsSL https://raw.githubusercontent.com/jbt95/leadline/main/install.sh | sh
+leadline analyze .
+leadline changed --base origin/main --format agent-json</pre>
+      </header>
+      <main id="main" class="px-4 py-8 font-mono text-sm text-muted">
+        <p>
+          Local, deterministic Rust CLI. Ten languages. Read-only MCP. Skills and hooks for agent harnesses.
+          MIT license.
+        </p>
+        <p class="mt-4">
+          Enable JavaScript for the interactive terminal demo and isometric visualization, or read the
+          <a class="text-accent underline" href="https://github.com/jbt95/leadline">README</a>.
+        </p>
+      </main>
+    </noscript>
+
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
