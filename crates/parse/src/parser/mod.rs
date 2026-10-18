@@ -477,10 +477,11 @@ fn discover_tree<'tree>(
 ) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        if is_function(node, language) {
+        let kind = node.kind();
+        if is_function_kind(node, kind, language) {
             functions.push(node);
         }
-        if let Some(comment) = suppression_comment(node, source) {
+        if let Some(comment) = suppression_comment(node, kind, source) {
             comments.push(comment);
         }
         if node.is_error() || node.is_missing() {
@@ -511,8 +512,8 @@ struct SuppressionComment {
 }
 
 /// The suppression comment `node` carries, when it is a comment at all.
-fn suppression_comment(node: Node<'_>, source: &[u8]) -> Option<SuppressionComment> {
-    if !node.kind().contains("comment") {
+fn suppression_comment(node: Node<'_>, kind: &str, source: &[u8]) -> Option<SuppressionComment> {
+    if !kind.contains("comment") {
         return None;
     }
     parse_suppression_comment(node, source)
@@ -674,16 +675,24 @@ fn analyze_node(
     source: &[u8],
     suppressed_metrics: Vec<model::core::SuppressionMetric>,
 ) -> model::core::FunctionAnalysis {
+    let name = function_name(node, language, source);
     let mut events = Vec::new();
     let mut logical_loc = 0;
-    walk_function(node, language, source, &mut logical_loc, &mut events);
+    let mut recursive = false;
+    walk_function(
+        node,
+        language,
+        source,
+        &mut logical_loc,
+        &mut events,
+        (!name.starts_with('<')).then_some(name.as_str()),
+        &mut recursive,
+    );
     let start_line = node.start_position().row as u32 + 1;
     let end_line = node.end_position().row as u32 + 1;
     let kind = function_kind(node, language);
     let start_byte = node.start_byte() as u64;
     let end_byte = node.end_byte() as u64;
-    let name = function_name(node, language, source);
-    let recursive = !name.starts_with('<') && calls_self(node, language, &name, source);
     let parameters = function_parameters(node, language, source);
     let qualifier = enclosing_scope(node, language, source);
     // The key needs the path, the enclosing scope, and the resolved name, so
@@ -874,6 +883,8 @@ fn walk_function(
     source: &[u8],
     logical_loc: &mut u32,
     events: &mut Vec<Event>,
+    self_name: Option<&str>,
+    recursive: &mut bool,
 ) {
     let mut next_sequence = 0;
     let mut stack = vec![(root, 0, false)];
@@ -893,6 +904,14 @@ fn walk_function(
                 });
             }
             continue;
+        }
+
+        if !*recursive
+            && let Some(name) = self_name
+            && let Some(callee) = recursion_callee(node, kind, language, source)
+            && node_text(callee, source) == name
+        {
+            *recursive = true;
         }
 
         if is_logical_loc(node, kind, language) {
@@ -1394,169 +1413,158 @@ fn function_name(node: Node<'_>, language: Language, source: &[u8]) -> String {
     format!("<anonymous@{}:{}>", point.row + 1, point.column + 1)
 }
 
-/// True when the function body calls itself by name (direct recursion).
+/// Callee identifier node for a direct self call at `node`, when one exists.
 ///
-/// Nested function bodies are skipped, mirroring `walk_function`: a call
-/// inside a nested function is never attributed to the outer one.
+/// Nested function bodies are skipped by `walk_function` before this runs.
 /// `super`-qualified calls are excluded (parent-class dispatch, not a cycle).
-fn calls_self(root: Node<'_>, language: Language, name: &str, source: &[u8]) -> bool {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if node.id() != root.id() && is_function(node, language) {
-            continue;
+fn recursion_callee<'a>(
+    node: Node<'a>,
+    kind: &str,
+    language: Language,
+    source: &'a [u8],
+) -> Option<Node<'a>> {
+    match language {
+        Language::Java => {
+            if kind == "method_invocation" {
+                let is_super = node
+                    .child_by_field_name("object")
+                    .is_some_and(|object| node_text(object, source) == "super");
+                if is_super {
+                    None
+                } else {
+                    node.child_by_field_name("name")
+                }
+            } else {
+                None
+            }
         }
-        let callee = match language {
-            Language::Java => {
-                if node.kind() == "method_invocation" {
-                    let is_super = node
-                        .child_by_field_name("object")
-                        .is_some_and(|object| node_text(object, source) == "super");
-                    if is_super {
-                        None
+        Language::JavaScript | Language::TypeScript | Language::Tsx => {
+            if kind == "call_expression" {
+                node.child_by_field_name("function")
+                    .and_then(|function| match function.kind() {
+                        "identifier" => Some(function),
+                        "member_expression" => {
+                            let is_super = function
+                                .child_by_field_name("object")
+                                .is_some_and(|object| node_text(object, source) == "super");
+                            if is_super {
+                                None
+                            } else {
+                                function.child_by_field_name("property")
+                            }
+                        }
+                        _ => None,
+                    })
+            } else {
+                None
+            }
+        }
+        Language::Go => {
+            if kind == "call_expression" {
+                node.child_by_field_name("function")
+                    .and_then(|function| match function.kind() {
+                        "identifier" => Some(function),
+                        "selector_expression" => function.child_by_field_name("field"),
+                        _ => None,
+                    })
+            } else {
+                None
+            }
+        }
+        // C and C++ accept a bare call and a scoped `Type::method` path;
+        // only a `this->method()` receiver is the current type's own
+        // dispatch, so a call on another object is not a cycle.
+        Language::C | Language::Cpp => {
+            if kind == "call_expression" {
+                node.child_by_field_name("function")
+                    .and_then(|function| match function.kind() {
+                        "identifier" => Some(function),
+                        "qualified_identifier" => function.child_by_field_name("name"),
+                        "field_expression" => {
+                            let is_self = function
+                                .child_by_field_name("argument")
+                                .is_some_and(|argument| node_text(argument, source) == "this");
+                            if is_self {
+                                function.child_by_field_name("field")
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    })
+            } else {
+                None
+            }
+        }
+        Language::Zig => {
+            if kind == "call_expression" {
+                node.child_by_field_name("function")
+                    .filter(|function| function.kind() == "identifier")
+            } else {
+                None
+            }
+        }
+        // Rust accepts a bare call, a scoped `Type::method` path, and a
+        // receiver call, but only `self.method()` is the current type's
+        // own dispatch; `other.method()` is not a cycle. A turbofish call
+        // (`count::<T>()`) reports the callee as a `generic_function`.
+        Language::Rust => {
+            if kind == "call_expression" {
+                node.child_by_field_name("function").and_then(|function| {
+                    let function = if function.kind() == "generic_function" {
+                        function.child_by_field_name("function")?
                     } else {
-                        node.child_by_field_name("name")
+                        function
+                    };
+                    match function.kind() {
+                        "identifier" => Some(function),
+                        "scoped_identifier" => function.child_by_field_name("name"),
+                        "field_expression" => {
+                            let is_self = function
+                                .child_by_field_name("value")
+                                .is_some_and(|value| value.kind() == "self");
+                            if is_self {
+                                function.child_by_field_name("field")
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
                     }
-                } else {
-                    None
-                }
+                })
+            } else {
+                None
             }
-            Language::JavaScript | Language::TypeScript | Language::Tsx => {
-                if node.kind() == "call_expression" {
-                    node.child_by_field_name("function").and_then(|function| {
-                        match function.kind() {
-                            "identifier" => Some(function),
-                            "member_expression" => {
-                                let is_super = function
-                                    .child_by_field_name("object")
-                                    .is_some_and(|object| node_text(object, source) == "super");
-                                if is_super {
-                                    None
-                                } else {
-                                    function.child_by_field_name("property")
-                                }
-                            }
-                            _ => None,
-                        }
-                    })
-                } else {
-                    None
-                }
-            }
-            Language::Go => {
-                if node.kind() == "call_expression" {
-                    node.child_by_field_name("function").and_then(|function| {
-                        match function.kind() {
-                            "identifier" => Some(function),
-                            "selector_expression" => function.child_by_field_name("field"),
-                            _ => None,
-                        }
-                    })
-                } else {
-                    None
-                }
-            }
-            // C and C++ accept a bare call and a scoped `Type::method` path;
-            // only a `this->method()` receiver is the current type's own
-            // dispatch, so a call on another object is not a cycle.
-            Language::C | Language::Cpp => {
-                if node.kind() == "call_expression" {
-                    node.child_by_field_name("function").and_then(|function| {
-                        match function.kind() {
-                            "identifier" => Some(function),
-                            "qualified_identifier" => function.child_by_field_name("name"),
-                            "field_expression" => {
-                                let is_self = function
-                                    .child_by_field_name("argument")
-                                    .is_some_and(|argument| node_text(argument, source) == "this");
-                                if is_self {
-                                    function.child_by_field_name("field")
-                                } else {
-                                    None
-                                }
-                            }
-                            _ => None,
-                        }
-                    })
-                } else {
-                    None
-                }
-            }
-            Language::Zig => {
-                if node.kind() == "call_expression" {
-                    node.child_by_field_name("function")
-                        .filter(|function| function.kind() == "identifier")
-                } else {
-                    None
-                }
-            }
-            // Rust accepts a bare call, a scoped `Type::method` path, and a
-            // receiver call, but only `self.method()` is the current type's
-            // own dispatch; `other.method()` is not a cycle. A turbofish call
-            // (`count::<T>()`) reports the callee as a `generic_function`.
-            Language::Rust => {
-                if node.kind() == "call_expression" {
-                    node.child_by_field_name("function").and_then(|function| {
-                        let function = if function.kind() == "generic_function" {
-                            function.child_by_field_name("function")?
-                        } else {
-                            function
-                        };
-                        match function.kind() {
-                            "identifier" => Some(function),
-                            "scoped_identifier" => function.child_by_field_name("name"),
-                            "field_expression" => {
-                                let is_self = function
-                                    .child_by_field_name("value")
-                                    .is_some_and(|value| value.kind() == "self");
-                                if is_self {
-                                    function.child_by_field_name("field")
-                                } else {
-                                    None
-                                }
-                            }
-                            _ => None,
-                        }
-                    })
-                } else {
-                    None
-                }
-            }
-            // Python accepts a bare call and a `self.method()` receiver call;
-            // an absolute-import-style module call (`os.path.join`) is another
-            // module's function, never a cycle.
-            Language::Python => {
-                if node.kind() == "call" {
-                    node.child_by_field_name("function").and_then(|function| {
-                        match function.kind() {
-                            "identifier" => Some(function),
-                            "attribute" => {
-                                let is_self =
-                                    function
-                                        .child_by_field_name("object")
-                                        .is_some_and(|object| {
-                                            object.kind() == "identifier"
-                                                && node_text(object, source) == "self"
-                                        });
-                                if is_self {
-                                    function.child_by_field_name("attribute")
-                                } else {
-                                    None
-                                }
-                            }
-                            _ => None,
-                        }
-                    })
-                } else {
-                    None
-                }
-            }
-        };
-        if callee.is_some_and(|callee| node_text(callee, source) == name) {
-            return true;
         }
-        push_children_reversed(node, &mut stack);
+        // Python accepts a bare call and a `self.method()` receiver call;
+        // an absolute-import-style module call (`os.path.join`) is another
+        // module's function, never a cycle.
+        Language::Python => {
+            if kind == "call" {
+                node.child_by_field_name("function")
+                    .and_then(|function| match function.kind() {
+                        "identifier" => Some(function),
+                        "attribute" => {
+                            let is_self =
+                                function
+                                    .child_by_field_name("object")
+                                    .is_some_and(|object| {
+                                        object.kind() == "identifier"
+                                            && node_text(object, source) == "self"
+                                    });
+                            if is_self {
+                                function.child_by_field_name("attribute")
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    })
+            } else {
+                None
+            }
+        }
     }
-    false
 }
 
 /// Parameter count plus the type spellings the grammar exposes for them.
