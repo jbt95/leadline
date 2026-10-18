@@ -527,3 +527,34 @@ fn impact_counts_matches_per_target_reports() {
         }
     }
 }
+
+#[test]
+fn reverse_reachability_attributes_every_source_over_one_untruncated_walk() {
+    use analysis::impact::reverse_reachability;
+    use std::collections::BTreeSet;
+
+    fn attributed<'graph>(set: &BTreeSet<&'graph str>) -> Vec<&'graph str> {
+        set.iter().copied().collect()
+    }
+
+    let graph = fixture_chain();
+    let reached = reverse_reachability(&graph, ["b.ts", "d.ts"]);
+
+    // The whole closure, not a truncated display list: `a`, `x`, `c`, and `d`
+    // are all reachable from `b`, and a limit of 2 would have cut three of
+    // them from `analyze_impact`.
+    assert!(analyze_impact(&graph, "b.ts", 2).unwrap().truncated);
+    assert_eq!(reached.len(), 5);
+    // Every reached file carries the sources that reach it, not the path that
+    // reached it.
+    assert_eq!(attributed(&reached["a.ts"]), ["b.ts"]);
+    assert_eq!(attributed(&reached["x.ts"]), ["b.ts"]);
+    assert_eq!(attributed(&reached["c.ts"]), ["b.ts"]);
+    // `d` is reachable from `b` and is a source itself, so both are recorded.
+    assert_eq!(attributed(&reached["d.ts"]), ["b.ts", "d.ts"]);
+    // A source reaches itself at distance zero, and one that is not in the
+    // graph reaches nothing beyond itself.
+    assert_eq!(attributed(&reached["b.ts"]), ["b.ts"]);
+    let absent = reverse_reachability(&graph, ["missing.ts"]);
+    assert_eq!(attributed(&absent["missing.ts"]), ["missing.ts"]);
+}

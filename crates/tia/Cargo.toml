@@ -22,3 +22,7 @@ codegraph = { path = "../codegraph" }
 config = { path = "../config" }
 model = { path = "../model" }
 parse = { path = "../parse" }
+# The selection shapes are the `select-tests` output contract, so the producing
+# crate owns them and the command serializes them, as every other report crate
+# in the workspace does.
+serde = { workspace = true }

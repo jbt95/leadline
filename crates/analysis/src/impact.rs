@@ -72,6 +72,39 @@ pub struct ImpactCounts {
     pub blast_radius_percent: f64,
 }
 
+/// Every file reachable from any of `targets` by reverse edges, mapped to the
+/// targets that reach it.
+///
+/// One shared reverse map and one walk for *all* targets, so the cost is
+/// linear in the graph rather than multiplicative in the number of targets;
+/// `analyze_impact` rebuilds the map and re-walks per target. The result is
+/// never truncated — callers that would pass a display `limit` to
+/// `analyze_impact` use this instead. A target is its own entry at distance
+/// zero, and a target absent from `graph` simply reaches nothing.
+pub fn reverse_reachability<'graph>(
+    graph: &'graph DependencyReport,
+    targets: impl IntoIterator<Item = &'graph str>,
+) -> BTreeMap<&'graph str, BTreeSet<&'graph str>> {
+    let reverse = reverse_adjacency(graph);
+    let mut reached: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut queue: VecDeque<(&str, &str)> = VecDeque::new();
+    for target in targets {
+        reached.entry(target).or_default().insert(target);
+        queue.push_back((target, target));
+    }
+    while let Some((node, source)) = queue.pop_front() {
+        let Some(dependents) = reverse.get(node) else {
+            continue;
+        };
+        for &dependent in dependents {
+            if reached.entry(dependent).or_default().insert(source) {
+                queue.push_back((dependent, source));
+            }
+        }
+    }
+    reached
+}
+
 fn reverse_adjacency(graph: &DependencyReport) -> BTreeMap<&str, Vec<&str>> {
     let mut reverse: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for edge in &graph.edges {

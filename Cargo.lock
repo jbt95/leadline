@@ -774,6 +774,7 @@ dependencies = [
  "config",
  "model",
  "parse",
+ "serde",
 ]
 
 [[package]]
