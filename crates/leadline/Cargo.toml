@@ -13,6 +13,8 @@ categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 blake3.workspace = true
+config = { path = "../config" }
+git = { path = "../git" }
 ignore.workspace = true
 model = { path = "../model" }
 quick-xml.workspace = true

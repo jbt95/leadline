@@ -1,6 +1,6 @@
 mod common;
 
-use leadline::config::Severity;
+use config::Severity;
 use leadline::graph::{
     DEPENDENCY_SCHEMA_VERSION, DependencyEdge, DependencyFile, DependencyReport,
 };

@@ -614,9 +614,9 @@ pub fn terminal_policy(report: &crate::policy::PolicyReport) -> String {
             output,
             "  {:8} {} -> {} ({}){}",
             match violation.severity {
-                crate::config::Severity::Info => "info",
-                crate::config::Severity::Warning => "warning",
-                crate::config::Severity::Error => "error",
+                config::Severity::Info => "info",
+                config::Severity::Warning => "warning",
+                config::Severity::Error => "error",
             },
             violation.source,
             violation.target,

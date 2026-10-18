@@ -442,7 +442,7 @@ fn violations(metrics: &FunctionMetrics, thresholds: &Thresholds) -> Vec<(&'stat
 pub fn regression_violations<'a>(
     before: &model::core::FunctionAnalysis,
     after: &model::core::FunctionAnalysis,
-    limits: &crate::config::RegressionLimits,
+    limits: &config::RegressionLimits,
     path: &'a str,
 ) -> Vec<FunctionViolation<'a>> {
     let dimensions = crate::diff::regression_dimensions(before, after, limits);

@@ -5,7 +5,7 @@
 //! dead export, an unreachable file, two files forming an unreachable cycle, a
 //! test file, and one used plus one unused dependency.
 
-use leadline::config::UnusedConfig;
+use config::UnusedConfig;
 use leadline::unused::{UNUSED_SCHEMA_VERSION, UnusedReport, analyze_unused};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

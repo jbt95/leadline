@@ -28,11 +28,7 @@ fn changed_analysis_compares_function_versions() {
     assert_eq!(change.before.as_ref().unwrap().metrics.cyclomatic, 2);
     assert_eq!(change.after.as_ref().unwrap().metrics.cyclomatic, 3);
     assert_eq!(
-        leadline::diff::changed_regressions(
-            &report,
-            &leadline::config::RegressionLimits::default()
-        )
-        .len(),
+        leadline::diff::changed_regressions(&report, &config::RegressionLimits::default()).len(),
         1
     );
     std::fs::remove_dir_all(root).unwrap();
@@ -343,7 +339,7 @@ fn regression_analysis(name: &str, cognitive: u32) -> model::core::FunctionAnaly
 
 #[test]
 fn regression_predicate_allows_unchanged_and_improved_functions() {
-    let limits = leadline::config::RegressionLimits::default();
+    let limits = config::RegressionLimits::default();
     let before = regression_analysis("same", 2);
     let unchanged = regression_analysis("same", 2);
     assert!(!leadline::diff::regression_violates(
@@ -357,7 +353,7 @@ fn regression_predicate_allows_unchanged_and_improved_functions() {
 
 #[test]
 fn regression_predicate_rejects_positive_delta_over_limit() {
-    let limits = leadline::config::RegressionLimits {
+    let limits = config::RegressionLimits {
         cognitive: 1,
         ..Default::default()
     };
@@ -374,7 +370,7 @@ fn regression_predicate_rejects_positive_delta_over_limit() {
 
 #[test]
 fn added_and_removed_functions_are_not_delta_regressions() {
-    let limits = leadline::config::RegressionLimits::default();
+    let limits = config::RegressionLimits::default();
     let added = regression_analysis("added", 99);
     let removed = regression_analysis("removed", 99);
     let added_change = leadline::diff::FunctionChange {

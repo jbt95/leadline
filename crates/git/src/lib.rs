@@ -1,6 +1,6 @@
 //! Hardened subprocess seam for read-only Git access.
 
-use crate::{Result, strip_verbatim_prefix};
+use model::Result;
 use std::io::{BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Output, Stdio};
@@ -85,7 +85,7 @@ pub fn resolve_commit(root: &Path, revision: &str) -> Result<(String, i64)> {
     Ok((commit, timestamp))
 }
 
-pub(crate) fn read_revision_blob_optional(
+pub fn read_revision_blob_optional(
     root: &Path,
     revision: &str,
     path: &str,
@@ -103,7 +103,7 @@ pub(crate) fn read_revision_blob_optional(
 /// Reads several revision blobs with two Git calls: one `ls-tree` to resolve
 /// paths to object ids and one `cat-file --batch` to stream the contents.
 /// Paths missing from the revision are absent from the result.
-pub(crate) fn read_revision_blobs(
+pub fn read_revision_blobs(
     root: &Path,
     revision: &str,
     paths: &[String],
@@ -148,7 +148,7 @@ pub(crate) fn read_revision_blobs(
     Ok(blobs)
 }
 
-pub(crate) fn read_index_blob_optional(root: &Path, path: &str) -> Result<Option<Vec<u8>>> {
+pub fn read_index_blob_optional(root: &Path, path: &str) -> Result<Option<Vec<u8>>> {
     let entry = run(
         root,
         &[
@@ -166,7 +166,7 @@ pub(crate) fn read_index_blob_optional(root: &Path, path: &str) -> Result<Option
     run(root, &["show", &format!(":{path}")]).map(|output| Some(output.stdout))
 }
 
-pub(crate) fn repository_head_optional(cwd: &Path) -> Result<Option<Vec<u8>>> {
+pub fn repository_head_optional(cwd: &Path) -> Result<Option<Vec<u8>>> {
     let has_marker = has_git_marker(cwd)?;
     run_optional_when(
         cwd,
@@ -256,7 +256,7 @@ fn index_entry_has_zero_oid(bytes: &[u8]) -> Result<bool> {
     Ok(!oid.is_empty() && oid.bytes().all(|byte| byte == b'0'))
 }
 
-pub(crate) fn command(cwd: &Path, args: &[&str]) -> Command {
+pub fn command(cwd: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("git");
     command
         .current_dir(cwd)
@@ -270,7 +270,7 @@ pub(crate) fn command(cwd: &Path, args: &[&str]) -> Command {
 }
 
 /// One streaming `git cat-file --batch` process for object-backed targets.
-pub(crate) struct ObjectBatch {
+pub struct ObjectBatch {
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
@@ -278,7 +278,7 @@ pub(crate) struct ObjectBatch {
 }
 
 impl ObjectBatch {
-    pub(crate) fn open(root: &Path) -> Result<ObjectBatch> {
+    pub fn open(root: &Path) -> Result<ObjectBatch> {
         let mut command = command(root, &["cat-file", "--batch"]);
         command
             .stdin(Stdio::piped())
@@ -305,7 +305,7 @@ impl ObjectBatch {
         })
     }
 
-    pub(crate) fn read(&mut self, oid: &str) -> Result<Vec<u8>> {
+    pub fn read(&mut self, oid: &str) -> Result<Vec<u8>> {
         let stdin = self.stdin.as_mut().ok_or("git object stream is closed")?;
         stdin.write_all(oid.as_bytes())?;
         stdin.write_all(b"\n")?;
@@ -338,7 +338,7 @@ impl ObjectBatch {
         Ok(bytes)
     }
 
-    pub(crate) fn finish(&mut self) -> Result<()> {
+    pub fn finish(&mut self) -> Result<()> {
         drop(self.stdin.take());
         let status = self.child.wait()?;
         if status.success() {
@@ -385,4 +385,27 @@ fn read_header(reader: &mut impl Read) -> Result<Vec<u8>> {
             Err(error) => return Err(error.into()),
         }
     }
+}
+
+/// `std::fs::canonicalize` returns verbatim (`\\?\`) paths on Windows, which
+/// never match the plain paths git prints. Git-facing code passes
+/// canonicalized paths through this strip so comparisons always compare like
+/// with like. Identity off Windows.
+#[cfg(windows)]
+pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    const UNC_PREFIX: &str = r"\\?\UNC\";
+    const VERBATIM_PREFIX: &str = r"\\?\";
+    let text = path.as_os_str().to_string_lossy();
+    if let Some(rest) = text.strip_prefix(UNC_PREFIX) {
+        return PathBuf::from(format!("\\\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(VERBATIM_PREFIX) {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
+#[cfg(not(windows))]
+pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }

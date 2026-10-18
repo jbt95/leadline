@@ -1,4 +1,4 @@
-use leadline::config::Thresholds;
+use config::Thresholds;
 use leadline::debt::{
     DebtStatus, RiskChangeStatus, RiskSideEntry, classify, compare_risks, risk_entries, summarize,
 };

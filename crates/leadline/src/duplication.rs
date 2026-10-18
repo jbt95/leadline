@@ -5,9 +5,9 @@
 //! bounded: it never exceeds the token or exact-comparison ceilings and marks
 //! the report incomplete instead of dropping candidates silently.
 
-use crate::config::DuplicationConfig;
 use crate::parser::normalized_tokens;
 use crate::source_snapshot::SourceEntry;
+use config::DuplicationConfig;
 use model::core::Language;
 use rayon::prelude::*;
 use serde::Serialize;

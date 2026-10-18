@@ -196,7 +196,7 @@ fn complex_scanner_reports_deduplicate_enrich_and_gate() {
 #[test]
 fn complex_sql_fixture_covers_static_host_and_schema_rules() {
     let root = fixture("repo/current");
-    let config = leadline::config::SqlConfig {
+    let config = config::SqlConfig {
         large_offset: 1000,
         migration_roots: vec!["migrations".to_owned()],
     };

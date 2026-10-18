@@ -1,4 +1,4 @@
-use leadline::config::RegressionLimits;
+use config::RegressionLimits;
 use model::core::{AnalysisReport, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION};
 
 const SIMPLE: &[u8] = b"function calc(x: boolean) { return 1; }\n";

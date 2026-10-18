@@ -1,8 +1,8 @@
-use crate::config::{RegressionLimits, Thresholds};
-use crate::git;
 use crate::parser::detect_language;
 use crate::source_snapshot::SourceEntry;
-use crate::strip_verbatim_prefix;
+use config::{RegressionLimits, Thresholds};
+use git;
+use git::strip_verbatim_prefix;
 use model::Result;
 use model::core::{
     FunctionAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION, ParseDiagnostic,

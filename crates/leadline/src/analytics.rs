@@ -73,7 +73,7 @@ fn build_with_analysis(
 /// One parse per entry feeds metrics, dependencies, and clone tokens.
 fn bundle_parts(
     entries: &[crate::source_snapshot::SourceEntry],
-    config: &crate::config::DuplicationConfig,
+    config: &config::DuplicationConfig,
 ) -> Result<(
     AnalysisReport,
     crate::graph::DependencyReport,
@@ -393,7 +393,7 @@ fn detect_renames(path: &Path, base: &str) -> Result<BTreeMap<String, String>> {
     let Some(root) = context.repo_root.as_deref() else {
         return Ok(BTreeMap::new());
     };
-    let output = crate::git::run(root, &["diff", "-M", "--name-status", "-z", base])?;
+    let output = git::run(root, &["diff", "-M", "--name-status", "-z", base])?;
     parse_renames(&output.stdout)
 }
 
@@ -555,8 +555,8 @@ pub fn analyze_mutation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DuplicationConfig, parse_str};
     use crate::source_snapshot::SourceEntry;
+    use config::{DuplicationConfig, parse_str};
 
     #[test]
     fn bundle_parts_excludes_duplication_candidates_without_dropping_analysis() {

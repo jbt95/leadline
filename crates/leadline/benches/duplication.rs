@@ -1,5 +1,5 @@
+use config::DuplicationConfig;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use leadline::config::DuplicationConfig;
 use leadline::duplication::detect;
 use leadline::source_snapshot::SourceEntry;
 use std::hint::black_box;

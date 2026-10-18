@@ -1,4 +1,4 @@
-use leadline::config::DuplicationConfig;
+use config::DuplicationConfig;
 use leadline::duplication::detect;
 use leadline::graph::{DependencyEdge, DependencyFile, DependencyReport};
 use leadline::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow};

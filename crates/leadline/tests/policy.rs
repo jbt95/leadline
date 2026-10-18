@@ -1,4 +1,4 @@
-use leadline::config::{ArchitectureRule, Severity};
+use config::{ArchitectureRule, Severity};
 use leadline::graph::{DependencyEdge, DependencyFile, DependencyReport};
 use leadline::policy::{PolicyStatus, compare, evaluate};
 use std::collections::BTreeMap;

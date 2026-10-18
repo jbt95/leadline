@@ -10,12 +10,9 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 #[test]
 fn revision_validation_rejects_option_and_object_syntax() {
     for value in ["", "--help", "HEAD:file", "bad\nref", ":HEAD"] {
-        assert!(
-            leadline::git::validate_revision(value).is_err(),
-            "{value:?}"
-        );
+        assert!(git::validate_revision(value).is_err(), "{value:?}");
     }
-    assert!(leadline::git::validate_revision("HEAD~1").is_ok());
+    assert!(git::validate_revision("HEAD~1").is_ok());
 }
 
 #[cfg(unix)]
@@ -31,14 +28,11 @@ fn adapter_and_existing_consumers_disable_fetch_locks_and_stdin() {
     {
         let _env = FakeGitEnv::install(&bin, &log, &root);
 
-        let output = leadline::git::run(&root, &["status"]).unwrap();
+        let output = git::run(&root, &["status"]).unwrap();
         assert!(output.status.success());
-        assert!(leadline::git::run_optional(&root, &["missing-object"]).is_err());
-        assert!(leadline::git::run_optional(&root, &["arbitrary-failure"]).is_err());
-        assert_eq!(
-            leadline::git::repo_root(&root).unwrap(),
-            Some(plain_path(&root))
-        );
+        assert!(git::run_optional(&root, &["missing-object"]).is_err());
+        assert!(git::run_optional(&root, &["arbitrary-failure"]).is_err());
+        assert_eq!(git::repo_root(&root).unwrap(), Some(plain_path(&root)));
 
         let changed = leadline::diff::analyze_changed(&root, "HEAD").unwrap();
         assert_eq!(changed.base, "HEAD");
@@ -147,7 +141,7 @@ fn history_propagates_an_arbitrary_repository_failure() {
 fn repo_root_returns_none_outside_a_repository() {
     let _lock = env_lock();
     let root = temporary_directory("not-a-repo");
-    assert_eq!(leadline::git::repo_root(&root).unwrap(), None);
+    assert_eq!(git::repo_root(&root).unwrap(), None);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -158,10 +152,7 @@ fn repo_root_finds_the_canonical_repository_root() {
     git(&root, &["init", "-q"]);
     let nested = root.join("one/two");
     std::fs::create_dir_all(&nested).unwrap();
-    assert_eq!(
-        leadline::git::repo_root(&nested).unwrap(),
-        Some(plain_path(&root))
-    );
+    assert_eq!(git::repo_root(&nested).unwrap(), Some(plain_path(&root)));
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -184,7 +175,7 @@ fn corrupt_git_marker_is_an_error_for_discovery_and_history() {
     let root = temporary_directory("corrupt-repo");
     std::fs::write(root.join(".git"), "gitdir: missing\n").unwrap();
 
-    assert!(leadline::git::repo_root(&root).is_err());
+    assert!(git::repo_root(&root).is_err());
     assert!(leadline::history::analyze_history(&root).is_err());
 
     std::fs::remove_dir_all(root).unwrap();
@@ -221,17 +212,17 @@ fn resolve_commit_peels_annotated_tags_and_rejects_non_commits_and_ranges() {
         .unwrap();
     git(&root, &["tag", "-am", "release", "v1"]);
     assert_eq!(
-        leadline::git::resolve_commit(&root, "v1").unwrap(),
+        git::resolve_commit(&root, "v1").unwrap(),
         (expected_commit, expected_timestamp)
     );
 
     let blob = git_stdout(&root, &["hash-object", "-w", "a.txt"]);
-    assert!(leadline::git::resolve_commit(&root, &blob).is_err());
+    assert!(git::resolve_commit(&root, &blob).is_err());
 
     std::fs::write(root.join("a.txt"), "two\n").unwrap();
     git(&root, &["add", "a.txt"]);
     git_dated(&root, &["commit", "-qm", "two"], "2025-01-03T03:04:05Z");
-    assert!(leadline::git::resolve_commit(&root, "HEAD~1..HEAD").is_err());
+    assert!(git::resolve_commit(&root, "HEAD~1..HEAD").is_err());
 
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -289,7 +280,7 @@ fn assert_fake_resolve_error(label: &str) {
 
     {
         let _env = FakeGitEnv::install(&bin, &log, &root);
-        assert!(leadline::git::resolve_commit(&root, "HEAD").is_err());
+        assert!(git::resolve_commit(&root, "HEAD").is_err());
     }
 
     std::fs::remove_dir_all(root).unwrap();

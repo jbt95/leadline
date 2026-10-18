@@ -9,7 +9,7 @@
 //! Git and baseline gates share one predicate. New functions are never
 //! delta regressions; deleted functions are ignored.
 
-use crate::config::RegressionLimits;
+use config::RegressionLimits;
 use model::core::{
     AnalysisReport, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
 };

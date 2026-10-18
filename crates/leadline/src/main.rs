@@ -1,5 +1,5 @@
+use config::{self, Config, RegressionLimits};
 use leadline::agent::{Budget, SortKey};
-use leadline::config::{self, Config, RegressionLimits};
 use leadline::coupling::CouplingOptions;
 use leadline::coverage::CoverageMap;
 use leadline::history::HistoryWindow;
@@ -72,8 +72,8 @@ impl std::fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
-impl From<leadline::config::ConfigError> for CliError {
-    fn from(error: leadline::config::ConfigError) -> Self {
+impl From<config::ConfigError> for CliError {
+    fn from(error: config::ConfigError) -> Self {
         Self::usage(error.to_string())
     }
 }
@@ -327,7 +327,7 @@ fn index_command(args: &[String]) -> Result<ExitCode, CliError> {
                 .unwrap_or(model::DEFAULT_INDEX_DIR),
         ),
     };
-    let fingerprint = leadline::config::fingerprint(&config_dir(&root));
+    let fingerprint = config::fingerprint(&config_dir(&root));
     let excludes: Vec<String> = config
         .as_ref()
         .map(|selected| selected.analysis_excludes.clone())
@@ -1275,7 +1275,7 @@ fn policy_command(args: &[String]) -> Result<ExitCode, CliError> {
             .violations
             .iter()
             .filter(|violation| {
-                violation.severity == leadline::config::Severity::Error
+                violation.severity == config::Severity::Error
                     && violation.status != Some(leadline::policy::PolicyStatus::Resolved)
             })
             .count();
@@ -1852,7 +1852,7 @@ fn sql_command(args: &[String]) -> Result<ExitCode, CliError> {
                 let raw = args
                     .get(index)
                     .ok_or_else(|| CliError::usage("--migration-root requires a directory"))?;
-                let root = leadline::config::normalize_migration_root(raw).map_err(|error| {
+                let root = config::normalize_migration_root(raw).map_err(|error| {
                     CliError::usage(format!("invalid --migration-root: {error}"))
                 })?;
                 migration_roots.get_or_insert_with(Vec::new).push(root);
@@ -2696,7 +2696,7 @@ fn assemble_scanners(
 /// A gate condition with nothing to evaluate is a usage error, exactly like a
 /// budget flag with nothing to control.
 fn validate_quality_gate(
-    gate: Option<&leadline::config::QualityGateConfig>,
+    gate: Option<&config::QualityGateConfig>,
     thresholds: &Thresholds,
     scanners: &CheckScanners,
 ) -> Result<(), CliError> {
@@ -2748,7 +2748,7 @@ fn scanner_severity_counts(scanners: &CheckScanners) -> Option<leadline::quality
 
 /// Evaluates the configured gate over one gated function set.
 fn evaluate_quality_gate(
-    gate: Option<&leadline::config::QualityGateConfig>,
+    gate: Option<&config::QualityGateConfig>,
     scope: &'static str,
     thresholds: &Thresholds,
     functions: Vec<&FunctionAnalysis>,
@@ -2780,7 +2780,7 @@ fn check_report(
     options: &CommonOptions,
     thresholds: &Thresholds,
     config: Option<&Config>,
-    gate: Option<&leadline::config::QualityGateConfig>,
+    gate: Option<&config::QualityGateConfig>,
     scanners: &CheckScanners,
 ) -> Result<ExitCode, CliError> {
     let excludes = analysis_excludes(config);
@@ -2858,7 +2858,7 @@ fn check_changed(
     base: &str,
     thresholds: &Thresholds,
     regression_limits: Option<&RegressionLimits>,
-    gate: Option<&leadline::config::QualityGateConfig>,
+    gate: Option<&config::QualityGateConfig>,
     scanners: &CheckScanners,
 ) -> Result<ExitCode, CliError> {
     let mut changed = leadline::diff::analyze_changed(&options.path, base)
@@ -2982,7 +2982,7 @@ fn check_baseline(
     baseline_path: &str,
     thresholds: &Thresholds,
     regression_limits: Option<&RegressionLimits>,
-    gate: Option<&leadline::config::QualityGateConfig>,
+    gate: Option<&config::QualityGateConfig>,
     scanners: &CheckScanners,
 ) -> Result<ExitCode, CliError> {
     let baseline = leadline::baseline::Baseline::read(Path::new(baseline_path))
@@ -3488,7 +3488,7 @@ fn analyze_with_index(
             .map_err(|error| CliError::incomplete(error.to_string()));
     };
     let previous = leadline::index::AnalysisIndex::open(dir);
-    let fingerprint = leadline::config::fingerprint(&config_dir(path));
+    let fingerprint = config::fingerprint(&config_dir(path));
     let (report, index, reuse) = if path.is_file() {
         leadline::index::refresh_file_index(path, &previous, &fingerprint)
             .map_err(|error| CliError::incomplete(error.to_string()))?
@@ -3966,7 +3966,7 @@ fn print_quality_gate(report: Option<&leadline::quality::QualityGateReport>) {
     }
 }
 
-fn rating_label(rating: Option<leadline::config::Rating>) -> String {
+fn rating_label(rating: Option<config::Rating>) -> String {
     rating.map_or_else(|| "unknown".to_owned(), |rating| rating.as_str().to_owned())
 }
 

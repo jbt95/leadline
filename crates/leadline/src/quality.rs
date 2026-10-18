@@ -8,7 +8,7 @@
 //! honest source stays `null`, and a gate condition on `null` fails closed
 //! instead of passing silently.
 
-use crate::config::{QualityGateConfig, Rating};
+use config::{QualityGateConfig, Rating};
 use model::core::{FunctionAnalysis, FunctionMetrics, Thresholds};
 use serde::Serialize;
 use std::collections::BTreeMap;

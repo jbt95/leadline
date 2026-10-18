@@ -6,12 +6,12 @@
 //! unknown, never zero: missing history or coverage renormalizes the
 //! score over the known components instead of zeroing them.
 
-use crate::config::Severity;
 use crate::graph::{DependencyFile, DependencyReport};
 use crate::history::{FileHistory, HistoryReport, HistoryWindow};
 use crate::impact::impact_counts;
 use crate::ownership::OwnershipReport;
 use crate::policy::{PolicyReport, PolicyStatus};
+use config::Severity;
 use model::core::AnalysisReport;
 use serde::Serialize;
 use std::collections::BTreeMap;

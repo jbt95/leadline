@@ -28,8 +28,8 @@
 
 use crate::coupling::{ProjectCoupling, ProjectCouplingAccumulator};
 use crate::discovery::SourceFilter;
-use crate::git;
 use crate::source_snapshot::SnapshotContext;
+use git;
 use model::Result;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};

@@ -1044,7 +1044,7 @@ fn statement_findings(path: &str, statement: &Statement, options: &SqlOptions) -
 /// line, rule.
 pub fn analyze_sql_path(
     root: &std::path::Path,
-    config: &crate::config::SqlConfig,
+    config: &config::SqlConfig,
     excludes: &[String],
 ) -> model::Result<SqlReport> {
     let options = SqlOptions {

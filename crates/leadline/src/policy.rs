@@ -3,8 +3,8 @@
 //! Rules are evaluated in declaration order over high-confidence resolved
 //! graph edges. A violation affects the edge's source endpoint for scoring.
 
-use crate::config::{ArchitectureRule, Severity};
 use crate::graph::DependencyReport;
+use config::{ArchitectureRule, Severity};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;

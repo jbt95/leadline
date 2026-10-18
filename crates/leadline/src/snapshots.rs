@@ -157,9 +157,9 @@ impl TrendPoint {
                 continue;
             }
             match violation.severity {
-                crate::config::Severity::Info => policy_info += 1,
-                crate::config::Severity::Warning => policy_warning += 1,
-                crate::config::Severity::Error => policy_error += 1,
+                config::Severity::Info => policy_info += 1,
+                config::Severity::Warning => policy_warning += 1,
+                config::Severity::Error => policy_error += 1,
             }
         }
         let risk_files_ge_70 = project

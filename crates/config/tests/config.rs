@@ -1,4 +1,4 @@
-use leadline::config::{
+use config::{
     Config, DuplicationConfig, QualityGateConfig, Rating, RegressionLimits, Severity, SqlConfig,
     Thresholds, UnusedConfig, VulnerabilityConfig, load_from, parse_str,
 };
@@ -415,22 +415,22 @@ fn sql_section_rejects_bad_values() {
 fn config_fingerprint_tracks_file_bytes() {
     let dir = temporary_directory();
 
-    assert_eq!(leadline::config::fingerprint(&dir), "none");
+    assert_eq!(config::fingerprint(&dir), "none");
 
     let config = dir.join("leadline.toml");
     std::fs::write(&config, "[thresholds.function]\ncognitive = 15\n").unwrap();
-    let first = leadline::config::fingerprint(&dir);
+    let first = config::fingerprint(&dir);
     assert_ne!(first, "none");
 
     std::fs::write(&config, "[thresholds.function]\ncognitive = 20\n").unwrap();
-    assert_ne!(first, leadline::config::fingerprint(&dir));
+    assert_ne!(first, config::fingerprint(&dir));
 
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
 fn index_section_defaults_to_dot_leadline() {
-    let config = leadline::config::parse_str("[index]\n").unwrap();
+    let config = config::parse_str("[index]\n").unwrap();
     assert_eq!(config.index.unwrap().path, ".leadline");
 }
 
@@ -445,14 +445,11 @@ fn index_path_must_stay_inside_the_repository() {
         "[index]\npath = \"C:x\"\n",
         "[index]\npath = \"C:\"\n",
     ] {
-        assert!(
-            leadline::config::parse_str(text).is_err(),
-            "{text} must be rejected"
-        );
+        assert!(config::parse_str(text).is_err(), "{text} must be rejected");
     }
 }
 
 #[test]
 fn unknown_index_key_is_rejected() {
-    assert!(leadline::config::parse_str("[index]\ncache = true\n").is_err());
+    assert!(config::parse_str("[index]\ncache = true\n").is_err());
 }

@@ -88,8 +88,7 @@ fn join_smoke(path: &std::path::Path) {
         leadline::history::HistoryWindow::Days90,
     );
     assert!(!risk.risks.is_empty(), "realworld join: empty risk rows");
-    let duplication =
-        leadline::duplication::detect(&[], &leadline::config::DuplicationConfig::default());
+    let duplication = leadline::duplication::detect(&[], &config::DuplicationConfig::default());
     let project = leadline::project::build(leadline::project::ProjectInputs {
         analysis: &analysis,
         generated_from: "realworld".to_owned(),

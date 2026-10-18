@@ -13,11 +13,11 @@
 //! Messages without an `id` are notifications and produce no response.
 
 use crate::agent::{SortKey, changed_causes};
-use crate::config::RegressionLimits;
 use crate::http::{
     DEFAULT_HOST, DEFAULT_PORT, JSON_CONTENT_TYPE, MAX_HTTP_BODY, Request, bad_request, bind,
     http_error, parse_port,
 };
+use config::RegressionLimits;
 use model::core::{
     FunctionAnalysis, FunctionMetrics, METRIC_PROFILE, OUTPUT_SCHEMA_VERSION, Thresholds,
 };
@@ -1182,7 +1182,7 @@ struct CheckRows {
 /// MCP `check` ingests no scanner reports, so `security_rating` has no source
 /// here at all.
 fn validate_gate_conditions(
-    gate: Option<&crate::config::QualityGateConfig>,
+    gate: Option<&config::QualityGateConfig>,
     thresholds: &Thresholds,
 ) -> Result<(), (i64, String)> {
     let Some(gate) = gate else {
@@ -1216,7 +1216,7 @@ fn validate_gate_conditions(
 /// `security_rating` condition stays unknown and fails closed rather than
 /// passing silently.
 fn mcp_quality_gate(
-    gate: Option<&crate::config::QualityGateConfig>,
+    gate: Option<&config::QualityGateConfig>,
     thresholds: &Thresholds,
     scope: &'static str,
     functions: Vec<&model::core::FunctionAnalysis>,
@@ -1270,7 +1270,7 @@ fn check_changed_rows(
     thresholds: &Thresholds,
     regression_limits: Option<&RegressionLimits>,
     coverage: Option<&crate::coverage::CoverageMap>,
-    gate: Option<&crate::config::QualityGateConfig>,
+    gate: Option<&config::QualityGateConfig>,
 ) -> Result<CheckRows, (i64, String)> {
     let mut report = crate::diff::analyze_changed(Path::new(path), base)
         .map_err(|error| (-32602, error.to_string()))?;
@@ -1332,7 +1332,7 @@ fn check_path_rows(
     thresholds: &Thresholds,
     regressed: &BTreeSet<(String, String)>,
     reuse: Option<crate::index::Reuse>,
-    gate: Option<&crate::config::QualityGateConfig>,
+    gate: Option<&config::QualityGateConfig>,
 ) -> CheckRows {
     let quality_gate = mcp_quality_gate(
         gate,
@@ -1524,7 +1524,7 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
 }
 
 /// Fill request gaps from `[thresholds]`; explicit MCP fields win.
-fn fill_thresholds(thresholds: &mut Thresholds, config: &crate::config::Config) {
+fn fill_thresholds(thresholds: &mut Thresholds, config: &config::Config) {
     if thresholds.cognitive.is_none() {
         thresholds.cognitive = config.thresholds.cognitive;
     }
@@ -1546,7 +1546,7 @@ fn fill_thresholds(thresholds: &mut Thresholds, config: &crate::config::Config) 
 /// thresholds treat explicit flags.
 fn parse_regression_limits(
     params: &serde_json::Value,
-    config: Option<&crate::config::Config>,
+    config: Option<&config::Config>,
 ) -> Result<Option<RegressionLimits>, (i64, String)> {
     let configured = config
         .map(|selected| selected.regressions.clone())
@@ -2279,8 +2279,8 @@ fn parse_since(
 /// MCP tools must match the CLI: `[analysis]`, `[sql]`, and
 /// `[vulnerabilities]` all apply. A broken config is an invalid-params error
 /// so hosts see the same typo the CLI rejects.
-fn load_config(path: &str) -> Result<Option<crate::config::Config>, (i64, String)> {
-    crate::config::load_from(&config_dir(path)).map_err(|error| (-32602, error.to_string()))
+fn load_config(path: &str) -> Result<Option<config::Config>, (i64, String)> {
+    config::load_from(&config_dir(path)).map_err(|error| (-32602, error.to_string()))
 }
 
 /// Analysis-root directory a tool's `path` points at: the path itself when it
@@ -2301,7 +2301,7 @@ fn config_dir(path: &str) -> PathBuf {
 }
 
 /// `[analysis].exclude` for one tool path; empty without a config file.
-fn config_excludes(config: Option<&crate::config::Config>) -> Vec<String> {
+fn config_excludes(config: Option<&config::Config>) -> Vec<String> {
     config
         .map(|selected| selected.analysis_excludes.clone())
         .unwrap_or_default()
@@ -2313,7 +2313,7 @@ fn config_excludes(config: Option<&crate::config::Config>) -> Vec<String> {
 /// These callers only ever read it.
 fn index_directory(
     params: &serde_json::Value,
-    config: Option<&crate::config::Config>,
+    config: Option<&config::Config>,
     path: &str,
 ) -> Result<Option<PathBuf>, (i64, String)> {
     if let Some(argument) = opt_str(params, "index")? {
@@ -2375,7 +2375,7 @@ fn cached_index(dir: &std::path::Path) -> Arc<crate::index::AnalysisIndex> {
 /// missing or unusable index silently falls back to the cold analysis.
 fn analyze_read_only(
     params: &serde_json::Value,
-    config: Option<&crate::config::Config>,
+    config: Option<&config::Config>,
     path: &str,
     coverage: Option<&crate::coverage::CoverageMap>,
     excludes: &[String],
@@ -2389,7 +2389,7 @@ fn analyze_read_only(
             &previous,
             Path::new(path),
             &crate::index::scope_label(Path::new(path)),
-            &crate::config::fingerprint(&config_dir(path)),
+            &config::fingerprint(&config_dir(path)),
             excludes,
         ) {
             return Ok((report, Some(reuse)));
@@ -2706,8 +2706,7 @@ fn tool_sql_risks(params: &serde_json::Value) -> Result<serde_json::Value, (i64,
         Some(_) => path_arguments(params, "sql_risks", "migration_roots", false)?
             .into_iter()
             .map(|text| {
-                crate::config::normalize_migration_root(&text)
-                    .map_err(|error| (-32602, error.to_string()))
+                config::normalize_migration_root(&text).map_err(|error| (-32602, error.to_string()))
             })
             .collect::<Result<Vec<_>, _>>()?,
     };
@@ -2716,7 +2715,7 @@ fn tool_sql_risks(params: &serde_json::Value) -> Result<serde_json::Value, (i64,
     let excludes = config_excludes(config.as_ref());
     let report = crate::sql::analyze_sql_path(
         Path::new(path),
-        &crate::config::SqlConfig {
+        &config::SqlConfig {
             large_offset,
             migration_roots,
         },

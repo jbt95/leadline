@@ -472,9 +472,8 @@ fn analyze_sql_path_accepts_an_explicit_sql_file() {
     let root = temporary_directory();
     let file = root.join("query.sql");
     std::fs::write(&file, "UPDATE users SET active = false;").unwrap();
-    let report =
-        leadline::sql::analyze_sql_path(&file, &leadline::config::SqlConfig::default(), &[])
-            .expect("explicit .sql files must analyze");
+    let report = leadline::sql::analyze_sql_path(&file, &config::SqlConfig::default(), &[])
+        .expect("explicit .sql files must analyze");
     assert!(
         report
             .findings

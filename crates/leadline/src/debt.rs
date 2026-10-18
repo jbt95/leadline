@@ -5,8 +5,8 @@
 //! missing metric is unknown and never becomes a finding. Risk changes compare
 //! complete per-side scores and expose component deltas.
 
-use crate::config::Thresholds;
 use crate::risk::RiskReport;
+use config::Thresholds;
 use model::core::{FileAnalysis, FunctionAnalysis};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};

@@ -28,11 +28,11 @@
 //!
 //! Nothing here writes to the analyzed repository.
 
-use crate::config::UnusedConfig;
 use crate::graph::DependencyReport;
 use crate::parser::{ExportKind, ExportedSymbol, ParsedDependencies, extract_dependencies};
 use crate::source_snapshot::SourceEntry;
 use crate::{discovery, graph, normalized_relative_path};
+use config::UnusedConfig;
 use model::Result;
 use model::core::METRIC_PROFILE;
 use rayon::prelude::*;
