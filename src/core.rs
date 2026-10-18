@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 pub const METRIC_PROFILE: &str = "default";
-pub const OUTPUT_SCHEMA_VERSION: u32 = 2;
+pub const OUTPUT_SCHEMA_VERSION: u32 = 3;
 pub const CYCLOMATIC_SPEC: &str = "default";
 pub const COGNITIVE_SPEC: &str = "default";
 pub const HALSTEAD_SPEC: &str = "default";
@@ -132,6 +132,7 @@ pub struct FunctionInput {
     pub parameters: u32,
     pub logical_loc: u32,
     pub events: Vec<Event>,
+    pub suppressed_metrics: Vec<SuppressionMetric>,
     pub source_fingerprint: u64,
 }
 
@@ -169,6 +170,51 @@ pub struct MetricContribution {
     pub cyclomatic: u32,
 }
 
+/// One gate dimension an in-source suppression line can silence.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SuppressionMetric {
+    Cognitive,
+    Cyclomatic,
+    MaxNesting,
+    Crap,
+}
+
+/// Every suppressible dimension, in report order.
+pub const SUPPRESSION_METRICS: [&str; 4] = ["cognitive", "cyclomatic", "max_nesting", "crap"];
+
+impl SuppressionMetric {
+    /// Parses one `leadline: ignore` name. Unknown names are not metrics.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "cognitive" => Some(Self::Cognitive),
+            "cyclomatic" => Some(Self::Cyclomatic),
+            "max_nesting" => Some(Self::MaxNesting),
+            "crap" => Some(Self::Crap),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cognitive => "cognitive",
+            Self::Cyclomatic => "cyclomatic",
+            Self::MaxNesting => "max_nesting",
+            Self::Crap => "crap",
+        }
+    }
+
+    /// Every dimension, used by a bare `NOSONAR` line.
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::Cognitive,
+            Self::Cyclomatic,
+            Self::MaxNesting,
+            Self::Crap,
+        ]
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FunctionAnalysis {
     pub name: String,
@@ -180,8 +226,23 @@ pub struct FunctionAnalysis {
     pub end_byte: u64,
     pub metrics: FunctionMetrics,
     pub contributions: Vec<MetricContribution>,
+    /// Dimensions silenced by an in-source suppression line. Empty for most
+    /// functions, so the key is omitted rather than repeated as `[]`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub suppressed_metrics: Vec<SuppressionMetric>,
     #[serde(skip)]
     pub source_fingerprint: u64,
+}
+
+impl FunctionAnalysis {
+    /// True when an in-source suppression line covers `metric`. `crap` also
+    /// covers the `crap_unavailable` reason: one dimension, one name.
+    pub fn is_suppressed(&self, metric: &str) -> bool {
+        self.suppressed_metrics.iter().any(|suppressed| {
+            suppressed.as_str() == metric
+                || (metric == "crap_unavailable" && *suppressed == SuppressionMetric::Crap)
+        })
+    }
 }
 
 /// Smallest span containing `line`, ties broken by the lexical id.
@@ -301,6 +362,19 @@ impl Thresholds {
 
     pub fn violates(&self, metrics: &FunctionMetrics) -> bool {
         !self.violation_reasons(metrics).is_empty()
+    }
+
+    /// Reasons surviving the function's own suppression lines. Parse errors
+    /// are never metric reasons, so no suppression can hide one.
+    pub fn violation_reasons_for(&self, function: &FunctionAnalysis) -> Vec<&'static str> {
+        self.violation_reasons(&function.metrics)
+            .into_iter()
+            .filter(|reason| !function.is_suppressed(reason))
+            .collect()
+    }
+
+    pub fn violates_function(&self, function: &FunctionAnalysis) -> bool {
+        !self.violation_reasons_for(function).is_empty()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -525,6 +599,7 @@ pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis
             crap: None,
         },
         contributions,
+        suppressed_metrics: input.suppressed_metrics,
         source_fingerprint: input.source_fingerprint,
     }
 }
@@ -555,6 +630,7 @@ mod tests {
             parameters: 0,
             logical_loc: 0,
             events,
+            suppressed_metrics: Vec::new(),
             source_fingerprint: 0,
         }
     }

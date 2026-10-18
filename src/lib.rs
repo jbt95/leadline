@@ -24,6 +24,7 @@ pub mod parser;
 pub mod pg_plan;
 pub mod policy;
 pub mod project;
+pub mod quality;
 pub mod render;
 pub mod report;
 pub mod risk;

@@ -4,6 +4,59 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Added
+
+- Named quality gate: an optional `[quality_gate]` section in `leadline.toml`
+  turns `check` into a named pass/fail verdict with conditions on
+  `maintainability_rating`, `security_rating`, and `effort_minutes`. Effort uses
+  the `metric-overage` model (8 minutes per cognitive point, 4 per cyclomatic
+  point, 10 per nesting level, 12 per CRAP point beyond the configured limits),
+  the maintainability rating bands effort over `loc * 30` minutes, and the
+  security rating bands the worst severity of the findings the run ingested.
+  Ratings for a signal the run cannot source stay `null` — `reliability` always
+  does, because `check` reads no bug-severity source — and a condition on an
+  uncomputable value fails closed. The gate is reported in `check --json`,
+  `--format agent-json`, the CI documents, and terminal output; `--base` scopes
+  it to changed functions (`scope: changed`), and the other paths rate the whole
+  analysis (`scope: overall`). A condition with no input to evaluate is a usage
+  error instead of a silently passing no-op. See `docs/quality-gate.md`.
+- In-source suppression: `NOSONAR` (case-insensitive, any comment syntax)
+  silences `cognitive`, `cyclomatic`, `max_nesting`, and `crap` for its
+  function, and `leadline: ignore cognitive, cyclomatic` silences only the
+  dimensions it names. A comment applies when it lies inside the function's line
+  span without belonging to a nested function, or ends on the line directly
+  above the function's first line. Suppression is reported on the function row as
+  `suppressed_metrics` and counted per dimension as the gate's
+  `suppressed_violations`; parse errors are not metric reasons and are never
+  suppressed. `check` on both the CLI and MCP honors it, so a suppressed
+  dimension no longer appears as a violation on either surface.
+- Cobertura XML coverage: `--cobertura FILE` merges `filename`/`line` records
+  with `hits` and `condition-coverage="50% (1/2)"` branch fractions, feeding the
+  same Sonar-style line-and-branch ratio JaCoCo does. `--coverage FILE` now
+  decides between the two XML dialects by root element (`<coverage>` Cobertura,
+  `<report>` JaCoCo) instead of assuming `.xml` is JaCoCo, and an unknown root
+  reports what it found instead of a parse error from the wrong reader.
+
+### Changed
+
+- The analyze/function/check output schema is `3`: a function row may carry
+  `suppressed_metrics`, and `check` output may carry `quality_gate`.
+- The `index.json` schema is `2`: the index mirrors the suppressed dimensions,
+  so a v1 index is rejected and rebuilt once instead of serving rows without
+  them.
+- A configured `[quality_gate]` satisfies `check`'s input requirement, so a gate
+  with only `security_rating` and `--sarif` runs without extra threshold flags.
+- MCP `check` rejects a `security_rating` condition with an invalid-params error
+  rather than evaluating it against nothing: the tool ingests no scanner
+  reports, and a permanently failing gate would read as bad code. It evaluates
+  the conditions it can source and folds the gate verdict into `passed`.
+- Markdown and `github-summary` CI documents render the gate line and take their
+  verdict from the gate as well as the findings, so `report --from` over a saved
+  run matches the live run.
+- `docs/cli-reference.md`, `docs/configuration.md`, `docs/json-schema.md`,
+  `docs/metrics.md`, `docs/versioning.md`, the agent skill, and the README
+  document the gate, suppression, Cobertura, and the new schema versions.
+
 ## 1.0.1 - 2026-10-10
 
 ### Changed

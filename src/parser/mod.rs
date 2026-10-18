@@ -103,7 +103,15 @@ impl ParserBackend for TreeSitterBackend {
 fn analyze_tree(path: &str, language: Language, source: &[u8], root: Node<'_>) -> FileAnalysis {
     let mut nodes = Vec::new();
     let mut parse_errors = Vec::new();
-    discover_tree(root, language, &mut nodes, &mut parse_errors);
+    let mut comments = Vec::new();
+    discover_tree(
+        root,
+        language,
+        &mut nodes,
+        &mut parse_errors,
+        &mut comments,
+        source,
+    );
     debug_assert!(
         nodes
             .windows(2)
@@ -111,8 +119,16 @@ fn analyze_tree(path: &str, language: Language, source: &[u8], root: Node<'_>) -
         "discover_tree must visit functions in source order"
     );
     let functions = nodes
-        .into_iter()
-        .map(|node| analyze_node(path, node, language, source))
+        .iter()
+        .map(|node| {
+            analyze_node(
+                path,
+                *node,
+                language,
+                source,
+                suppression_for(*node, &comments, &nodes),
+            )
+        })
         .collect();
     FileAnalysis {
         path: path.to_owned(),
@@ -459,11 +475,16 @@ fn discover_tree<'tree>(
     language: Language,
     functions: &mut Vec<Node<'tree>>,
     parse_errors: &mut Vec<ParseDiagnostic>,
+    comments: &mut Vec<SuppressionComment>,
+    source: &[u8],
 ) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         if is_function(node, language) {
             functions.push(node);
+        }
+        if let Some(comment) = suppression_comment(node, source) {
+            comments.push(comment);
         }
         if node.is_error() || node.is_missing() {
             let start = node.start_position();
@@ -482,6 +503,121 @@ fn discover_tree<'tree>(
         }
         push_children_reversed(node, &mut stack);
     }
+}
+
+/// One source comment that suppresses gate dimensions.
+#[derive(Clone, Debug, PartialEq)]
+struct SuppressionComment {
+    start_line: u32,
+    end_line: u32,
+    metrics: Vec<crate::core::SuppressionMetric>,
+}
+
+/// The suppression comment `node` carries, when it is a comment at all.
+fn suppression_comment(node: Node<'_>, source: &[u8]) -> Option<SuppressionComment> {
+    if !node.kind().contains("comment") {
+        return None;
+    }
+    parse_suppression_comment(node, source)
+}
+
+/// Parses a suppression marker out of one comment's text.
+///
+/// `NOSONAR` (case-insensitive) silences every dimension. `leadline: ignore`
+/// takes a comma-separated dimension list; unknown names are ignored, and a
+/// comment naming no known dimension is not a suppression line at all.
+fn parse_suppression_comment(node: Node<'_>, source: &[u8]) -> Option<SuppressionComment> {
+    let text = String::from_utf8_lossy(&source[node.byte_range()]);
+    let metrics = if contains_ignore_ascii_case(&text, "NOSONAR") {
+        crate::core::SuppressionMetric::all()
+    } else {
+        let named = text
+            .to_ascii_lowercase()
+            .split_once("leadline:")
+            .map(|(_, rest)| rest.trim_start())
+            .and_then(|rest| rest.strip_prefix("ignore"))
+            .map(parse_metric_list)
+            .unwrap_or_default();
+        if named.is_empty() {
+            return None;
+        }
+        named
+    };
+    Some(SuppressionComment {
+        start_line: node.start_position().row as u32 + 1,
+        end_line: node.end_position().row as u32 + 1,
+        metrics,
+    })
+}
+
+/// Parses one `leadline: ignore` dimension list into canonical order.
+fn parse_metric_list(list: &str) -> Vec<crate::core::SuppressionMetric> {
+    let mut metrics: Vec<_> = list
+        .split(',')
+        .filter_map(|token| {
+            let name: String = token
+                .trim()
+                .chars()
+                .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+                .collect();
+            crate::core::SuppressionMetric::parse(&name)
+        })
+        .collect();
+    metrics.sort();
+    metrics.dedup();
+    metrics
+}
+
+/// ASCII-case-insensitive substring test, used for the marker tokens.
+fn contains_ignore_ascii_case(text: &str, needle: &str) -> bool {
+    text.as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
+/// Dimensions one function's suppression lines cover.
+fn suppression_for(
+    function: Node<'_>,
+    comments: &[SuppressionComment],
+    nodes: &[Node<'_>],
+) -> Vec<crate::core::SuppressionMetric> {
+    let start_line = function.start_position().row as u32 + 1;
+    let end_line = function.end_position().row as u32 + 1;
+    let mut metrics = Vec::new();
+    for comment in comments {
+        if !comment_covers(comment, start_line, end_line, nodes) {
+            continue;
+        }
+        for metric in &comment.metrics {
+            if !metrics.contains(metric) {
+                metrics.push(*metric);
+            }
+        }
+    }
+    metrics.sort();
+    metrics
+}
+
+/// A suppression line covers a function when it sits inside the function's
+/// span without belonging to a nested one, or ends on the line directly above
+/// the function's first line.
+fn comment_covers(
+    comment: &SuppressionComment,
+    start_line: u32,
+    end_line: u32,
+    nodes: &[Node<'_>],
+) -> bool {
+    if comment.start_line < start_line || comment.end_line > end_line {
+        return comment.end_line + 1 == start_line;
+    }
+    !nodes.iter().any(|nested| {
+        let nested_start = nested.start_position().row as u32 + 1;
+        let nested_end = nested.end_position().row as u32 + 1;
+        let strictly_inside = nested_start >= start_line
+            && nested_end <= end_line
+            && (nested_start > start_line || nested_end < end_line);
+        strictly_inside && nested_start <= comment.start_line && comment.end_line <= nested_end
+    })
 }
 /// True when `node` is a function definition for `language`.
 ///
@@ -539,6 +675,7 @@ fn analyze_node(
     node: Node<'_>,
     language: Language,
     source: &[u8],
+    suppressed_metrics: Vec<crate::core::SuppressionMetric>,
 ) -> crate::core::FunctionAnalysis {
     let mut events = Vec::new();
     let mut logical_loc = 0;
@@ -564,6 +701,7 @@ fn analyze_node(
             parameters: parameter_count(node, language, source),
             logical_loc,
             events,
+            suppressed_metrics,
             source_fingerprint: fingerprint(&source[node.byte_range()]),
         },
         source,

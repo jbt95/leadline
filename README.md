@@ -22,7 +22,7 @@ Start here: [installation](docs/installation.md), [CLI reference](docs/cli-refer
 
 Metrics and analysis: [metric specification](docs/metrics.md), [changed code](docs/changed-code.md), [hotspots](docs/hotspots.md), [coupling](docs/coupling.md), [dependencies](docs/dependencies.md), [risk](docs/risk.md), [analytics roadmap](docs/analytics-roadmap.md).
 
-Gates and security: [security findings](docs/security-findings.md), [vulnerabilities](docs/vulnerabilities.md), [security model](docs/security-model.md), [PostgreSQL risks](docs/postgresql-risks.md), [PostgreSQL plans](docs/postgresql-plans.md).
+Gates and security: [security findings](docs/security-findings.md), [vulnerabilities](docs/vulnerabilities.md), [security model](docs/security-model.md), [quality gate](docs/quality-gate.md), [PostgreSQL risks](docs/postgresql-risks.md), [PostgreSQL plans](docs/postgresql-plans.md).
 
 Output and agents: [JSON schema](docs/json-schema.md), [agent integration guide](docs/agent-integration-guide.md), [architecture](docs/architecture.md).
 
@@ -38,7 +38,7 @@ flowchart LR
     Discovery --> Workers["Rayon workers: one file per worker"]
     Workers --> Parser["Tree-sitter parsing: ParserBackend::analyze"]
     Parser --> Engine["Metric engine: cyclomatic, cognitive, Halstead, maintainability"]
-    Coverage["LCOV or JaCoCo"] --> Apply["Coverage merge: coverage, CRAP, test-targets"]
+    Coverage["LCOV, JaCoCo, or Cobertura"] --> Apply["Coverage merge: coverage, CRAP, test-targets"]
     Engine --> Apply
     Apply --> Output["Output: terminal, JSON, SARIF, agent-json"]
 ```
@@ -176,6 +176,30 @@ leadline check . --crap 30 --lcov coverage/lcov.info --json
 
 Thresholds fail only when a value exceeds its limit. A CRAP threshold also fails when coverage is unavailable. Thresholds can live in `leadline.toml` instead of flags; CLI flags win.
 
+A named quality gate adds SonarQube's vocabulary on top of the same metrics: remediation minutes from metric overage and A–E maintainability/security ratings, evaluated over the whole repository or only the changed functions:
+
+```toml
+[quality_gate]
+name = "team-default"
+maintainability_rating = "B"
+security_rating = "A"
+effort_minutes = 600
+```
+
+```console
+leadline check . --base origin/main --json
+```
+
+```json
+{"quality_gate": {"name": "team-default", "status": "failed", "scope": "changed",
+  "conditions": [{"metric": "effort_minutes", "operator": "<=", "threshold": 600, "actual": 812, "status": "failed"}],
+  "ratings": {"maintainability": "C", "reliability": null, "security": "A"},
+  "effort": {"model": "metric-overage", "minutes": 812, "functions": 12},
+  "suppressed_violations": 0}}
+```
+
+A function can silence the dimensions it knows about without silencing everything: `NOSONAR` clears all four gate dimensions for that function, and `leadline: ignore cognitive, cyclomatic` clears only the ones named. Suppression is reported, never hidden, and never covers a parse error. Weights, bands, and scope rules: [quality gate](docs/quality-gate.md).
+
 Gate PostgreSQL plan regressions from checked-in `EXPLAIN` artifacts (never a database connection):
 
 ```console
@@ -222,7 +246,7 @@ Exit codes are stable:
 - `1`: a quality gate found metric violations or source parse errors.
 - `2`: usage or config error (unknown flag, missing threshold, bad path, invalid `leadline.toml`).
 - `3`: incomplete analysis (no supported files, Git failure, unreadable input).
-- `4`: report input error (unreadable or unparsable LCOV / JaCoCo, SARIF, OSV / Trivy, SQL, or `EXPLAIN` JSON).
+- `4`: report input error (unreadable or unparsable LCOV / JaCoCo / Cobertura, SARIF, OSV / Trivy, SQL, or `EXPLAIN` JSON).
 - `5`: internal error.
 
 See the [CLI reference](docs/cli-reference.md), [JSON schema](docs/json-schema.md),
@@ -327,7 +351,7 @@ use it to rank developers.
 
 ## Coverage limits
 
-LCOV and JaCoCo line coverage are supported, with Windows and Unix report paths normalized.
+LCOV, JaCoCo, and Cobertura coverage are supported, with Windows and Unix report paths normalized. `--coverage` detects the format from the `.info` extension or the XML root element.
 
 Coverage mixes line and branch data Sonar-style: a function ratio is
 (covered lines + covered branches) / (known lines + known branches) over its
@@ -344,7 +368,7 @@ leadline test-targets src/payment.ts --coverage coverage/lcov.info
 
 When a coverage path could match more than one file, leadline reports no coverage rather than guess. Nested functions can share covered lines.
 
-Source maps and Cobertura are not supported.
+Source maps are not supported.
 
 ## Local metrics (opt-in)
 

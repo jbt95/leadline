@@ -653,7 +653,7 @@ fn parse_ranked_args(args: &[String], command: &str) -> Result<RankedArgs, CliEr
                     ))
                 })?;
             }
-            flag @ ("--lcov" | "--jacoco" | "--coverage") => {
+            flag @ ("--lcov" | "--jacoco" | "--cobertura" | "--coverage") => {
                 has_coverage = parse_coverage_flag(flag, args, &mut index, &mut coverage)?;
             }
             value if !value.starts_with('-') && !has_path => {
@@ -842,29 +842,8 @@ fn parse_project_args(args: &[String], command: &str) -> Result<ProjectArgs, Cli
                 }
                 agent_json = true;
             }
-            "--lcov" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--lcov requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Lcov)?);
-                has_coverage = true;
-            }
-            "--jacoco" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--jacoco requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Jacoco)?);
-                has_coverage = true;
-            }
-            "--coverage" => {
-                index += 1;
-                let file = args
-                    .get(index)
-                    .ok_or_else(|| CliError::usage("--coverage requires a file"))?;
-                coverage.merge(load_coverage(file, CoverageFormat::Auto)?);
-                has_coverage = true;
+            flag @ ("--lcov" | "--jacoco" | "--cobertura" | "--coverage") => {
+                has_coverage = parse_coverage_flag(flag, args, &mut index, &mut coverage)?;
             }
             "--since" => {
                 index += 1;
@@ -1611,10 +1590,12 @@ fn print_ci_document(
 ) -> Result<(), CliError> {
     let findings =
         leadline::render::findings_from_check_json(document, limits).map_err(CliError::usage)?;
+    let quality_gate = leadline::render::gate_verdict(document);
     let summary = leadline::render::GateSummary {
-        passed: findings.is_empty(),
+        passed: findings.is_empty() && quality_gate.as_ref().is_none_or(|gate| !gate.failed()),
         files,
         violations: findings.len(),
+        quality_gate,
     };
     print!("{}", leadline::render::render(&findings, &summary, format));
     Ok(())
@@ -1657,6 +1638,7 @@ fn parse_coverage_flag(
     let format = match flag {
         "--lcov" => CoverageFormat::Lcov,
         "--jacoco" => CoverageFormat::Jacoco,
+        "--cobertura" => CoverageFormat::Cobertura,
         "--coverage" => CoverageFormat::Auto,
         _ => return Ok(false),
     };
@@ -2586,9 +2568,12 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
     if let Some(config) = &config {
         apply_config(&mut parsed.thresholds, config);
     }
-    if !has_gate_input(&parsed) {
+    let gate = config
+        .as_ref()
+        .and_then(|selected| selected.quality_gate.as_ref());
+    if !has_gate_input(&parsed) && gate.is_none() {
         return Err(CliError::usage(
-            "check requires at least one metric threshold (e.g. --cognitive 15 --cyclomatic 10 --crap 30 --max-nesting 5), a [thresholds.function] section in leadline.toml, --regressions with --base/--baseline, --sarif FILE, --osv/--trivy FILE, or --sql",
+            "check requires at least one metric threshold (e.g. --cognitive 15 --cyclomatic 10 --crap 30 --max-nesting 5), a [thresholds.function] section in leadline.toml, a [quality_gate] section, --regressions with --base/--baseline, --sarif FILE, --osv/--trivy FILE, or --sql",
         ));
     }
     let regression_limits = config
@@ -2596,15 +2581,15 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
         .map(|selected| selected.regressions.clone())
         .unwrap_or_default();
     let scanners = assemble_scanners(&parsed, &options, config.as_ref())?;
+    validate_quality_gate(gate, &parsed.thresholds, &scanners)?;
     if let Some(base) = &parsed.base {
         return check_changed(
             &options,
             base,
             &parsed.thresholds,
             parsed.regressions.then_some(&regression_limits),
-            scanners.security.as_ref(),
-            scanners.vulnerabilities.as_ref(),
-            scanners.sql.as_ref(),
+            gate,
+            &scanners,
         );
     }
     if let Some(baseline) = &parsed.baseline {
@@ -2613,12 +2598,17 @@ fn check_command(args: &[String]) -> Result<ExitCode, CliError> {
             baseline,
             &parsed.thresholds,
             parsed.regressions.then_some(&regression_limits),
-            scanners.security.as_ref(),
-            scanners.vulnerabilities.as_ref(),
-            scanners.sql.as_ref(),
+            gate,
+            &scanners,
         );
     }
-    check_report(&options, &parsed.thresholds, config.as_ref(), &scanners)
+    check_report(
+        &options,
+        &parsed.thresholds,
+        config.as_ref(),
+        gate,
+        &scanners,
+    )
 }
 
 /// Outcomes of the scanner inputs `check` was asked to run.
@@ -2703,6 +2693,83 @@ fn assemble_scanners(
     })
 }
 
+/// A gate condition with nothing to evaluate is a usage error, exactly like a
+/// budget flag with nothing to control.
+fn validate_quality_gate(
+    gate: Option<&leadline::config::QualityGateConfig>,
+    thresholds: &Thresholds,
+    scanners: &CheckScanners,
+) -> Result<(), CliError> {
+    let Some(gate) = gate else {
+        return Ok(());
+    };
+    if (gate.maintainability_rating.is_some() || gate.effort_minutes.is_some())
+        && thresholds.is_empty()
+    {
+        return Err(CliError::usage(format!(
+            "quality gate '{}' needs at least one metric threshold: its maintainability rating and effort come from metric overages",
+            gate.name
+        )));
+    }
+    if gate.security_rating.is_some()
+        && scanners.security.is_none()
+        && scanners.vulnerabilities.is_none()
+    {
+        return Err(CliError::usage(format!(
+            "quality gate '{}' has security_rating but no scanner input: pass --sarif or --osv/--trivy",
+            gate.name
+        )));
+    }
+    Ok(())
+}
+
+/// Severity counts over the scanner families this run ingested, `None` when
+/// none ran. Every ingested finding counts, gated or not: the security rating
+/// describes what the scanners reported, not what the gate was asked to fail
+/// on. SQL risks stay out: they are database-shape findings, not security
+/// findings.
+fn scanner_severity_counts(scanners: &CheckScanners) -> Option<leadline::quality::SeverityCounts> {
+    let mut counts = leadline::quality::SeverityCounts::default();
+    let mut present = false;
+    if let Some(security) = &scanners.security {
+        present = true;
+        for finding in &security.report.findings {
+            counts.record(finding.severity.as_str());
+        }
+    }
+    if let Some(vulnerabilities) = &scanners.vulnerabilities {
+        present = true;
+        for finding in &vulnerabilities.report.findings {
+            counts.record(finding.severity.as_str());
+        }
+    }
+    present.then_some(counts)
+}
+
+/// Evaluates the configured gate over one gated function set.
+fn evaluate_quality_gate(
+    gate: Option<&leadline::config::QualityGateConfig>,
+    scope: &'static str,
+    thresholds: &Thresholds,
+    functions: Vec<&FunctionAnalysis>,
+    scanners: &CheckScanners,
+) -> Option<leadline::quality::QualityGateReport> {
+    let gate = gate?;
+    let security = scanner_severity_counts(scanners);
+    let suppressed_violations =
+        leadline::quality::suppressed_violation_count(functions.iter().copied(), thresholds);
+    Some(leadline::quality::evaluate(
+        gate,
+        leadline::quality::GateInputs {
+            scope,
+            thresholds,
+            functions,
+            security: security.as_ref(),
+            suppressed_violations,
+        },
+    ))
+}
+
 /// A scanner gate failed when its outcome carries violations.
 fn outcome_failed<T>(violations: Option<&Vec<T>>) -> bool {
     violations.is_some_and(|violations| !violations.is_empty())
@@ -2713,6 +2780,7 @@ fn check_report(
     options: &CommonOptions,
     thresholds: &Thresholds,
     config: Option<&Config>,
+    gate: Option<&leadline::config::QualityGateConfig>,
     scanners: &CheckScanners,
 ) -> Result<ExitCode, CliError> {
     let excludes = analysis_excludes(config);
@@ -2726,9 +2794,23 @@ fn check_report(
     if report.files.is_empty() {
         return Err(no_supported_files(&options.path));
     }
+    // The gate reads every analyzed function, before the violation filter
+    // narrows the printed report.
+    let scoped: Vec<&FunctionAnalysis> = report
+        .files
+        .iter()
+        .flat_map(|file| file.functions.iter())
+        .collect();
+    let quality_gate = evaluate_quality_gate(
+        gate,
+        leadline::quality::SCOPE_OVERALL,
+        thresholds,
+        scoped,
+        scanners,
+    );
     report.files.retain_mut(|file| {
         file.functions
-            .retain(|function| thresholds.violates(&function.metrics));
+            .retain(|function| thresholds.violates_function(function));
         !file.functions.is_empty() || !file.parse_errors.is_empty()
     });
     let has_findings = !report.files.is_empty();
@@ -2744,6 +2826,7 @@ fn check_report(
         MetricGate {
             thresholds,
             regressions: &[],
+            quality_gate: quality_gate.as_ref(),
         },
     )?;
     let scanner_failed =
@@ -2758,10 +2841,15 @@ fn check_report(
                 .as_ref()
                 .map(|outcome| &outcome.violations),
         ) || outcome_failed(scanners.sql.as_ref().map(|outcome| &outcome.violations));
-    if has_findings || scanner_failed {
+    if has_findings || scanner_failed || gate_failed(quality_gate.as_ref()) {
         return Ok(ExitCode::from(1));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// True when the configured gate found at least one failed condition.
+fn gate_failed(report: Option<&leadline::quality::QualityGateReport>) -> bool {
+    report.is_some_and(|report| report.status == leadline::quality::GateStatus::Failed)
 }
 
 /// `check --base REV`: gate after-side absolute and optional delta violations.
@@ -2770,9 +2858,8 @@ fn check_changed(
     base: &str,
     thresholds: &Thresholds,
     regression_limits: Option<&RegressionLimits>,
-    security: Option<&leadline::security::SecurityOutcome>,
-    vulnerabilities: Option<&leadline::vulnerabilities::VulnerabilityOutcome>,
-    sql: Option<&leadline::sql::SqlOutcome>,
+    gate: Option<&leadline::config::QualityGateConfig>,
+    scanners: &CheckScanners,
 ) -> Result<ExitCode, CliError> {
     let mut changed = leadline::diff::analyze_changed(&options.path, base)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
@@ -2787,7 +2874,7 @@ fn check_changed(
         let Some(after) = change.after.as_ref() else {
             continue;
         };
-        let absolute = thresholds.violates(&after.metrics);
+        let absolute = thresholds.violates_function(after);
         let delta = regression_limits.is_some_and(|limits| {
             change
                 .before
@@ -2821,6 +2908,18 @@ fn check_changed(
         files,
     };
     let has_findings = !report.files.is_empty();
+    let scoped: Vec<&FunctionAnalysis> = changed
+        .functions
+        .iter()
+        .filter_map(|change| change.after.as_ref())
+        .collect();
+    let quality_gate = evaluate_quality_gate(
+        gate,
+        leadline::quality::SCOPE_CHANGED,
+        thresholds,
+        scoped,
+        scanners,
+    );
     let regressions: Vec<leadline::sarif::FunctionViolation<'_>> = regression_limits
         .map(|limits| {
             changed
@@ -2840,30 +2939,34 @@ fn check_changed(
                 .collect()
         })
         .unwrap_or_default();
-    let security_failed = security
-        .as_ref()
-        .is_some_and(|outcome| !outcome.violations.is_empty());
-    let vulnerabilities_failed = vulnerabilities
-        .as_ref()
-        .is_some_and(|outcome| !outcome.violations.is_empty());
-    let sql_failed = sql
-        .as_ref()
-        .is_some_and(|outcome| !outcome.violations.is_empty());
+    let scanner_failed =
+        outcome_failed(
+            scanners
+                .security
+                .as_ref()
+                .map(|outcome| &outcome.violations),
+        ) || outcome_failed(
+            scanners
+                .vulnerabilities
+                .as_ref()
+                .map(|outcome| &outcome.violations),
+        ) || outcome_failed(scanners.sql.as_ref().map(|outcome| &outcome.violations));
     options.print_report_or_with_security(
         &report,
         ScannerReports {
-            security,
-            vulnerabilities,
-            sql,
+            security: scanners.security.as_ref(),
+            vulnerabilities: scanners.vulnerabilities.as_ref(),
+            sql: scanners.sql.as_ref(),
         },
         has_findings,
         "No violations.",
         MetricGate {
             thresholds,
             regressions: &regressions,
+            quality_gate: quality_gate.as_ref(),
         },
     )?;
-    if has_findings || security_failed || vulnerabilities_failed || sql_failed {
+    if has_findings || scanner_failed || gate_failed(quality_gate.as_ref()) {
         return Ok(ExitCode::from(1));
     }
     Ok(ExitCode::SUCCESS)
@@ -2879,9 +2982,8 @@ fn check_baseline(
     baseline_path: &str,
     thresholds: &Thresholds,
     regression_limits: Option<&RegressionLimits>,
-    security: Option<&leadline::security::SecurityOutcome>,
-    vulnerabilities: Option<&leadline::vulnerabilities::VulnerabilityOutcome>,
-    sql: Option<&leadline::sql::SqlOutcome>,
+    gate: Option<&leadline::config::QualityGateConfig>,
+    scanners: &CheckScanners,
 ) -> Result<ExitCode, CliError> {
     let baseline = leadline::baseline::Baseline::read(Path::new(baseline_path))
         .map_err(|error| CliError::incomplete(error.to_string()))?;
@@ -2921,40 +3023,58 @@ fn check_baseline(
                 .collect()
         })
         .unwrap_or_default();
+    // Baseline mode gates the whole current report: a function absent from
+    // the snapshot counts as new, so nothing in scope is left out.
+    let scoped: Vec<&FunctionAnalysis> = report
+        .files
+        .iter()
+        .flat_map(|file| file.functions.iter())
+        .collect();
+    let quality_gate = evaluate_quality_gate(
+        gate,
+        leadline::quality::SCOPE_OVERALL,
+        thresholds,
+        scoped,
+        scanners,
+    );
     let mut filtered = report;
     filtered.files.retain_mut(|file| {
         file.functions.retain(|function| {
-            thresholds.violates(&function.metrics)
+            thresholds.violates_function(function)
                 || (regression_limits.is_some()
                     && regressed.contains(&(file.path.clone(), function.id.clone())))
         });
         !file.functions.is_empty() || !file.parse_errors.is_empty()
     });
     let has_findings = !filtered.files.is_empty();
-    let vulnerabilities_failed = vulnerabilities
-        .as_ref()
-        .is_some_and(|outcome| !outcome.violations.is_empty());
-    let security_failed = security
-        .as_ref()
-        .is_some_and(|outcome| !outcome.violations.is_empty());
-    let sql_failed = sql
-        .as_ref()
-        .is_some_and(|outcome| !outcome.violations.is_empty());
+    let scanner_failed =
+        outcome_failed(
+            scanners
+                .security
+                .as_ref()
+                .map(|outcome| &outcome.violations),
+        ) || outcome_failed(
+            scanners
+                .vulnerabilities
+                .as_ref()
+                .map(|outcome| &outcome.violations),
+        ) || outcome_failed(scanners.sql.as_ref().map(|outcome| &outcome.violations));
     options.print_report_or_with_security(
         &filtered,
         ScannerReports {
-            security,
-            vulnerabilities,
-            sql,
+            security: scanners.security.as_ref(),
+            vulnerabilities: scanners.vulnerabilities.as_ref(),
+            sql: scanners.sql.as_ref(),
         },
         has_findings,
         "No violations.",
         MetricGate {
             thresholds,
             regressions: &violations,
+            quality_gate: quality_gate.as_ref(),
         },
     )?;
-    if has_findings || security_failed || vulnerabilities_failed || sql_failed {
+    if has_findings || scanner_failed || gate_failed(quality_gate.as_ref()) {
         return Ok(ExitCode::from(1));
     }
     Ok(ExitCode::SUCCESS)
@@ -2982,7 +3102,7 @@ fn baseline_command(args: &[String]) -> Result<ExitCode, CliError> {
                         .clone(),
                 );
             }
-            flag @ ("--lcov" | "--jacoco" | "--coverage") => {
+            flag @ ("--lcov" | "--jacoco" | "--cobertura" | "--coverage") => {
                 has_coverage = parse_coverage_flag(flag, args, &mut index, &mut coverage)?;
             }
             value if !value.starts_with('-') && !seen_path => {
@@ -3043,7 +3163,7 @@ fn test_targets_command(args: &[String]) -> Result<ExitCode, CliError> {
                 index += 1;
                 top = Some(parse_top(args.get(index), "--top")?);
             }
-            flag @ ("--lcov" | "--jacoco" | "--coverage") => {
+            flag @ ("--lcov" | "--jacoco" | "--cobertura" | "--coverage") => {
                 has_coverage = parse_coverage_flag(flag, args, &mut index, &mut coverage)?;
             }
             value if !value.starts_with('-') && !seen_path => {
@@ -3426,11 +3546,14 @@ struct ScannerReports<'a> {
 
 /// Metric gate inputs for one `check` run: the real absolute thresholds plus
 /// this run's explicit regression violations. SARIF projects both; terminal
-/// and JSON output ignore them because the report is already filtered.
+/// and JSON output ignore them because the report is already filtered. The
+/// optional quality gate adds `quality_gate` to JSON output and a verdict
+/// section to terminal output.
 #[derive(Clone, Copy)]
 struct MetricGate<'a> {
     thresholds: &'a Thresholds,
     regressions: &'a [leadline::sarif::FunctionViolation<'a>],
+    quality_gate: Option<&'a leadline::quality::QualityGateReport>,
 }
 
 impl CommonOptions {
@@ -3488,7 +3611,7 @@ impl CommonOptions {
                             CliError::usage("--index requires a directory")
                         })?));
                 }
-                flag @ ("--lcov" | "--jacoco" | "--coverage") => {
+                flag @ ("--lcov" | "--jacoco" | "--cobertura" | "--coverage") => {
                     has_coverage = parse_coverage_flag(flag, args, &mut index, &mut coverage)?;
                 }
                 value if !value.starts_with('-') && !has_path => {
@@ -3679,6 +3802,7 @@ impl CommonOptions {
             // `--json` writes, so `report --from` over a saved run produces
             // byte-identical output to a live run with the same limits.
             let mut document = serde_json::to_value(report).map_err(internal)?;
+            stamp_quality_gate(&mut document, gate.quality_gate)?;
             if let Some(security) = security {
                 document["security_violations"] =
                     serde_json::to_value(&security.violations).map_err(internal)?;
@@ -3703,6 +3827,7 @@ impl CommonOptions {
                 &self.budget,
             ))
             .map_err(internal)?;
+            stamp_quality_gate(&mut value, gate.quality_gate)?;
             if let Some(security) = security {
                 value["security_violations"] =
                     serde_json::to_value(&security.violations).map_err(internal)?;
@@ -3742,6 +3867,7 @@ impl CommonOptions {
             println!("{document}");
         } else if self.json {
             let mut value = serde_json::to_value(report).map_err(internal)?;
+            stamp_quality_gate(&mut value, gate.quality_gate)?;
             if let Some(security) = security {
                 value["security_violations"] =
                     serde_json::to_value(&security.violations).map_err(internal)?;
@@ -3767,8 +3893,32 @@ impl CommonOptions {
         } else {
             println!("{empty_text}");
         }
+        // The verdict follows the terminal report only: the machine-readable
+        // shapes already carry it as `quality_gate`.
+        if !self.machine_readable() {
+            print_quality_gate(gate.quality_gate);
+        }
         Ok(())
     }
+
+    /// True when this run prints a machine-readable document, so terminal-only
+    /// sections stay off.
+    fn machine_readable(&self) -> bool {
+        self.ci_format.is_some() || self.agent_json || self.sarif || self.json
+    }
+}
+
+/// Stamps the gate verdict into one machine-readable document.
+fn stamp_quality_gate(
+    document: &mut serde_json::Value,
+    quality_gate: Option<&leadline::quality::QualityGateReport>,
+) -> Result<(), CliError> {
+    let Some(quality_gate) = quality_gate else {
+        return Ok(());
+    };
+    document["quality_gate"] = serde_json::to_value(quality_gate)
+        .map_err(|error| CliError::internal(error.to_string()))?;
+    Ok(())
 }
 
 /// Print scanner terminal sections for findings that exist.
@@ -3780,6 +3930,52 @@ fn has_scanner_findings(
     security.is_some_and(|outcome| !outcome.report.findings.is_empty())
         || vulnerabilities.is_some_and(|outcome| !outcome.report.findings.is_empty())
         || sql.is_some_and(|outcome| !outcome.report.findings.is_empty())
+}
+
+/// Terminal verdict line for a configured gate, plus its failed conditions.
+fn print_quality_gate(report: Option<&leadline::quality::QualityGateReport>) {
+    use leadline::quality::GateStatus;
+    let Some(report) = report else {
+        return;
+    };
+    let status = if report.status == GateStatus::Passed {
+        "passed"
+    } else {
+        "failed"
+    };
+    println!(
+        "quality gate {}: {status} (scope {}, maintainability {}, security {}, effort {} min, suppressed {})",
+        report.name,
+        report.scope,
+        rating_label(report.ratings.maintainability),
+        rating_label(report.ratings.security),
+        report.effort.minutes,
+        report.suppressed_violations,
+    );
+    for condition in &report.conditions {
+        if condition.status == GateStatus::Passed {
+            continue;
+        }
+        println!(
+            "  {} {} {}: {}",
+            condition.metric,
+            condition.operator,
+            gate_value(&condition.threshold),
+            gate_value(&condition.actual),
+        );
+    }
+}
+
+fn rating_label(rating: Option<leadline::config::Rating>) -> String {
+    rating.map_or_else(|| "unknown".to_owned(), |rating| rating.as_str().to_owned())
+}
+
+/// JSON values render bare in gate lines: `B`, not `"B"`.
+fn gate_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
 }
 
 /// Print scanner terminal sections for findings that exist.
@@ -3842,43 +4038,39 @@ fn merge_sarif_run(document: &mut serde_json::Value, extra: &serde_json::Value) 
 enum CoverageFormat {
     Lcov,
     Jacoco,
+    Cobertura,
     Auto,
 }
 
+/// Loads one coverage file. `Auto` reads the extension first (`.info` is
+/// LCOV) and otherwise decides by XML root element, so `--coverage` accepts
+/// both XML dialects without guessing.
 fn load_coverage(path: &str, format: CoverageFormat) -> Result<CoverageMap, CliError> {
-    let is_lcov = match format {
-        CoverageFormat::Lcov => true,
-        CoverageFormat::Jacoco => false,
-        CoverageFormat::Auto if path.ends_with(".info") => true,
-        CoverageFormat::Auto if path.ends_with(".xml") => false,
-        CoverageFormat::Auto => {
-            return Err(CliError::coverage(format!(
-                "cannot detect coverage format for '{path}': use .info for LCOV or .xml for JaCoCo"
-            )));
-        }
+    use leadline::coverage::CoverageFormat as Detected;
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        CliError::coverage(format!("cannot read coverage file '{path}': {error}"))
+    })?;
+    let detected = match format {
+        CoverageFormat::Lcov => Detected::Lcov,
+        CoverageFormat::Jacoco => Detected::Jacoco,
+        CoverageFormat::Cobertura => Detected::Cobertura,
+        CoverageFormat::Auto if path.ends_with(".info") => Detected::Lcov,
+        CoverageFormat::Auto => Detected::detect_xml(&text).map_err(|error| {
+            CliError::coverage(format!(
+                "cannot detect coverage format for '{path}': {error}"
+            ))
+        })?,
     };
-    if is_lcov {
-        let text = std::fs::read_to_string(path).map_err(|error| {
-            CliError::coverage(format!("cannot read LCOV file '{path}': {error}"))
-        })?;
-        CoverageMap::from_lcov(&text).map_err(|error| {
-            CliError::coverage(format!("cannot parse LCOV file '{path}': {error}"))
-        })
-    } else {
-        let text = std::fs::read_to_string(path).map_err(|error| {
-            CliError::coverage(format!("cannot read JaCoCo file '{path}': {error}"))
-        })?;
-        CoverageMap::from_jacoco_xml(&text).map_err(|error| {
-            CliError::coverage(format!("cannot parse JaCoCo file '{path}': {error}"))
-        })
-    }
+    leadline::coverage::parse(&text, detected).map_err(|error| {
+        CliError::coverage(format!("cannot parse coverage file '{path}': {error}"))
+    })
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--index DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--sarif FILE] [--baseline-sarif FILE] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--osv FILE] [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--sql] [--sql-fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--index DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]
-  leadline security [PATH] --sarif FILE [--baseline-sarif FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--json] [--format agent-json|sarif] [--top N]\n  leadline risk [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]
+    "Usage:\n  leadline analyze [PATH] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE] [--index DIR]\n  leadline function FILE NAME [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE]\n  leadline check [PATH] [--base REV | --baseline FILE] [--regressions] [--cognitive N] [--cyclomatic N] [--crap N] [--max-nesting N] [--sarif FILE] [--baseline-sarif FILE] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--osv FILE] [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--sql] [--sql-fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE] [--index DIR]\n  leadline changed [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline diff [REV] [--staged | --target REV] [--renames] [--path PATH] [--json] [--format agent-json] [--explain] [--top N] [--sort-by crap|cognitive|cyclomatic] [--min-crap X] [--min-delta D]\n  leadline hotspots [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE]
+  leadline security [PATH] --sarif FILE [--baseline-sarif FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--new-only] [--changed-only] [--json] [--format agent-json|sarif] [--top N]\n  leadline risk [PATH] [--limit N] [--since 30d|90d|365d] [--json] [--format agent-json] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE]\n  leadline coupling TARGET [--path ROOT] [--top N] [--min-cochanges N] [--json] [--format agent-json]
   leadline dependencies [PATH] [--json] [--format agent-json]
-  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--coverage FILE] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline sql [PATH] [--large-offset N] [--migration-root DIR] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline vulnerabilities [PATH] --osv FILE [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline sql-plan --current DIR --baseline DIR [--max-cost-increase-percent N] [--max-plan-rows-ratio N] [--max-estimate-error-ratio N] [--json] [--format agent-json|sarif] [--top N]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline mcp [--port [N] [--host ADDR]]\n  leadline stats [PATH] [--port [N]] [--host ADDR] [--open] [--since 30d|90d|365d] [--target REV] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--coverage FILE]\n  leadline index [PATH] [--output DIR] [--verify] [--json]\n  leadline skill\n  leadline update [--integrations]\n  leadline version\n  leadline --version"
+  leadline impact TARGET [--path ROOT] [--top N] [--json] [--format agent-json]\n  leadline project [PATH] [--target REV] [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE] [--json] [--format agent-json]\n  leadline debt [--base REV] [--staged | --target REV] [--renames] [--path PATH] [--since 30d|90d|365d] [--fail-on-regression] [--json] [--format agent-json]\n  leadline snapshot [PATH] --output FILE [--since 30d|90d|365d] [--pit FILE]... [--stryker FILE]... [--replace]\n  leadline mutation [PATH] (--pit FILE | --stryker FILE)... [--test-map FILE]... [--json]\n  leadline duplication [PATH] [--base REV] [--json]\n  leadline policy [PATH] [--base REV] [--fail-on-violation] [--json]\n  leadline sql [PATH] [--large-offset N] [--migration-root DIR] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline vulnerabilities [PATH] --osv FILE [--trivy FILE] [--baseline-osv FILE] [--baseline-trivy FILE] [--base REV | --staged | --target REV] [--fail-on-severity low|medium|high|critical] [--json] [--format agent-json|sarif] [--top N]\n  leadline sql-plan --current DIR --baseline DIR [--max-cost-increase-percent N] [--max-plan-rows-ratio N] [--max-estimate-error-ratio N] [--json] [--format agent-json|sarif] [--top N]\n  leadline doctor [PATH]\n  leadline test-targets [PATH] (--coverage FILE | --lcov FILE | --jacoco FILE | --cobertura FILE) [--top N] [--format agent-json]\n  leadline baseline [PATH] --output FILE [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE]\n  leadline mcp [--port [N] [--host ADDR]]\n  leadline stats [PATH] [--port [N]] [--host ADDR] [--open] [--since 30d|90d|365d] [--target REV] [--pit FILE]... [--stryker FILE]... [--test-map FILE]... [--snapshots FILE] [--include-authors | --anonymize-authors | --exclude-git-identities] [--lcov FILE] [--jacoco FILE] [--cobertura FILE] [--coverage FILE]\n  leadline index [PATH] [--output DIR] [--verify] [--json]\n  leadline skill\n  leadline update [--integrations]\n  leadline version\n  leadline --version"
 }
 
 #[cfg(test)]

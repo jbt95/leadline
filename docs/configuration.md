@@ -22,6 +22,12 @@ cyclomatic = 0
 max_nesting = 0
 crap = 0.0
 
+[quality_gate]
+name = "team-default"
+maintainability_rating = "B"
+security_rating = "A"
+effort_minutes = 600
+
 [duplication]
 min_tokens = 100
 min_lines = 10
@@ -48,7 +54,18 @@ Metric profiles. Both profile keys must be `"default"`.
 
 ## `[thresholds.function]`
 
-Absolute limits for `check`. Any subset of `cognitive`, `cyclomatic`, `max_nesting` (integers), and `crap` (float) is allowed. A value fails when it exceeds the limit. Unknown CRAP also fails a CRAP gate.
+Absolute limits for `check`. Any subset of `cognitive`, `cyclomatic`, `max_nesting` (integers), and `crap` (float) is allowed. A value fails when it exceeds the limit. Unknown CRAP also fails a CRAP gate. A function's own `NOSONAR` / `leadline: ignore <dimensions>` line silences the dimensions it names, never a parse error ([quality gate](quality-gate.md#in-source-suppression)).
+
+## `[quality_gate]`
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `name` | string | `default` | Verdict name, reported in every output shape. |
+| `maintainability_rating` | `A`–`E` | none | Highest allowed effort-to-size rating. |
+| `security_rating` | `A`–`E` | none | Highest allowed rating over ingested scanner severities. |
+| `effort_minutes` | integer >= 0 | none | Highest allowed remediation effort in the gated set. |
+
+At least one condition is required, and a condition with no input to evaluate is a usage error (exit `2`): the maintainability rating and effort need at least one threshold, the security rating needs `--sarif` or `--osv`/`--trivy`. See [quality gate, ratings, and effort](quality-gate.md) for the weights, bands, scope, and exit codes.
 
 ## `[vulnerabilities]`
 

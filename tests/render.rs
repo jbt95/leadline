@@ -185,6 +185,7 @@ fn annotations_escape_properties_but_not_message_data() {
         passed: false,
         files: 1,
         violations: 1,
+        quality_gate: None,
     };
     assert_eq!(
         render(
@@ -312,6 +313,7 @@ fn badge_is_stable_and_carries_only_the_verdict_and_count() {
             passed: true,
             files: 1,
             violations: 0,
+            quality_gate: None,
         },
         CiFormat::Badge,
     );
@@ -350,7 +352,8 @@ fn a_clean_document_passes_without_rendering_rows() {
         GateSummary {
             passed: true,
             files: 1,
-            violations: 0
+            violations: 0,
+            quality_gate: None,
         }
     );
     assert_eq!(render(&findings, &summary, CiFormat::Compact), "");
@@ -426,9 +429,45 @@ fn a_scanner_only_document_reports_its_own_paths() {
         GateSummary {
             passed: false,
             files: 1,
-            violations: 1
+            violations: 1,
+            quality_gate: None,
         }
     );
+}
+
+#[test]
+fn a_saved_quality_gate_keeps_the_live_verdict_and_renders_a_line() {
+    let mut gated = document();
+    gated["quality_gate"] = json!({
+        "name": "team",
+        "status": "failed",
+        "scope": "changed",
+        "conditions": [
+            {"metric": "effort_minutes", "operator": "<=", "threshold": 0, "actual": 40, "status": "failed"}
+        ],
+        "ratings": {"maintainability": "C", "reliability": null, "security": "A"},
+        "effort": {"model": "metric-overage", "minutes": 40, "functions": 1, "by_metric": {"cognitive": 40}},
+        "suppressed_violations": 2
+    });
+    let summary = summary_from_check_json(&gated, &limits()).unwrap();
+    // The live run fails on a failed gate even with no metric findings.
+    let gate = summary.quality_gate.clone().expect("gate must be read");
+    assert!(gate.failed());
+    assert_eq!(gate.scope, "changed");
+    assert_eq!(gate.effort_minutes, 40);
+
+    let markdown = render(&[], &summary, CiFormat::Markdown);
+    assert!(
+        markdown.contains(
+            "Quality gate **team**: failed (scope changed, maintainability C, security A, effort 40 min, 2 suppressed)"
+        ),
+        "{markdown}"
+    );
+
+    // Without a gate block the summary is findings-only, as before.
+    let plain = summary_from_check_json(&document(), &limits()).unwrap();
+    assert!(plain.quality_gate.is_none());
+    assert!(!render(&[], &plain, CiFormat::Markdown).contains("Quality gate"));
 }
 
 #[test]

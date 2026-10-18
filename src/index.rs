@@ -7,14 +7,16 @@
 
 use crate::core::{
     FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE, MetricContribution,
-    OUTPUT_SCHEMA_VERSION,
+    OUTPUT_SCHEMA_VERSION, SuppressionMetric,
 };
 use crate::history::FileHistory;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-pub const INDEX_SCHEMA_VERSION: u32 = 1;
+// Bumped with the suppressed-dimension field: an older index carries no
+// suppression facts, so it is rebuilt rather than reused.
+pub const INDEX_SCHEMA_VERSION: u32 = 2;
 pub const INDEX_FILE_NAME: &str = "index.json";
 pub const DEFAULT_INDEX_DIR: &str = ".leadline";
 
@@ -125,7 +127,41 @@ pub struct IndexedFunction {
     end_byte: u64,
     metrics: IndexedMetrics,
     contributions: Vec<IndexedContribution>,
+    #[serde(default)]
+    suppressed_metrics: Vec<IndexedSuppression>,
     source_fingerprint: u64,
+}
+
+/// Serializable mirror of [`SuppressionMetric`] (`core` derives no Deserialize).
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexedSuppression {
+    Cognitive,
+    Cyclomatic,
+    MaxNesting,
+    Crap,
+}
+
+impl From<SuppressionMetric> for IndexedSuppression {
+    fn from(metric: SuppressionMetric) -> IndexedSuppression {
+        match metric {
+            SuppressionMetric::Cognitive => IndexedSuppression::Cognitive,
+            SuppressionMetric::Cyclomatic => IndexedSuppression::Cyclomatic,
+            SuppressionMetric::MaxNesting => IndexedSuppression::MaxNesting,
+            SuppressionMetric::Crap => IndexedSuppression::Crap,
+        }
+    }
+}
+
+impl From<IndexedSuppression> for SuppressionMetric {
+    fn from(metric: IndexedSuppression) -> SuppressionMetric {
+        match metric {
+            IndexedSuppression::Cognitive => SuppressionMetric::Cognitive,
+            IndexedSuppression::Cyclomatic => SuppressionMetric::Cyclomatic,
+            IndexedSuppression::MaxNesting => SuppressionMetric::MaxNesting,
+            IndexedSuppression::Crap => SuppressionMetric::Crap,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -291,6 +327,12 @@ impl From<&FunctionAnalysis> for IndexedFunction {
                 .iter()
                 .map(IndexedContribution::from)
                 .collect(),
+            suppressed_metrics: function
+                .suppressed_metrics
+                .iter()
+                .copied()
+                .map(IndexedSuppression::from)
+                .collect(),
             source_fingerprint: function.source_fingerprint,
         }
     }
@@ -311,6 +353,11 @@ impl From<IndexedFunction> for FunctionAnalysis {
                 .contributions
                 .into_iter()
                 .map(MetricContribution::from)
+                .collect(),
+            suppressed_metrics: function
+                .suppressed_metrics
+                .into_iter()
+                .map(SuppressionMetric::from)
                 .collect(),
             source_fingerprint: function.source_fingerprint,
         }

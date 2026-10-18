@@ -40,6 +40,7 @@ fn function(name: &str, cognitive: u32, cyclomatic: u32, crap: Option<f64>) -> F
         end_byte: 100,
         metrics: metrics(cognitive, cyclomatic, crap),
         contributions: vec![],
+        suppressed_metrics: vec![],
         source_fingerprint: 0,
     }
 }

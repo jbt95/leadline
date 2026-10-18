@@ -1,6 +1,6 @@
 use leadline::config::{
-    Config, DuplicationConfig, RegressionLimits, Severity, SqlConfig, Thresholds, UnusedConfig,
-    VulnerabilityConfig, load_from, parse_str,
+    Config, DuplicationConfig, QualityGateConfig, Rating, RegressionLimits, Severity, SqlConfig,
+    Thresholds, UnusedConfig, VulnerabilityConfig, load_from, parse_str,
 };
 
 use std::path::PathBuf;
@@ -20,6 +20,11 @@ max_nesting = 4
 [unused]
 entries = ["src/cli.ts"]
 include_tests = true
+[quality_gate]
+name = "team-default"
+maintainability_rating = "B"
+security_rating = "A"
+effort_minutes = 600
 "#;
 
 #[test]
@@ -47,9 +52,45 @@ fn parses_full_config() {
                 include_tests: true,
             },
             index: None,
+            quality_gate: Some(QualityGateConfig {
+                name: "team-default".to_string(),
+                maintainability_rating: Some(Rating::B),
+                security_rating: Some(Rating::A),
+                effort_minutes: Some(600),
+            }),
         }
     );
     config.validate().unwrap();
+}
+
+#[test]
+fn quality_gate_requires_a_condition_and_a_valid_letter() {
+    assert!(
+        parse_str("[quality_gate]\nname = \"empty\"\n")
+            .unwrap_err()
+            .message()
+            .contains("at least one")
+    );
+    assert!(
+        parse_str("[quality_gate]\nmaintainability_rating = \"F\"\n")
+            .unwrap_err()
+            .message()
+            .contains("must be A, B, C, D, or E")
+    );
+    // Rating letters are accepted in either case.
+    let lowercased = parse_str("[quality_gate]\nmaintainability_rating = \"b\"\n").unwrap();
+    assert_eq!(
+        lowercased.quality_gate.unwrap().maintainability_rating,
+        Some(Rating::B)
+    );
+    // An unnamed gate keeps a stable name in every report.
+    let unnamed = parse_str("[quality_gate]\neffort_minutes = 0\n").unwrap();
+    let gate = unnamed.quality_gate.unwrap();
+    assert_eq!(gate.name, "default");
+    assert_eq!(
+        gate.conditions().collect::<Vec<_>>(),
+        vec!["effort_minutes"]
+    );
 }
 
 const DUPLICATION: &str = r#"

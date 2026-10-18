@@ -68,6 +68,7 @@ impl BaselineFunction {
                 crap: self.crap,
             },
             contributions: Vec::new(),
+            suppressed_metrics: Vec::new(),
             source_fingerprint: 0,
         }
     }

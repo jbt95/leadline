@@ -56,6 +56,7 @@ fn function_full(name: &str, start_line: u32, metrics: FunctionMetrics) -> Funct
         end_byte: u64::from(start_line + 5),
         metrics,
         contributions: Vec::new(),
+        suppressed_metrics: Vec::new(),
         source_fingerprint: 0,
     }
 }

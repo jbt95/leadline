@@ -27,11 +27,48 @@ pub struct Finding {
 }
 
 /// Gate verdict plus the counts the renderers need.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GateSummary {
     pub passed: bool,
     pub files: usize,
     pub violations: usize,
+    /// The `quality_gate` block of the rendered document, when it has one.
+    pub quality_gate: Option<GateVerdict>,
+}
+
+/// The named quality gate's own verdict, read from a check document.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GateVerdict {
+    pub name: String,
+    pub status: String,
+    pub scope: String,
+    pub maintainability: Option<String>,
+    pub security: Option<String>,
+    pub effort_minutes: u64,
+    pub suppressed_violations: u64,
+}
+
+impl GateVerdict {
+    /// False when the gate itself failed, so a saved document keeps the live
+    /// run's overall verdict.
+    pub fn failed(&self) -> bool {
+        self.status == "failed"
+    }
+
+    /// One markdown line: name, status, ratings, effort, suppressed count.
+    fn markdown_line(&self) -> String {
+        let rating = |value: &Option<String>| value.clone().unwrap_or_else(|| "unknown".to_owned());
+        format!(
+            "Quality gate **{}**: {} (scope {}, maintainability {}, security {}, effort {} min, {} suppressed)\n",
+            self.name,
+            self.status,
+            self.scope,
+            rating(&self.maintainability),
+            rating(&self.security),
+            self.effort_minutes,
+            self.suppressed_violations,
+        )
+    }
 }
 
 /// Gate limits re-applied to `files[].functions[].metrics` when the finding
@@ -215,10 +252,46 @@ pub fn summary_from_check_json(
             .collect::<BTreeSet<_>>()
             .len(),
     };
+    let quality_gate = gate_verdict(document);
     Ok(GateSummary {
-        passed: findings.is_empty(),
+        // The live run's verdict is violations or a failed gate, so a saved
+        // document keeps both halves of it.
+        passed: findings.is_empty() && quality_gate.as_ref().is_none_or(|gate| !gate.failed()),
         files,
         violations: findings.len(),
+        quality_gate,
+    })
+}
+
+/// Reads the `quality_gate` block of a check document, when present.
+pub fn gate_verdict(value: &Value) -> Option<GateVerdict> {
+    let gate = value.get("quality_gate")?.as_object()?;
+    let ratings = gate.get("ratings").and_then(Value::as_object);
+    let effort = gate.get("effort").and_then(Value::as_object);
+    Some(GateVerdict {
+        name: gate.get("name")?.as_str()?.to_owned(),
+        status: gate.get("status")?.as_str()?.to_owned(),
+        scope: gate
+            .get("scope")
+            .and_then(Value::as_str)
+            .unwrap_or("overall")
+            .to_owned(),
+        maintainability: ratings
+            .and_then(|ratings| ratings.get("maintainability"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        security: ratings
+            .and_then(|ratings| ratings.get("security"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        effort_minutes: effort
+            .and_then(|effort| effort.get("minutes"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        suppressed_violations: gate
+            .get("suppressed_violations")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
     })
 }
 
@@ -476,6 +549,9 @@ fn markdown(findings: &[&Finding], summary: &GateSummary) -> String {
         summary.files,
         plural(summary.files, "file", "files"),
     );
+    if let Some(gate) = &summary.quality_gate {
+        output.push_str(&gate.markdown_line());
+    }
     if findings.is_empty() {
         output.push_str("No findings.\n");
         return output;

@@ -542,6 +542,7 @@ mod tests {
             metrics,
             source_fingerprint: 0,
             contributions: Vec::new(),
+            suppressed_metrics: Vec::new(),
         }
     }
 

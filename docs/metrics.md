@@ -297,3 +297,21 @@ per run); a report that hits a ceiling is marked `complete: false` rather
 than dropping candidates silently. `duplication --base REV` compares
 occurrence groups between two states, with group statuses
 `new`/`existing`/`resolved` and added/removed occurrence counts.
+
+## Remediation effort and ratings
+
+Two derived quantities exist only when a run asks for them — the named quality
+gate ([quality-gate.md](quality-gate.md)). Both are deterministic functions of
+the metrics above:
+
+- **Effort** uses the `metric-overage` model: 8 minutes per cognitive point, 4
+  per cyclomatic point, 10 per nesting level, and 12 per CRAP point over the
+  configured limit, summed per function and per run. A dimension with no known
+  overage — an unavailable CRAP under a CRAP gate, or a suppressed dimension —
+  contributes no minutes and is named instead.
+- **Ratings** are A–E. Maintainability divides effort by `loc * 30` minutes and
+  bands the ratio; security bands the worst ingested scanner severity.
+  Reliability stays `null`: `check` reads no bug-severity source.
+
+Neither quantity changes a metric value: `metrics` in every report is exactly
+what the parser measured, and effort and ratings are reported alongside it.

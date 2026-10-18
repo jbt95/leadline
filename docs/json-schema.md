@@ -6,7 +6,7 @@ Reports are UTF-8 JSON. Paths use `/` separators. Floats use stable decimal form
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "analyzer_version": "0.1.0",
   "metric_profile": "default",
   "metric_specs": {
@@ -58,7 +58,7 @@ Reports are UTF-8 JSON. Paths use `/` separators. Floats use stable decimal form
 }
 ```
 
-- `schema_version`: output compatibility marker (`2`; `check` JSON may carry `security_violations`, `vulnerability_violations`, or `sql_violations` when scanner inputs are passed).
+- `schema_version`: output compatibility marker (`3`; `check` JSON may carry `security_violations`, `vulnerability_violations`, or `sql_violations` when scanner inputs are passed, and `quality_gate` when `leadline.toml` configures one).
 - `analyzer_version`: the `leadline` crate version that produced the report.
 - `metric_profile`: always `default`; see `metrics.md` for rules.
 - `metric_specs`: per-family rule versions, each `default` in 1.0.
@@ -71,13 +71,15 @@ Reports are UTF-8 JSON. Paths use `/` separators. Floats use stable decimal form
   `function`, `method`, `constructor`, `lambda`, `arrow`, `anonymous`. Byte
   offsets are source bytes.
 - `coverage` and `crap` are numbers or `null`. `null` means unknown (no overlapping coverage lines); it never means zero.
+- `suppressed_metrics` lists the gate dimensions an in-source suppression line silenced for that function (`NOSONAR`, `leadline: ignore cognitive, cyclomatic`). The key is omitted when the list is empty. Suppression never hides parse errors. See [quality-gate.md](quality-gate.md#in-source-suppression).
+- `quality_gate` appears on `check` output only, when `leadline.toml` has a `[quality_gate]`: its name, its own `status`, the gate `scope` (`overall` or `changed`), the evaluated `conditions`, `ratings` (`maintainability`, `reliability`, `security`), `effort` (`metric-overage` minutes with a per-metric breakdown), and `suppressed_violations`. A condition on an uncomputable value fails closed. See [quality-gate.md](quality-gate.md).
 - `parse_errors` entries carry `kind`, `start_line`, `start_column`, `end_line`, `end_column`. They are inline per file, never fatal by themselves.
 
 ## Changed envelope
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "analyzer_version": "0.1.0",
   "metric_profile": "default",
   "metric_specs": { "cyclomatic": "default", "cognitive": "default", "halstead": "default", "maintainability": "default", "crap": "default" },
@@ -336,7 +338,7 @@ Each `functions` entry pairs one before/after version. `before: null` means adde
 
 ## Other reports
 
-The top-level `schema_version` `2` above covers the analyze/function/check
+The top-level `schema_version` `3` above covers the analyze/function/check
 and changed/diff envelopes. Every other report family carries its own
 `schema_version` (`1` today) and is documented next to its command:
 

@@ -56,6 +56,7 @@ fn function(name: &str, start: u32) -> FunctionAnalysis {
         end_byte: 100,
         metrics: metrics(),
         contributions: vec![],
+        suppressed_metrics: vec![],
         source_fingerprint: 0,
     }
 }

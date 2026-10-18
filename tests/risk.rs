@@ -56,6 +56,7 @@ fn file_with_metrics(
             end_byte: 100,
             metrics: metrics(cognitive, cyclomatic, crap),
             contributions: vec![],
+            suppressed_metrics: vec![],
             source_fingerprint: 0,
         }],
         parse_errors: vec![],

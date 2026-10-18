@@ -5,6 +5,44 @@ use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
 use std::collections::BTreeMap;
 
+/// Coverage document formats `leadline` reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoverageFormat {
+    Lcov,
+    Jacoco,
+    Cobertura,
+}
+
+impl CoverageFormat {
+    /// Detects the XML dialect from its root element: Cobertura opens with
+    /// `<coverage>`, JaCoCo with `<report>`.
+    pub fn detect_xml(text: &str) -> Result<Self> {
+        let mut reader = Reader::from_str(text);
+        loop {
+            match reader.read_event()? {
+                Event::Start(element) | Event::Empty(element) => {
+                    return match element.name().as_ref() {
+                        "coverage" => Ok(Self::Cobertura),
+                        "report" => Ok(Self::Jacoco),
+                        other => Err(format!("unknown XML coverage root element <{other}>").into()),
+                    };
+                }
+                Event::Eof => return Err("empty XML coverage document".into()),
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Parses one coverage document in the named format.
+pub fn parse(text: &str, format: CoverageFormat) -> Result<CoverageMap> {
+    match format {
+        CoverageFormat::Lcov => CoverageMap::from_lcov(text),
+        CoverageFormat::Jacoco => CoverageMap::from_jacoco_xml(text),
+        CoverageFormat::Cobertura => CoverageMap::from_cobertura_xml(text),
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CoverageMap {
     files: BTreeMap<String, BTreeMap<u32, u64>>,
@@ -119,6 +157,62 @@ impl CoverageMap {
             }
         }
         Ok(coverage)
+    }
+
+    /// Cobertura XML: `<class filename>` scopes the `<line number hits
+    /// condition-coverage="50% (1/2)">` records inside it. `filename` is
+    /// already repository-relative, so it is normalized and used as-is; a
+    /// missing or unparsable branch fraction leaves branches unknown rather
+    /// than counting them as uncovered.
+    pub fn from_cobertura_xml(text: &str) -> Result<Self> {
+        let mut coverage = Self::default();
+        let mut reader = Reader::from_str(text);
+        reader.config_mut().trim_text(true);
+        let mut source_file = None;
+
+        loop {
+            match reader.read_event()? {
+                Event::Start(element) => match element.name().as_ref() {
+                    "class" => {
+                        source_file = attribute(&element, "filename")?
+                            .map(|name| normalize_coverage_path(&name));
+                    }
+                    "line" => {
+                        if let Some(path) = source_file.as_ref() {
+                            coverage.insert_cobertura_line(path, &element)?;
+                        }
+                    }
+                    _ => {}
+                },
+                Event::Empty(element) if element.name().as_ref() == "line" => {
+                    if let Some(path) = source_file.as_ref() {
+                        coverage.insert_cobertura_line(path, &element)?;
+                    }
+                }
+                Event::End(element) if element.name().as_ref() == "class" => {
+                    source_file = None;
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        Ok(coverage)
+    }
+
+    fn insert_cobertura_line(&mut self, path: &str, element: &BytesStart<'_>) -> Result<()> {
+        let number: u32 = attribute(element, "number")?
+            .ok_or("Cobertura line has no number attribute")?
+            .parse()?;
+        let hits: u64 = attribute(element, "hits")?
+            .ok_or("Cobertura line has no hits attribute")?
+            .parse()?;
+        self.insert(path.to_owned(), number, hits);
+        if let Some(fraction) = attribute(element, "condition-coverage")?
+            && let Some((covered, total)) = parse_condition_coverage(&fraction)
+        {
+            self.insert_branch_bulk(path.to_owned(), number, total, covered);
+        }
+        Ok(())
     }
 
     pub fn merge(&mut self, other: Self) {
@@ -257,6 +351,16 @@ impl CoverageMap {
         let (_, lines) = matches.next()?;
         matches.next().is_none().then_some(lines)
     }
+}
+
+/// `"50% (1/2)"` -> `(1, 2)`. Anything else is unknown branch data.
+fn parse_condition_coverage(value: &str) -> Option<(u64, u64)> {
+    let open = value.find('(')?;
+    let close = value[open..].find(')')? + open;
+    let (covered, total) = value[open + 1..close].split_once('/')?;
+    let covered: u64 = covered.trim().parse().ok()?;
+    let total: u64 = total.trim().parse().ok()?;
+    (total > 0 && covered <= total).then_some((covered, total))
 }
 
 fn normalize_coverage_path(value: &str) -> String {

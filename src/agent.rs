@@ -779,6 +779,7 @@ mod tests {
             metrics: metrics(cognitive, cyclomatic, crap),
             source_fingerprint: 0,
             contributions: Vec::new(),
+            suppressed_metrics: Vec::new(),
         }
     }
 

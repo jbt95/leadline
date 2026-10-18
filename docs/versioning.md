@@ -4,10 +4,10 @@
 
 | Schema | Current | Bumped when |
 | --- | --- | --- |
-| CLI (flags, commands, exit codes) | 1.5 | A flag, command, or exit code is added, changed, or removed. |
-| JSON schema (`schema_version`) | `2` analysis + `test-targets` / `1` other reports / none in scanner reports | An envelope or function field is added, changed, or removed. |
+| CLI (flags, commands, exit codes) | 1.6 | A flag, command, or exit code is added, changed, or removed. |
+| JSON schema (`schema_version`) | `3` analysis + `test-targets` / `1` other reports / none in scanner reports | An envelope or function field is added, changed, or removed. |
 | Metric spec (`metric_profile`, `metric_specs`) | `default` | Any metric rule changes. The profile name does not version; metric changes ride the release version plus a changelog entry describing the delta. |
-| MCP tools | 1.7 | A tool, input, or output shape changes. |
+| MCP tools | 1.8 | A tool, input, or output shape changes. |
 
 ## Rules
 
@@ -15,7 +15,7 @@
 - A metric rule change requires a minor or major release plus a changelog entry describing the delta. The `default` profile name never versions — there are no `default-v2` tags.
 - Additive JSON fields are minor; removed or retyped fields are major.
 - The analyze/function/check and changed/diff envelopes share the top-level
-  `schema_version` (`2`), and `test-targets` matches them. Every other report
+  `schema_version` (`3`), and `test-targets` matches them. Every other report
   family (hotspots, coupling, dependencies, impact, risk, project, debt,
   duplication, and snapshots) versions independently and currently emits `1`;
   the scanner reports (`security`, `vulnerabilities`, `sql`, `sql-plan`) carry

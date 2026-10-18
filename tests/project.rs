@@ -40,6 +40,7 @@ fn function(name: &str, cognitive: u32, loc: u32) -> FunctionAnalysis {
             crap: None,
         },
         contributions: vec![],
+        suppressed_metrics: vec![],
         source_fingerprint: 0,
     }
 }

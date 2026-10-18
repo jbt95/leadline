@@ -301,3 +301,53 @@ fn jacoco_without_branch_attributes_stays_line_only() {
     coverage.apply(&mut file);
     assert_eq!(file.functions[0].metrics.coverage, Some(0.5));
 }
+
+#[test]
+fn cobertura_line_only_documents_ignore_a_bare_branch_attribute() {
+    let mut file = leadline::analyze_source(
+        "src/payment.ts",
+        b"function pay(ok: boolean) {\n  if (ok) { return 1; }\n  return 0;\n}\n",
+    )
+    .unwrap();
+    // `branch="true"` without `condition-coverage` names no branch total, so
+    // branches stay unknown instead of counting as uncovered.
+    let coverage = CoverageMap::from_cobertura_xml(
+        r#"<coverage><packages><package name="src"><classes><class name="pay" filename="src/payment.ts"><lines><line number="1" hits="1"/><line number="2" hits="1" branch="true"/><line number="3" hits="0"/></lines></class></classes></package></packages></coverage>"#,
+    )
+    .unwrap();
+    coverage.apply(&mut file);
+    // Two of three known lines covered, no branch data: 2/3.
+    assert_eq!(file.functions[0].metrics.coverage, Some(2.0 / 3.0));
+}
+
+#[test]
+fn cobertura_rejects_a_line_without_hits() {
+    let error = CoverageMap::from_cobertura_xml(
+        r#"<coverage><packages><package name="src"><classes><class name="pay" filename="src/payment.ts"><lines><line number="1"/></lines></class></classes></package></packages></coverage>"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("hits"), "{error}");
+}
+
+#[test]
+fn xml_coverage_dialects_are_detected_by_root_element() {
+    use leadline::coverage::CoverageFormat;
+    assert_eq!(
+        CoverageFormat::detect_xml(r#"<coverage line-rate="0.5"/>"#).unwrap(),
+        CoverageFormat::Cobertura
+    );
+    assert_eq!(
+        CoverageFormat::detect_xml(r#"<report name="test"/>"#).unwrap(),
+        CoverageFormat::Jacoco
+    );
+    let unknown = CoverageFormat::detect_xml(r#"<sarif/>"#)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        unknown.contains("unknown XML coverage root element <sarif>"),
+        "{unknown}"
+    );
+    let empty = CoverageFormat::detect_xml("").unwrap_err().to_string();
+    assert!(empty.contains("empty XML coverage document"), "{empty}");
+}

@@ -18,6 +18,11 @@
 //! cyclomatic = 0
 //! crap = 0.0
 //! max_nesting = 0
+//! [quality_gate]
+//! name = "team-default"
+//! maintainability_rating = "B"
+//! security_rating = "A"
+//! effort_minutes = 600
 //! ```
 //! Every threshold is optional. Unknown sections or keys are errors, never
 //! ignored, so no `include`/`exec` style key can ever slip through: config
@@ -50,6 +55,7 @@ pub struct Config {
     pub sql: SqlConfig,
     pub unused: UnusedConfig,
     pub index: Option<IndexConfig>,
+    pub quality_gate: Option<QualityGateConfig>,
 }
 
 /// Duplication detection settings.
@@ -105,6 +111,69 @@ pub struct UnusedConfig {
 #[derive(Clone, Debug, PartialEq)]
 pub struct IndexConfig {
     pub path: String,
+}
+
+/// A–E quality rating, `A` best; derived order is the gate's compare order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub enum Rating {
+    A,
+    B,
+    C,
+    D,
+    E,
+}
+
+impl Rating {
+    fn parse(text: &str) -> Option<Self> {
+        match text.to_ascii_uppercase().as_str() {
+            "A" => Some(Rating::A),
+            "B" => Some(Rating::B),
+            "C" => Some(Rating::C),
+            "D" => Some(Rating::D),
+            "E" => Some(Rating::E),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Rating::A => "A",
+            Rating::B => "B",
+            Rating::C => "C",
+            Rating::D => "D",
+            Rating::E => "E",
+        }
+    }
+}
+
+/// Condition names a `[quality_gate]` may declare, in report order.
+pub const QUALITY_GATE_CONDITIONS: [&str; 3] = [
+    "maintainability_rating",
+    "security_rating",
+    "effort_minutes",
+];
+
+/// A named quality gate: the conditions one `check` run must satisfy.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QualityGateConfig {
+    pub name: String,
+    pub maintainability_rating: Option<Rating>,
+    pub security_rating: Option<Rating>,
+    pub effort_minutes: Option<u32>,
+}
+
+impl QualityGateConfig {
+    /// The condition names this gate declares, in report order.
+    pub fn conditions(&self) -> impl Iterator<Item = &'static str> + '_ {
+        QUALITY_GATE_CONDITIONS
+            .into_iter()
+            .filter(move |name| match *name {
+                "maintainability_rating" => self.maintainability_rating.is_some(),
+                "security_rating" => self.security_rating.is_some(),
+                "effort_minutes" => self.effort_minutes.is_some(),
+                _ => false,
+            })
+    }
 }
 
 /// Severity of an architecture rule violation, in ascending order.
@@ -191,6 +260,7 @@ impl Default for Config {
             sql: SqlConfig::default(),
             unused: UnusedConfig::default(),
             index: None,
+            quality_gate: None,
         }
     }
 }
@@ -237,6 +307,9 @@ impl Config {
         for pattern in &self.unused.entries {
             validate_analysis_pattern("unused entry", pattern)?;
         }
+        if let Some(gate) = &self.quality_gate {
+            validate_quality_gate_config(gate)?;
+        }
         let mut names = std::collections::BTreeSet::new();
         for rule in &self.architecture_rules {
             if rule.name.trim().is_empty() {
@@ -269,6 +342,22 @@ impl Config {
         }
         Ok(())
     }
+}
+
+/// A gate needs a stable name and at least one condition to evaluate.
+fn validate_quality_gate_config(gate: &QualityGateConfig) -> Result<(), ConfigError> {
+    if gate.name.trim().is_empty() {
+        return Err(ConfigError::new(
+            "quality gate name must not be empty".to_string(),
+        ));
+    }
+    if gate.conditions().next().is_none() {
+        return Err(ConfigError::new(
+            "[quality_gate] needs at least one of maintainability_rating, security_rating, or effort_minutes"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_toml_depth(table: &toml::Table, limit: usize) -> Result<(), ConfigError> {
@@ -422,6 +511,7 @@ pub fn parse_str(text: &str) -> Result<Config, ConfigError> {
             "duplication" => read_duplication(&mut config, value)?,
             "unused" => read_unused(&mut config, value)?,
             "sql" => read_sql(&mut config, value)?,
+            "quality_gate" => config.quality_gate = Some(read_quality_gate(value)?),
             "index" => config.index = read_index(value)?,
             "vulnerabilities" => read_vulnerabilities(&mut config, value)?,
             "architecture" => read_architecture(&mut config, value)?,
@@ -644,6 +734,43 @@ pub fn normalize_migration_root(raw: &str) -> Result<String, ConfigError> {
         return Err(reject("empty"));
     }
     Ok(parts.join("/"))
+}
+
+/// One `[quality_gate]` table: a name plus at least one condition.
+fn read_quality_gate(value: &Value) -> Result<QualityGateConfig, ConfigError> {
+    let table = section_table("quality_gate", value)?;
+    let mut name = None;
+    let mut maintainability = None;
+    let mut security = None;
+    let mut effort = None;
+    for (key, item) in table {
+        match key.as_str() {
+            "name" => name = Some(read_string(key, item)?),
+            "maintainability_rating" | "security_rating" => {
+                let raw = read_string(key, item)?;
+                let rating = Rating::parse(&raw).ok_or_else(|| {
+                    ConfigError::new(format!(
+                        "quality gate `{key}` must be A, B, C, D, or E, got {raw:?}"
+                    ))
+                })?;
+                if key == "maintainability_rating" {
+                    maintainability = Some(rating);
+                } else {
+                    security = Some(rating);
+                }
+            }
+            "effort_minutes" => {
+                effort = Some(read_limit("quality gate `effort_minutes`", item)?);
+            }
+            _ => return Err(unknown_key("quality_gate", key)),
+        }
+    }
+    Ok(QualityGateConfig {
+        name: name.unwrap_or_else(|| "default".to_owned()),
+        maintainability_rating: maintainability,
+        security_rating: security,
+        effort_minutes: effort,
+    })
 }
 
 fn read_index(value: &Value) -> Result<Option<IndexConfig>, ConfigError> {

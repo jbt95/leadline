@@ -39,7 +39,7 @@ Each repository file is read, parsed, and walked by one Rayon worker. The worker
 - Generated and vendor directories are detected by fixed path-component names. Explicit file paths remain analyzable.
 - Coverage uses known executable lines inside the inclusive function range. Missing lines do not count as uncovered. No known lines means unavailable coverage.
 - Partial coverage overlap computes from the known overlapping lines only.
-- LCOV and JaCoCo paths are normalized lexically. Source maps are not applied.
+- LCOV, JaCoCo, and Cobertura paths are normalized lexically. Source maps are not applied.
 - Changed analysis pairs functions by name and same-name source order. A deterministic source fingerprint detects edits that preserve metrics.
 - Git history uses two subprocesses per run: one HEAD lookup and one `git log --relative --no-merges --numstat -z -M30%` stream parsed record by record. `--relative` scopes and rekeys paths in Git, so subdirectory analyses never walk the whole repository.
 - Recency windows are relative to the HEAD commit time, never the wall clock, so the same snapshot produces the same report. Merge commits are excluded. Renames resolve newest to oldest; the 30% threshold keeps small moves but can pair unrelated boilerplate-heavy files.

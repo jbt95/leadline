@@ -6,7 +6,7 @@
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "metric_profile": "default",
   "summary": {"files": 1, "functions": 1},
   "files": [
@@ -178,11 +178,16 @@ failed:
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"check","arguments":{"path":"src/payment.ts","thresholds":{"cognitive":15}}}}
 ```
 
-`check` requires at least one threshold, or `regressions` together with
-`base` or `baseline`; its `passed` field is the verdict, and each violation row
-carries a `reason` array holding the threshold names that failed, `regression`
-for a delta gate, or `crap_unavailable` when a CRAP gate found no coverage
-record.
+`check` requires at least one threshold, `regressions` together with `base` or
+`baseline`, or a `[quality_gate]` section; its `passed` field is the verdict,
+and each violation row carries a `reason` array holding the threshold names that
+failed, `regression` for a delta gate, or `crap_unavailable` when a CRAP gate
+found no coverage record. In-source `NOSONAR` / `leadline: ignore` lines are
+honored here exactly as on the CLI, and a configured `[quality_gate]` adds a
+`quality_gate` object (ratings, `metric-overage` minutes, its own `status`) that
+can fail `passed` on its own. MCP `check` ingests no scanner reports, so a gate
+condition it cannot source is rejected as invalid params instead of failing
+permanently.
 
 ### Errors and capabilities
 

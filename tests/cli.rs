@@ -467,7 +467,7 @@ fn agent_json_shape_on_analyze() {
         .unwrap();
     assert!(output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["schema_version"], 3);
     assert_eq!(value["metric_profile"], "default");
     assert_eq!(value["summary"]["functions"], 1);
     assert_eq!(value["files"][0]["functions"][0]["name"], "alpha");

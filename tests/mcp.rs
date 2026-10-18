@@ -140,7 +140,7 @@ fn run_git(root: &Path, args: &[&str]) {
 }
 
 fn envelope_ok(result: &Value) {
-    assert_eq!(result["schema_version"], 2);
+    assert_eq!(result["schema_version"], 3);
     assert!(result["analyzer_version"].is_string());
     for metric in [
         "cyclomatic",
@@ -2896,4 +2896,70 @@ fn mcp_records_sessions_methods_and_payloads() {
         text.contains(r#"leadline_mcp_inflight_calls{transport="http"} 0"#),
         "{text}"
     );
+}
+
+#[test]
+fn check_honors_in_source_suppression() {
+    let dir = fixture_dir(
+        "// leadline: ignore cyclomatic\nfunction mixed(x: boolean) { if (x) { return 1; } return 0; }\n",
+    );
+    std::fs::write(
+        dir.join("leadline.toml"),
+        "[thresholds.function]\ncyclomatic = 1\n",
+    )
+    .unwrap();
+    let suppressed_response = call_tool(
+        "check",
+        serde_json::json!({
+            "path": dir.to_str().unwrap(),
+            "thresholds": { "cyclomatic": 1 },
+        }),
+    );
+    let suppressed = result_of(&suppressed_response);
+    assert_eq!(suppressed["passed"], true);
+    assert_eq!(suppressed["total"], 0);
+
+    // The same file without the suppression line is a violation.
+    std::fs::write(
+        dir.join("sample.ts"),
+        "function mixed(x: boolean) { if (x) { return 1; } return 0; }\n",
+    )
+    .unwrap();
+    let plain_response = call_tool(
+        "check",
+        serde_json::json!({
+            "path": dir.to_str().unwrap(),
+            "thresholds": { "cyclomatic": 1 },
+        }),
+    );
+    let plain = result_of(&plain_response);
+    assert_eq!(plain["passed"], false);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn check_reports_the_configured_quality_gate() {
+    let dir = fixture_dir("function hairy(x: boolean) {\n  return x ? 1 : 0;\n}\n");
+    std::fs::write(
+        dir.join("leadline.toml"),
+        "[quality_gate]\nname = \"team\"\nmaintainability_rating = \"A\"\neffort_minutes = 0\n",
+    )
+    .unwrap();
+    let response = call_tool(
+        "check",
+        serde_json::json!({
+            "path": dir.to_str().unwrap(),
+            "thresholds": { "cyclomatic": 1 },
+        }),
+    );
+    let result = result_of(&response);
+    assert_eq!(result["passed"], false);
+    let gate = &result["quality_gate"];
+    assert_eq!(gate["name"], "team");
+    assert_eq!(gate["status"], "failed");
+    assert_eq!(gate["scope"], "overall");
+    assert_eq!(gate["effort"]["minutes"], 4);
+    assert_eq!(gate["ratings"]["maintainability"], "A");
+    assert_eq!(gate["conditions"][1]["metric"], "effort_minutes");
+    std::fs::remove_dir_all(dir).unwrap();
 }

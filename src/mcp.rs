@@ -1174,6 +1174,66 @@ struct CheckRows {
     rows: Vec<serde_json::Value>,
     reuse: Option<crate::index::Reuse>,
     parse_languages: Vec<(&'static str, u64)>,
+    quality_gate: Option<crate::quality::QualityGateReport>,
+}
+
+/// Gate conditions MCP `check` cannot evaluate are usage errors, mirroring the
+/// CLI rule that a condition with no input is never a silently passing no-op.
+/// MCP `check` ingests no scanner reports, so `security_rating` has no source
+/// here at all.
+fn validate_gate_conditions(
+    gate: Option<&crate::config::QualityGateConfig>,
+    thresholds: &Thresholds,
+) -> Result<(), (i64, String)> {
+    let Some(gate) = gate else {
+        return Ok(());
+    };
+    if (gate.maintainability_rating.is_some() || gate.effort_minutes.is_some())
+        && thresholds.is_empty()
+    {
+        return Err((
+            -32602,
+            format!(
+                "quality gate '{}' needs at least one metric threshold",
+                gate.name
+            ),
+        ));
+    }
+    if gate.security_rating.is_some() {
+        return Err((
+            -32602,
+            format!(
+                "quality gate '{}' has security_rating, which MCP check cannot evaluate: run `leadline check --sarif` or `--osv/--trivy`",
+                gate.name
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Gate one function set with the run's own thresholds, through the same
+/// evaluator the CLI uses. MCP `check` ingests no scanner reports, so a
+/// `security_rating` condition stays unknown and fails closed rather than
+/// passing silently.
+fn mcp_quality_gate(
+    gate: Option<&crate::config::QualityGateConfig>,
+    thresholds: &Thresholds,
+    scope: &'static str,
+    functions: Vec<&crate::core::FunctionAnalysis>,
+) -> Option<crate::quality::QualityGateReport> {
+    let gate = gate?;
+    let suppressed_violations =
+        crate::quality::suppressed_violation_count(functions.iter().copied(), thresholds);
+    Some(crate::quality::evaluate(
+        gate,
+        crate::quality::GateInputs {
+            scope,
+            thresholds,
+            functions,
+            security: None,
+            suppressed_violations,
+        },
+    ))
 }
 
 /// Accumulate per-language parse-error counts; zero counts are dropped.
@@ -1210,12 +1270,23 @@ fn check_changed_rows(
     thresholds: &Thresholds,
     regression_limits: Option<&RegressionLimits>,
     coverage: Option<&crate::coverage::CoverageMap>,
+    gate: Option<&crate::config::QualityGateConfig>,
 ) -> Result<CheckRows, (i64, String)> {
     let mut report = crate::diff::analyze_changed(Path::new(path), base)
         .map_err(|error| (-32602, error.to_string()))?;
     if let Some(coverage) = coverage {
         apply_changed_coverage(&mut report, coverage);
     }
+    let quality_gate = mcp_quality_gate(
+        gate,
+        thresholds,
+        crate::quality::SCOPE_CHANGED,
+        report
+            .functions
+            .iter()
+            .filter_map(|change| change.after.as_ref())
+            .collect(),
+    );
     let mut rows = Vec::new();
     // Parse-error counts per language for metrics; paths never leave.
     let mut parse_languages: Vec<(&'static str, u64)> = Vec::new();
@@ -1223,7 +1294,7 @@ fn check_changed_rows(
         let Some(after) = change.after.as_ref() else {
             continue;
         };
-        let mut reasons = thresholds.violation_reasons(&after.metrics);
+        let mut reasons = thresholds.violation_reasons_for(after);
         if regression_limits.is_some_and(|limits| {
             change
                 .before
@@ -1249,6 +1320,7 @@ fn check_changed_rows(
         rows,
         reuse: None,
         parse_languages,
+        quality_gate,
     })
 }
 
@@ -1260,13 +1332,24 @@ fn check_path_rows(
     thresholds: &Thresholds,
     regressed: &BTreeSet<(String, String)>,
     reuse: Option<crate::index::Reuse>,
+    gate: Option<&crate::config::QualityGateConfig>,
 ) -> CheckRows {
+    let quality_gate = mcp_quality_gate(
+        gate,
+        thresholds,
+        crate::quality::SCOPE_OVERALL,
+        report
+            .files
+            .iter()
+            .flat_map(|file| file.functions.iter())
+            .collect(),
+    );
     let mut rows = Vec::new();
     // Parse-error counts per language for metrics; paths never leave.
     let mut parse_languages: Vec<(&'static str, u64)> = Vec::new();
     for file in &report.files {
         for function in &file.functions {
-            let mut reasons = thresholds.violation_reasons(&function.metrics);
+            let mut reasons = thresholds.violation_reasons_for(function);
             if !regressed.is_empty()
                 && regressed.contains(&(file.path.clone(), function.id.clone()))
             {
@@ -1288,6 +1371,7 @@ fn check_path_rows(
         rows,
         reuse,
         parse_languages,
+        quality_gate,
     }
 }
 
@@ -1319,16 +1403,27 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
             "check regressions requires a base revision or baseline file".to_owned(),
         ));
     }
-    let mut thresholds = parse_thresholds(params, regression_limits.is_some())?;
+    let mut thresholds = parse_thresholds(
+        params,
+        regression_limits.is_some()
+            || config
+                .as_ref()
+                .is_some_and(|selected| selected.quality_gate.is_some()),
+    )?;
     if let Some(config) = config.as_ref() {
         fill_thresholds(&mut thresholds, config);
     }
     let coverage = optional_coverage(params)?;
     let excludes = config_excludes(config.as_ref());
+    let gate = config
+        .as_ref()
+        .and_then(|selected| selected.quality_gate.as_ref());
+    validate_gate_conditions(gate, &thresholds)?;
     let CheckRows {
         mut rows,
         reuse,
         parse_languages,
+        quality_gate,
     } = if let Some(base) = base {
         check_changed_rows(
             path,
@@ -1336,6 +1431,7 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
             &thresholds,
             regression_limits.as_ref(),
             coverage.as_ref(),
+            gate,
         )?
     } else {
         let baseline = match baseline_path {
@@ -1356,9 +1452,14 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
                     .collect(),
                 _ => BTreeSet::new(),
             };
-        check_path_rows(&report, &thresholds, &regressed, reuse)
+        check_path_rows(&report, &thresholds, &regressed, reuse, gate)
     };
-    let passed = rows.is_empty();
+    // The run passes when neither the thresholds nor the configured gate found
+    // anything; `quality_gate` carries the gate's own verdict either way.
+    let passed = rows.is_empty()
+        && quality_gate
+            .as_ref()
+            .is_none_or(|report| report.status != crate::quality::GateStatus::Failed);
     let (violations, truncated, total) = cap_with_limit(&mut rows, MAX_ENTRIES);
     // MCP check runs no scanner gates, so only function and parse-error
     // findings are recorded.
@@ -1404,6 +1505,12 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
         })),
     );
     fields.insert("passed".to_owned(), serde_json::Value::from(passed));
+    if let Some(quality_gate) = &quality_gate {
+        fields.insert(
+            "quality_gate".to_owned(),
+            serde_json::to_value(quality_gate).map_err(|error| (-32603, error.to_string()))?,
+        );
+    }
     fields.insert(
         "violations".to_owned(),
         serde_json::Value::Array(violations),
@@ -2045,21 +2152,24 @@ fn tool_project(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
 // Coverage
 // ---------------------------------------------------------------------------
 
-/// Load one coverage file, auto-detecting the format by extension:
-/// `.xml` is JaCoCo XML, anything else (including `.info`) is LCOV.
+/// Load one coverage file. An `.info` path is LCOV; any other path decides by
+/// XML root element, so JaCoCo and Cobertura share one argument.
 fn load_coverage_file(path: &str) -> Result<crate::coverage::CoverageMap, String> {
+    use crate::coverage::CoverageFormat;
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read coverage '{path}': {error}"))?;
-    if Path::new(path)
+    let is_lcov = Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
-    {
-        crate::coverage::CoverageMap::from_jacoco_xml(&text)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("info"));
+    let format = if is_lcov {
+        CoverageFormat::Lcov
     } else {
-        crate::coverage::CoverageMap::from_lcov(&text)
-    }
-    .map_err(|error| format!("cannot parse coverage '{path}': {error}"))
+        CoverageFormat::detect_xml(&text)
+            .map_err(|error| format!("cannot detect coverage format for '{path}': {error}"))?
+    };
+    crate::coverage::parse(&text, format)
+        .map_err(|error| format!("cannot parse coverage '{path}': {error}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -2750,7 +2860,7 @@ fn tool_specs() -> serde_json::Value {
             },
             {
                 "name": "check",
-                "description": "Quality gate for thresholds or regressions. Use in CI or before committing; pass coverage so CRAP gates are meaningful. Requires thresholds or regressions with base/baseline. Violation rows carry `reason`: the threshold names that failed, `regression` for a delta gate, or `crap_unavailable` when a CRAP gate found no coverage record for the function (an unavailable CRAP fails closed).",
+                "description": "Quality gate for thresholds, regressions, or the project's [quality_gate] section. Use in CI or before committing; pass coverage so CRAP gates are meaningful. Requires thresholds, regressions with base/baseline, or a leadline.toml [quality_gate]. Violation rows carry `reason`: the threshold names that failed, `regression` for a delta gate, or `crap_unavailable` when a CRAP gate found no coverage record for the function (an unavailable CRAP fails closed). In-source `NOSONAR` and `leadline: ignore <dimensions>` lines silence the dimensions they name, and never a parse error. A configured [quality_gate] adds `quality_gate` to the result and can fail the run on its own; a gate condition this server cannot evaluate is a usage error rather than a passing no-op.",
                 "annotations": { "title": "Run quality gate", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
                 "inputSchema": {
                     "type": "object",

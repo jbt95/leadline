@@ -594,6 +594,7 @@ mod tests {
                 crap: None,
             },
             contributions: Vec::new(),
+            suppressed_metrics: Vec::new(),
             source_fingerprint: 1,
         }
     }
