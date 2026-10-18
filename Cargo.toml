@@ -20,6 +20,7 @@ version = "1.0.1"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"
+publish = false
 repository = "https://github.com/jbt95/leadline"
 
 [workspace.dependencies]
