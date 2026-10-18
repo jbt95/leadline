@@ -27,7 +27,8 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install Rust
-        run: rustup update stable --no-self-update
+        shell: bash
+        run: bash scripts/ci-install-rust.sh minimum
       - name: Install lint tools
         run: rustup component add clippy rustfmt
       - name: Configure git
