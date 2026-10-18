@@ -1,9 +1,9 @@
+use analysis::hotspots::build;
 use codegraph::coupling::{CouplingOptions, analyze_coupling};
 use codegraph::history::{
     FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow, analyze_history,
 };
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use leadline::hotspots::build;
 use model::core::{
     AnalysisReport, FileAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION,
 };

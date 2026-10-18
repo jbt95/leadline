@@ -1,5 +1,5 @@
+use analysis::graph::analyze_dependencies_from_sources;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use leadline::graph::analyze_dependencies_from_sources;
 use parse::analyze_sources;
 use parse::source_snapshot::SourceEntry;
 use std::hint::black_box;

@@ -152,7 +152,7 @@ impl TrendPoint {
         for violation in &project.architecture_violations {
             if matches!(
                 violation.status,
-                Some(crate::policy::PolicyStatus::Resolved)
+                Some(analysis::policy::PolicyStatus::Resolved)
             ) {
                 continue;
             }

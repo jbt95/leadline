@@ -2,7 +2,7 @@
 //!
 //! Read-only by construction: the only filesystem reads are source-file
 //! analysis input, an optional coverage file, and the `git` reads already
-//! performed inside [`crate::diff::analyze_changes`]. No shell, no network,
+//! performed inside [`analysis::diff::analyze_changes`]. No shell, no network,
 //! and no writes except the opt-in local metrics store ([`crate::telemetry`]),
 //! which stays inside `LEADLINE_METRICS_DIR` and never touches the analyzed
 //! repository.
@@ -1035,19 +1035,19 @@ fn tool_analyze_changed(params: &serde_json::Value) -> Result<serde_json::Value,
     let base = opt_str(params, "base")?.unwrap_or("HEAD~1");
     let path = opt_str(params, "path")?.unwrap_or(".");
     let target = match opt_str(params, "target")? {
-        None | Some("worktree") => crate::diff::ComparisonTarget::Worktree,
-        Some("index") => crate::diff::ComparisonTarget::Index,
-        Some(revision) => crate::diff::ComparisonTarget::Revision(revision.to_owned()),
+        None | Some("worktree") => analysis::diff::ComparisonTarget::Worktree,
+        Some("index") => analysis::diff::ComparisonTarget::Index,
+        Some(revision) => analysis::diff::ComparisonTarget::Revision(revision.to_owned()),
     };
     let detect_renames = opt_flag(params, "renames", "analyze_changed")?;
     let explain = opt_flag(params, "explain", "analyze_changed")?;
     let budget = parse_tool_budget(params, true)?;
-    let options = crate::diff::ChangeOptions {
+    let options = analysis::diff::ChangeOptions {
         base: base.to_owned(),
         target,
         detect_renames,
     };
-    let report = crate::diff::analyze_changes(Path::new(path), &options)
+    let report = analysis::diff::analyze_changes(Path::new(path), &options)
         .map_err(|error| (-32602, error.to_string()))?;
     let mut rows = Vec::new();
     for change in &report.functions {
@@ -1174,7 +1174,7 @@ struct CheckRows {
     rows: Vec<serde_json::Value>,
     reuse: Option<crate::index::Reuse>,
     parse_languages: Vec<(&'static str, u64)>,
-    quality_gate: Option<crate::quality::QualityGateReport>,
+    quality_gate: Option<analysis::quality::QualityGateReport>,
 }
 
 /// Gate conditions MCP `check` cannot evaluate are usage errors, mirroring the
@@ -1220,13 +1220,13 @@ fn mcp_quality_gate(
     thresholds: &Thresholds,
     scope: &'static str,
     functions: Vec<&model::core::FunctionAnalysis>,
-) -> Option<crate::quality::QualityGateReport> {
+) -> Option<analysis::quality::QualityGateReport> {
     let gate = gate?;
     let suppressed_violations =
-        crate::quality::suppressed_violation_count(functions.iter().copied(), thresholds);
-    Some(crate::quality::evaluate(
+        analysis::quality::suppressed_violation_count(functions.iter().copied(), thresholds);
+    Some(analysis::quality::evaluate(
         gate,
-        crate::quality::GateInputs {
+        analysis::quality::GateInputs {
             scope,
             thresholds,
             functions,
@@ -1249,7 +1249,7 @@ fn note_parse_errors(counts: &mut Vec<(&'static str, u64)>, language: &'static s
 
 /// Apply coverage data to both sides of each changed-function pair.
 fn apply_changed_coverage(
-    report: &mut crate::diff::ChangedReport,
+    report: &mut analysis::diff::ChangedReport,
     coverage: &parse::coverage::CoverageMap,
 ) {
     for change in &mut report.functions {
@@ -1272,7 +1272,7 @@ fn check_changed_rows(
     coverage: Option<&parse::coverage::CoverageMap>,
     gate: Option<&config::QualityGateConfig>,
 ) -> Result<CheckRows, (i64, String)> {
-    let mut report = crate::diff::analyze_changed(Path::new(path), base)
+    let mut report = analysis::diff::analyze_changed(Path::new(path), base)
         .map_err(|error| (-32602, error.to_string()))?;
     if let Some(coverage) = coverage {
         apply_changed_coverage(&mut report, coverage);
@@ -1280,7 +1280,7 @@ fn check_changed_rows(
     let quality_gate = mcp_quality_gate(
         gate,
         thresholds,
-        crate::quality::SCOPE_CHANGED,
+        analysis::quality::SCOPE_CHANGED,
         report
             .functions
             .iter()
@@ -1299,7 +1299,7 @@ fn check_changed_rows(
             change
                 .before
                 .as_ref()
-                .is_some_and(|before| crate::diff::regression_violates(before, after, limits))
+                .is_some_and(|before| analysis::diff::regression_violates(before, after, limits))
         }) {
             reasons.push("regression");
         }
@@ -1337,7 +1337,7 @@ fn check_path_rows(
     let quality_gate = mcp_quality_gate(
         gate,
         thresholds,
-        crate::quality::SCOPE_OVERALL,
+        analysis::quality::SCOPE_OVERALL,
         report
             .files
             .iter()
@@ -1459,7 +1459,7 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
     let passed = rows.is_empty()
         && quality_gate
             .as_ref()
-            .is_none_or(|report| report.status != crate::quality::GateStatus::Failed);
+            .is_none_or(|report| report.status != analysis::quality::GateStatus::Failed);
     let (violations, truncated, total) = cap_with_limit(&mut rows, MAX_ENTRIES);
     // MCP check runs no scanner gates, so only function and parse-error
     // findings are recorded.
@@ -1791,7 +1791,7 @@ fn tool_test_targets(params: &serde_json::Value) -> Result<serde_json::Value, (i
     let excludes = config_excludes(config.as_ref());
     let report = parse::analyze_path_with_excludes(Path::new(path), Some(&coverage), &excludes)
         .map_err(|error| (-32602, error.to_string()))?;
-    let ranked = crate::test_targets::test_targets(&report, &coverage);
+    let ranked = analysis::test_targets::test_targets(&report, &coverage);
     let total = ranked.len();
     let limit = top.min(total);
     let truncated = total > limit;
@@ -1821,7 +1821,7 @@ fn tool_dependencies(params: &serde_json::Value) -> Result<serde_json::Value, (i
     let path = opt_str(params, "path")?.unwrap_or(".");
     let config = load_config(path)?;
     let excludes = config_excludes(config.as_ref());
-    let report = crate::graph::analyze_dependencies(Path::new(path), &excludes)
+    let report = analysis::graph::analyze_dependencies(Path::new(path), &excludes)
         .map_err(|error| (-32602, error.to_string()))?;
     if report.files.is_empty() {
         return Err((-32602, format!("no supported files found under {path}")));
@@ -1855,9 +1855,9 @@ fn tool_impact(params: &serde_json::Value) -> Result<serde_json::Value, (i64, St
         parse::resolve_scoped_target(root, target).map_err(|error| (-32602, error.to_string()))?;
     let config = load_config(path)?;
     let excludes = config_excludes(config.as_ref());
-    let graph = crate::graph::analyze_dependencies(root, &excludes)
+    let graph = analysis::graph::analyze_dependencies(root, &excludes)
         .map_err(|error| (-32602, error.to_string()))?;
-    let Some(report) = crate::impact::analyze_impact(&graph, &key, top) else {
+    let Some(report) = analysis::impact::analyze_impact(&graph, &key, top) else {
         return Err((
             -32602,
             format!("impact target '{target}' was not found in the dependency graph under {path}"),
@@ -1941,7 +1941,7 @@ fn tool_hotspots(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
     let (analysis, _) = analyze_optional_coverage(params, path)?;
     let history = codegraph::history::analyze_history(&config_dir(path))
         .map_err(|error| (-32602, error.to_string()))?;
-    let report = crate::hotspots::build(&analysis, &history, window, top);
+    let report = analysis::hotspots::build(&analysis, &history, window, top);
     let agent = crate::agent::hotspots_agent_json(&report);
     agent_envelope(
         "hotspots",

@@ -164,7 +164,7 @@ fn complex_scanner_reports_deduplicate_enrich_and_gate() {
     )
     .unwrap();
     let imports =
-        leadline::graph::external_packages_from_sources(&[parse::source_snapshot::SourceEntry {
+        analysis::graph::external_packages_from_sources(&[parse::source_snapshot::SourceEntry {
             path: "src/changed.ts".to_owned(),
             bytes: std::fs::read(fixture("scanners/vulnerabilities/changed.ts")).unwrap(),
         }])
@@ -347,7 +347,7 @@ fn complex_history_fixture_joins_changes_coupling_hotspots_and_debt() {
     }));
 
     let analysis = parse::analyze_path(&root, None).unwrap();
-    let hotspots = leadline::hotspots::build(
+    let hotspots = analysis::hotspots::build(
         &analysis,
         &history,
         HistoryWindow::Days90,
@@ -356,11 +356,11 @@ fn complex_history_fixture_joins_changes_coupling_hotspots_and_debt() {
     assert_eq!(hotspots.hotspots[0].path, "src/service.ts");
     assert_eq!(hotspots.hotspots[0].changes, Some(3));
 
-    let changed = leadline::diff::analyze_changes(
+    let changed = analysis::diff::analyze_changes(
         &root,
-        &leadline::diff::ChangeOptions {
+        &analysis::diff::ChangeOptions {
             base: base.clone(),
-            target: leadline::diff::ComparisonTarget::Revision("HEAD".to_owned()),
+            target: analysis::diff::ComparisonTarget::Revision("HEAD".to_owned()),
             detect_renames: true,
         },
     )
@@ -386,7 +386,7 @@ fn complex_history_fixture_joins_changes_coupling_hotspots_and_debt() {
     .unwrap();
     assert!(debt.summary.new > 0);
     assert!(debt.risk_changes.iter().any(|change| {
-        change.path == "src/policy.ts" && change.status != leadline::debt::RiskChangeStatus::Added
+        change.path == "src/policy.ts" && change.status != analysis::debt::RiskChangeStatus::Added
     }));
 
     std::fs::remove_dir_all(root).unwrap();

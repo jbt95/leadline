@@ -21,14 +21,14 @@ fn changed_analysis_compares_function_versions() {
     )
     .unwrap();
 
-    let report = leadline::diff::analyze_changed(&root, "HEAD").unwrap();
+    let report = analysis::diff::analyze_changed(&root, "HEAD").unwrap();
     assert_eq!(report.functions.len(), 1);
     let change = &report.functions[0];
     assert_eq!(change.name, "choose");
     assert_eq!(change.before.as_ref().unwrap().metrics.cyclomatic, 2);
     assert_eq!(change.after.as_ref().unwrap().metrics.cyclomatic, 3);
     assert_eq!(
-        leadline::diff::changed_regressions(&report, &config::RegressionLimits::default()).len(),
+        analysis::diff::changed_regressions(&report, &config::RegressionLimits::default()).len(),
         1
     );
     std::fs::remove_dir_all(root).unwrap();
@@ -53,12 +53,12 @@ fn changed_analysis_honors_scope_and_reports_parse_errors() {
     .unwrap();
     std::fs::write(root.join("second/b.ts"), "function b( { return 1; }\n").unwrap();
 
-    let scoped = leadline::diff::analyze_changed(&root.join("first"), "HEAD").unwrap();
+    let scoped = analysis::diff::analyze_changed(&root.join("first"), "HEAD").unwrap();
     assert_eq!(scoped.functions.len(), 1);
     assert_eq!(scoped.functions[0].path, "first/a.ts");
     assert!(scoped.parse_errors.is_empty());
 
-    let complete = leadline::diff::analyze_changed(&root, "HEAD").unwrap();
+    let complete = analysis::diff::analyze_changed(&root, "HEAD").unwrap();
     assert_eq!(complete.parse_errors.len(), 1);
     assert_eq!(complete.parse_errors[0].path, "second/b.ts");
     assert!(!complete.parse_errors[0].after.is_empty());
@@ -67,7 +67,7 @@ fn changed_analysis_honors_scope_and_reports_parse_errors() {
 
 #[test]
 fn changed_analysis_rejects_option_like_revisions() {
-    let error = leadline::diff::analyze_changed(Path::new("missing"), "--help").unwrap_err();
+    let error = analysis::diff::analyze_changed(Path::new("missing"), "--help").unwrap_err();
     assert!(error.to_string().contains("unsupported characters"));
 }
 
@@ -86,12 +86,12 @@ fn analyze_changed_wraps_worktree_analysis() {
     )
     .unwrap();
 
-    let wrapped = leadline::diff::analyze_changed(&root, "HEAD").unwrap();
-    let direct = leadline::diff::analyze_changes(
+    let wrapped = analysis::diff::analyze_changed(&root, "HEAD").unwrap();
+    let direct = analysis::diff::analyze_changes(
         &root,
-        &leadline::diff::ChangeOptions {
+        &analysis::diff::ChangeOptions {
             base: "HEAD".to_owned(),
-            target: leadline::diff::ComparisonTarget::Worktree,
+            target: analysis::diff::ComparisonTarget::Worktree,
             detect_renames: false,
         },
     )
@@ -125,11 +125,11 @@ fn index_target_excludes_unstaged_edits() {
     )
     .unwrap();
 
-    let report = leadline::diff::analyze_changes(
+    let report = analysis::diff::analyze_changes(
         &root,
-        &leadline::diff::ChangeOptions {
+        &analysis::diff::ChangeOptions {
             base: "HEAD".to_owned(),
-            target: leadline::diff::ComparisonTarget::Index,
+            target: analysis::diff::ComparisonTarget::Index,
             detect_renames: false,
         },
     )
@@ -173,11 +173,11 @@ fn revision_target_ignores_worktree() {
     )
     .unwrap();
 
-    let report = leadline::diff::analyze_changes(
+    let report = analysis::diff::analyze_changes(
         &root,
-        &leadline::diff::ChangeOptions {
+        &analysis::diff::ChangeOptions {
             base: "HEAD~1".to_owned(),
-            target: leadline::diff::ComparisonTarget::Revision("HEAD".to_owned()),
+            target: analysis::diff::ComparisonTarget::Revision("HEAD".to_owned()),
             detect_renames: false,
         },
     )
@@ -218,11 +218,11 @@ fn revision_target_supports_scope_absent_from_worktree() {
     git(&root, &["commit", "-qm", "target"]);
     std::fs::remove_dir_all(root.join("archived")).unwrap();
 
-    let report = leadline::diff::analyze_changes(
+    let report = analysis::diff::analyze_changes(
         &root.join("archived"),
-        &leadline::diff::ChangeOptions {
+        &analysis::diff::ChangeOptions {
             base: "HEAD~1".to_owned(),
-            target: leadline::diff::ComparisonTarget::Revision("HEAD".to_owned()),
+            target: analysis::diff::ComparisonTarget::Revision("HEAD".to_owned()),
             detect_renames: false,
         },
     )
@@ -243,11 +243,11 @@ fn revision_target_supports_scope_absent_from_worktree() {
 
 #[test]
 fn option_like_target_revision_is_rejected() {
-    let error = leadline::diff::analyze_changes(
+    let error = analysis::diff::analyze_changes(
         Path::new("missing"),
-        &leadline::diff::ChangeOptions {
+        &analysis::diff::ChangeOptions {
             base: "HEAD".to_owned(),
-            target: leadline::diff::ComparisonTarget::Revision("--evil".to_owned()),
+            target: analysis::diff::ComparisonTarget::Revision("--evil".to_owned()),
             detect_renames: false,
         },
     )
@@ -275,22 +275,22 @@ fn renames_pairs_git_detected_file_rename() {
     )
     .unwrap();
 
-    let without_renames = leadline::diff::analyze_changes(
+    let without_renames = analysis::diff::analyze_changes(
         &root,
-        &leadline::diff::ChangeOptions {
+        &analysis::diff::ChangeOptions {
             base: "HEAD".to_owned(),
-            target: leadline::diff::ComparisonTarget::Worktree,
+            target: analysis::diff::ComparisonTarget::Worktree,
             detect_renames: false,
         },
     )
     .unwrap();
     assert_eq!(without_renames.functions.len(), 4);
 
-    let with_renames = leadline::diff::analyze_changes(
+    let with_renames = analysis::diff::analyze_changes(
         &root,
-        &leadline::diff::ChangeOptions {
+        &analysis::diff::ChangeOptions {
             base: "HEAD".to_owned(),
-            target: leadline::diff::ComparisonTarget::Worktree,
+            target: analysis::diff::ComparisonTarget::Worktree,
             detect_renames: true,
         },
     )
@@ -342,11 +342,11 @@ fn regression_predicate_allows_unchanged_and_improved_functions() {
     let limits = config::RegressionLimits::default();
     let before = regression_analysis("same", 2);
     let unchanged = regression_analysis("same", 2);
-    assert!(!leadline::diff::regression_violates(
+    assert!(!analysis::diff::regression_violates(
         &before, &unchanged, &limits
     ));
     let improved = regression_analysis("same", 1);
-    assert!(!leadline::diff::regression_violates(
+    assert!(!analysis::diff::regression_violates(
         &before, &improved, &limits
     ));
 }
@@ -359,11 +359,11 @@ fn regression_predicate_rejects_positive_delta_over_limit() {
     };
     let before = regression_analysis("changed", 2);
     let after = regression_analysis("changed", 4);
-    assert!(leadline::diff::regression_violates(
+    assert!(analysis::diff::regression_violates(
         &before, &after, &limits
     ));
     let allowed = regression_analysis("changed", 3);
-    assert!(!leadline::diff::regression_violates(
+    assert!(!analysis::diff::regression_violates(
         &before, &allowed, &limits
     ));
 }
@@ -373,19 +373,19 @@ fn added_and_removed_functions_are_not_delta_regressions() {
     let limits = config::RegressionLimits::default();
     let added = regression_analysis("added", 99);
     let removed = regression_analysis("removed", 99);
-    let added_change = leadline::diff::FunctionChange {
+    let added_change = analysis::diff::FunctionChange {
         path: "src/a.ts".to_owned(),
         name: "added".to_owned(),
         before: None,
         after: Some(added),
     };
-    let removed_change = leadline::diff::FunctionChange {
+    let removed_change = analysis::diff::FunctionChange {
         path: "src/a.ts".to_owned(),
         name: "removed".to_owned(),
         before: Some(removed),
         after: None,
     };
-    let report = leadline::diff::ChangedReport {
+    let report = analysis::diff::ChangedReport {
         schema_version: 1,
         metric_profile: model::core::METRIC_PROFILE,
         analyzer_version: "test",
@@ -394,7 +394,7 @@ fn added_and_removed_functions_are_not_delta_regressions() {
         functions: vec![added_change, removed_change],
         parse_errors: Vec::new(),
     };
-    assert!(leadline::diff::changed_regressions(&report, &limits).is_empty());
+    assert!(analysis::diff::changed_regressions(&report, &limits).is_empty());
 }
 
 fn init_change_repo() -> PathBuf {
@@ -410,10 +410,10 @@ fn init_change_repo() -> PathBuf {
     root
 }
 
-fn worktree_options() -> leadline::diff::ChangeOptions {
-    leadline::diff::ChangeOptions {
+fn worktree_options() -> analysis::diff::ChangeOptions {
+    analysis::diff::ChangeOptions {
         base: "HEAD".to_owned(),
-        target: leadline::diff::ComparisonTarget::Worktree,
+        target: analysis::diff::ComparisonTarget::Worktree,
         detect_renames: false,
     }
 }
@@ -425,20 +425,20 @@ fn changed_source_entries_and_paths_include_functionless_files() {
     std::fs::remove_file(root.join("src/empty.ts")).unwrap();
     std::fs::write(root.join("src/c.ts"), "export const fresh = 1;\n").unwrap();
     let options = worktree_options();
-    let entries = leadline::diff::changed_source_entries(&root, &options).unwrap();
+    let entries = analysis::diff::changed_source_entries(&root, &options).unwrap();
     let paths: Vec<&str> = entries.iter().map(|entry| entry.path.as_str()).collect();
     // Modified and untracked files land as after-side entries, even the
     // functionless one; the deleted file has no after-side bytes.
     assert_eq!(paths, vec!["src/a.ts", "src/c.ts"]);
     assert!(entries.iter().all(|entry| !entry.bytes.is_empty()));
-    let paths = leadline::diff::changed_paths(&root, &options).unwrap();
+    let paths = analysis::diff::changed_paths(&root, &options).unwrap();
     // Deleted paths stay in the set, and non-source files are included:
     // changed attribution is Git state, not analyzable content.
     assert!(paths.contains("src/a.ts"));
     assert!(paths.contains("src/c.ts"));
     assert!(paths.contains("src/empty.ts"));
     std::fs::write(root.join(".env"), "TOKEN=abc\n").unwrap();
-    let paths = leadline::diff::changed_paths(&root, &options).unwrap();
+    let paths = analysis::diff::changed_paths(&root, &options).unwrap();
     assert!(paths.contains(".env"));
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -450,15 +450,15 @@ fn changed_paths_are_relative_to_the_analysis_root() {
     let options = worktree_options();
     // A directory scope strips its own prefix, matching the paths a scanner
     // rooted at that directory reports.
-    let paths = leadline::diff::changed_paths(&root.join("src"), &options).unwrap();
+    let paths = analysis::diff::changed_paths(&root.join("src"), &options).unwrap();
     assert!(paths.contains("a.ts"), "{paths:?}");
     assert!(!paths.contains("src/a.ts"), "{paths:?}");
     // A single-file scope strips the file's parent.
-    let paths = leadline::diff::changed_paths(&root.join("src/a.ts"), &options).unwrap();
+    let paths = analysis::diff::changed_paths(&root.join("src/a.ts"), &options).unwrap();
     assert!(paths.contains("a.ts"), "{paths:?}");
     assert!(!paths.contains("src/a.ts"), "{paths:?}");
     // Repo-root scopes keep Git-relative paths unchanged.
-    let paths = leadline::diff::changed_paths(&root, &options).unwrap();
+    let paths = analysis::diff::changed_paths(&root, &options).unwrap();
     assert!(paths.contains("src/a.ts"), "{paths:?}");
     assert!(!paths.contains("a.ts"), "{paths:?}");
     std::fs::remove_dir_all(root).unwrap();
@@ -468,15 +468,15 @@ fn changed_paths_are_relative_to_the_analysis_root() {
 fn changed_source_entries_follow_renames_to_new_paths() {
     let root = init_change_repo();
     git(&root, &["mv", "src/a.ts", "src/renamed.ts"]);
-    let options = leadline::diff::ChangeOptions {
+    let options = analysis::diff::ChangeOptions {
         base: "HEAD".to_owned(),
-        target: leadline::diff::ComparisonTarget::Index,
+        target: analysis::diff::ComparisonTarget::Index,
         detect_renames: true,
     };
-    let entries = leadline::diff::changed_source_entries(&root, &options).unwrap();
+    let entries = analysis::diff::changed_source_entries(&root, &options).unwrap();
     let paths: Vec<&str> = entries.iter().map(|entry| entry.path.as_str()).collect();
     assert_eq!(paths, vec!["src/renamed.ts"]);
-    let paths = leadline::diff::changed_paths(&root, &options).unwrap();
+    let paths = analysis::diff::changed_paths(&root, &options).unwrap();
     assert!(paths.contains("src/renamed.ts"));
     assert!(!paths.contains("src/a.ts"));
     std::fs::remove_dir_all(root).unwrap();

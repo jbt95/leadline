@@ -1,5 +1,5 @@
+use analysis::duplication::{GroupStatus, OccurrenceStatus, compare, detect, detect_with_limits};
 use config::DuplicationConfig;
-use leadline::duplication::{GroupStatus, OccurrenceStatus, compare, detect, detect_with_limits};
 use parse::source_snapshot::SourceEntry;
 use std::collections::BTreeMap;
 

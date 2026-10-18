@@ -12,6 +12,7 @@ keywords = ["complexity", "static-analysis", "java", "typescript", "crap"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
+analysis = { path = "../analysis" }
 blake3.workspace = true
 codegraph = { path = "../codegraph" }
 config = { path = "../config" }
@@ -43,18 +44,6 @@ libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
-
-[[bench]]
-name = "history"
-harness = false
-
-[[bench]]
-name = "duplication"
-harness = false
-
-[[bench]]
-name = "source_snapshot"
-harness = false
 
 [[bench]]
 name = "index"

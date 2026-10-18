@@ -909,7 +909,7 @@ pub fn language_label(path: &str) -> Option<&'static str> {
 
 /// Records one `debt` run: new and resolved function debt, increased and added
 /// risk rows, and the standing `existing` function count.
-pub fn record_debt(surface: &str, summary: &crate::debt::DebtSummary) {
+pub fn record_debt(surface: &str, summary: &analysis::debt::DebtSummary) {
     mutate(|state| {
         for (kind, state_name, count) in [
             ("function", "new", summary.new),

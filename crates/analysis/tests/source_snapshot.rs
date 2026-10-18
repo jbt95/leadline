@@ -1,4 +1,4 @@
-use leadline::graph::{analyze_dependencies, analyze_dependencies_from_sources};
+use analysis::graph::{analyze_dependencies, analyze_dependencies_from_sources};
 use parse::source_snapshot::{SnapshotTarget, SourceEntry, SourceSnapshot, load};
 use parse::{analyze_path, analyze_sources};
 use std::path::{Path, PathBuf};

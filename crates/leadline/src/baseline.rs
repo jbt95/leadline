@@ -2,10 +2,10 @@
 //!
 //! A baseline stores one row per function: path, stable function id, name,
 //! line, and the gate metrics. Rows pair with current functions by path and
-//! name in same-name source order (mirroring [`crate::diff`] changed
+//! name in same-name source order (mirroring [`analysis::diff`] changed
 //! pairing), because byte-span ids shift on any edit above or inside the
 //! function. Stored ids are still validated unique on read and reported
-//! back in findings. Deltas reuse [`crate::diff::regression_violates`], so
+//! back in findings. Deltas reuse [`analysis::diff::regression_violates`], so
 //! Git and baseline gates share one predicate. New functions are never
 //! delta regressions; deleted functions are ignored.
 
@@ -190,7 +190,7 @@ impl Baseline {
                     let Some(before) = before_group.get(index) else {
                         continue;
                     };
-                    if crate::diff::regression_violates(&before.to_analysis(), after, limits) {
+                    if analysis::diff::regression_violates(&before.to_analysis(), after, limits) {
                         regressions.push(BaselineRegression {
                             path: file.path.clone(),
                             id: after.id.clone(),

@@ -4,12 +4,12 @@
 //! thin. Every section is deterministic, every optional section is `None` when
 //! unavailable, and the DTO is published whole (no piecemeal schema growth).
 
-use crate::duplication::DuplicationReport;
-use crate::graph::DependencyReport;
 use crate::mutation::MutationReport;
-use crate::policy::{PolicyReport, PolicyViolation};
-use crate::risk::RiskReport;
-use crate::test_relationships::TestRelationshipReport;
+use analysis::duplication::DuplicationReport;
+use analysis::graph::DependencyReport;
+use analysis::policy::{PolicyReport, PolicyViolation};
+use analysis::risk::RiskReport;
+use analysis::test_relationships::TestRelationshipReport;
 use codegraph::history::{FileHistory, GitAnalyticsSnapshot};
 use codegraph::ownership::OwnershipReport;
 use model::core::{AnalysisReport, Language};
@@ -90,8 +90,8 @@ pub struct ProjectFunction {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ProjectDependencies {
-    pub edges: Vec<crate::graph::DependencyEdge>,
-    pub unresolved: Vec<crate::graph::UnresolvedDependency>,
+    pub edges: Vec<analysis::graph::DependencyEdge>,
+    pub unresolved: Vec<analysis::graph::UnresolvedDependency>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -152,7 +152,7 @@ pub struct Project {
     pub files: Vec<ProjectFile>,
     pub functions: Vec<ProjectFunction>,
     pub dependencies: ProjectDependencies,
-    pub cycles: Vec<crate::graph::DependencyCycle>,
+    pub cycles: Vec<analysis::graph::DependencyCycle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_activity: Option<Vec<FileHistory>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -367,7 +367,7 @@ pub fn build(inputs: ProjectInputs<'_>) -> Project {
 }
 
 fn risk_components(
-    components: &crate::risk::RiskComponents,
+    components: &analysis::risk::RiskComponents,
 ) -> BTreeMap<&'static str, Option<f64>> {
     [
         ("complexity", components.complexity),

@@ -272,14 +272,14 @@ pub fn assemble(request: &SecurityRequest) -> Result<SecurityOutcome, SecurityEr
     let changed = match &request.comparison {
         None => None,
         Some(comparison) => {
-            let (base, target) = crate::diff::comparison_options(comparison);
-            let options = crate::diff::ChangeOptions {
+            let (base, target) = analysis::diff::comparison_options(comparison);
+            let options = analysis::diff::ChangeOptions {
                 base,
                 target,
                 detect_renames: false,
             };
             Some(
-                crate::diff::changed_paths(&request.path, &options)
+                analysis::diff::changed_paths(&request.path, &options)
                     .map_err(|error| SecurityError::Incomplete(error.to_string()))?,
             )
         }

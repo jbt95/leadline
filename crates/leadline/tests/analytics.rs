@@ -122,7 +122,7 @@ fn debt_classifies_new_debt_between_complete_states() {
     .unwrap();
     assert!(report.summary.new >= 1, "{:?}", report.summary);
     assert_eq!(report.findings[0].dimension, "cognitive");
-    assert_eq!(report.findings[0].status, leadline::debt::DebtStatus::New);
+    assert_eq!(report.findings[0].status, analysis::debt::DebtStatus::New);
 
     std::fs::remove_dir_all(root).unwrap();
 }

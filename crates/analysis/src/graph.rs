@@ -97,7 +97,7 @@ pub fn analyze_dependencies_from_sources(entries: &[SourceEntry]) -> Result<Depe
 }
 
 /// Resolves dependencies from already-extracted references.
-pub(crate) fn dependency_report_from_parsed(
+pub fn dependency_report_from_parsed(
     parsed_files: Vec<(String, ParsedDependencies)>,
 ) -> DependencyReport {
     dependency_report(

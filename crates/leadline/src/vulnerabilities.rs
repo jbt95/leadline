@@ -139,13 +139,14 @@ fn merge_findings(
 /// available. Direct imports only: transitive reachability is never inferred.
 pub fn add_changed_import_evidence(
     report: &mut VulnerabilityReport,
-    imports: &[crate::graph::ExternalPackageImport],
+    imports: &[analysis::graph::ExternalPackageImport],
     changed_source_available: bool,
 ) {
     if !changed_source_available {
         return;
     }
-    let mut by_package: BTreeMap<&str, Vec<&crate::graph::ExternalPackageImport>> = BTreeMap::new();
+    let mut by_package: BTreeMap<&str, Vec<&analysis::graph::ExternalPackageImport>> =
+        BTreeMap::new();
     for import in imports {
         by_package
             .entry(import.package.as_str())
@@ -230,15 +231,15 @@ pub fn assemble(request: &VulnerabilityRequest) -> model::Result<VulnerabilityOu
     let (imports, available) = match &request.comparison {
         None => (Vec::new(), false),
         Some(comparison) => {
-            let (base, target) = crate::diff::comparison_options(comparison);
-            let options = crate::diff::ChangeOptions {
+            let (base, target) = analysis::diff::comparison_options(comparison);
+            let options = analysis::diff::ChangeOptions {
                 base,
                 target,
                 detect_renames: false,
             };
-            let entries = crate::diff::changed_source_entries(&request.path, &options)?;
+            let entries = analysis::diff::changed_source_entries(&request.path, &options)?;
             (
-                crate::graph::external_packages_from_sources(&entries)?,
+                analysis::graph::external_packages_from_sources(&entries)?,
                 true,
             )
         }

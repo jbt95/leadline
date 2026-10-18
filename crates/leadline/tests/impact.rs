@@ -1,7 +1,7 @@
 mod common;
 
-use leadline::graph::{DependencyCycle, DependencyEdge, DependencyFile, DependencyReport};
-use leadline::impact::{analyze_impact, impact_counts};
+use analysis::graph::{DependencyCycle, DependencyEdge, DependencyFile, DependencyReport};
+use analysis::impact::{analyze_impact, impact_counts};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 

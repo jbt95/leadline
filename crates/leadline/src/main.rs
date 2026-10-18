@@ -579,16 +579,16 @@ fn changed_command(command: &str, args: &[String]) -> Result<ExitCode, CliError>
         (true, Some(_)) => {
             return Err(CliError::usage("--staged and --target are exclusive"));
         }
-        (true, None) => leadline::diff::ComparisonTarget::Index,
-        (false, Some(revision)) => leadline::diff::ComparisonTarget::Revision(revision),
-        (false, None) => leadline::diff::ComparisonTarget::Worktree,
+        (true, None) => analysis::diff::ComparisonTarget::Index,
+        (false, Some(revision)) => analysis::diff::ComparisonTarget::Revision(revision),
+        (false, None) => analysis::diff::ComparisonTarget::Worktree,
     };
-    let options = leadline::diff::ChangeOptions {
+    let options = analysis::diff::ChangeOptions {
         base: base.unwrap_or_else(|| "HEAD~1".to_owned()),
         target: comparison_target,
         detect_renames: renames,
     };
-    let report = leadline::diff::analyze_changes(&path, &options)
+    let report = analysis::diff::analyze_changes(&path, &options)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     budget.explain = explain;
     if agent_json {
@@ -726,7 +726,7 @@ fn hotspots_command(args: &[String]) -> Result<ExitCode, CliError> {
     let (analysis, scope) = analyze_ranked(&parsed.path, parsed.coverage.as_ref(), excludes)?;
     let history = codegraph::history::analyze_history(&scope)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
-    let report = leadline::hotspots::build(&analysis, &history, parsed.window, parsed.limit);
+    let report = analysis::hotspots::build(&analysis, &history, parsed.window, parsed.limit);
     if parsed.agent_json {
         print_json(&leadline::agent::hotspots_agent_json(&report), false)?;
     } else if parsed.json {
@@ -1276,7 +1276,7 @@ fn policy_command(args: &[String]) -> Result<ExitCode, CliError> {
             .iter()
             .filter(|violation| {
                 violation.severity == config::Severity::Error
-                    && violation.status != Some(leadline::policy::PolicyStatus::Resolved)
+                    && violation.status != Some(analysis::policy::PolicyStatus::Resolved)
             })
             .count();
         if current_errors > 0 {
@@ -2060,7 +2060,7 @@ fn unused_command(args: &[String]) -> Result<ExitCode, CliError> {
     if include_tests {
         unused_config.include_tests = true;
     }
-    let report = leadline::unused::analyze_unused(&path, excludes, &entries, &unused_config)
+    let report = analysis::unused::analyze_unused(&path, excludes, &entries, &unused_config)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     if report.files_analyzed == 0 {
         return Err(no_supported_files(&path));
@@ -2170,7 +2170,7 @@ fn dependencies_command(args: &[String]) -> Result<ExitCode, CliError> {
     check_output_format(json, agent_json, false, None)?;
     let config = load_config_for(&path)?;
     let excludes = analysis_excludes(config.as_ref());
-    let report = leadline::graph::analyze_dependencies(&path, excludes)
+    let report = analysis::graph::analyze_dependencies(&path, excludes)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     if report.files.is_empty() {
         return Err(no_supported_files(&path));
@@ -2237,9 +2237,9 @@ fn impact_command(args: &[String]) -> Result<ExitCode, CliError> {
     })?;
     let config = load_config_for(&root)?;
     let excludes = analysis_excludes(config.as_ref());
-    let graph = leadline::graph::analyze_dependencies(&root, excludes)
+    let graph = analysis::graph::analyze_dependencies(&root, excludes)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
-    let Some(report) = leadline::impact::analyze_impact(&graph, &key, top) else {
+    let Some(report) = analysis::impact::analyze_impact(&graph, &key, top) else {
         return Err(CliError::usage(format!(
             "impact target '{target}' was not found in the dependency graph under {}",
             root.display()
@@ -2728,8 +2728,8 @@ fn validate_quality_gate(
 /// describes what the scanners reported, not what the gate was asked to fail
 /// on. SQL risks stay out: they are database-shape findings, not security
 /// findings.
-fn scanner_severity_counts(scanners: &CheckScanners) -> Option<leadline::quality::SeverityCounts> {
-    let mut counts = leadline::quality::SeverityCounts::default();
+fn scanner_severity_counts(scanners: &CheckScanners) -> Option<analysis::quality::SeverityCounts> {
+    let mut counts = analysis::quality::SeverityCounts::default();
     let mut present = false;
     if let Some(security) = &scanners.security {
         present = true;
@@ -2753,14 +2753,14 @@ fn evaluate_quality_gate(
     thresholds: &Thresholds,
     functions: Vec<&FunctionAnalysis>,
     scanners: &CheckScanners,
-) -> Option<leadline::quality::QualityGateReport> {
+) -> Option<analysis::quality::QualityGateReport> {
     let gate = gate?;
     let security = scanner_severity_counts(scanners);
     let suppressed_violations =
-        leadline::quality::suppressed_violation_count(functions.iter().copied(), thresholds);
-    Some(leadline::quality::evaluate(
+        analysis::quality::suppressed_violation_count(functions.iter().copied(), thresholds);
+    Some(analysis::quality::evaluate(
         gate,
-        leadline::quality::GateInputs {
+        analysis::quality::GateInputs {
             scope,
             thresholds,
             functions,
@@ -2803,7 +2803,7 @@ fn check_report(
         .collect();
     let quality_gate = evaluate_quality_gate(
         gate,
-        leadline::quality::SCOPE_OVERALL,
+        analysis::quality::SCOPE_OVERALL,
         thresholds,
         scoped,
         scanners,
@@ -2848,8 +2848,8 @@ fn check_report(
 }
 
 /// True when the configured gate found at least one failed condition.
-fn gate_failed(report: Option<&leadline::quality::QualityGateReport>) -> bool {
-    report.is_some_and(|report| report.status == leadline::quality::GateStatus::Failed)
+fn gate_failed(report: Option<&analysis::quality::QualityGateReport>) -> bool {
+    report.is_some_and(|report| report.status == analysis::quality::GateStatus::Failed)
 }
 
 /// `check --base REV`: gate after-side absolute and optional delta violations.
@@ -2861,7 +2861,7 @@ fn check_changed(
     gate: Option<&config::QualityGateConfig>,
     scanners: &CheckScanners,
 ) -> Result<ExitCode, CliError> {
-    let mut changed = leadline::diff::analyze_changed(&options.path, base)
+    let mut changed = analysis::diff::analyze_changed(&options.path, base)
         .map_err(|error| CliError::incomplete(error.to_string()))?;
     if let Some(coverage) = options.coverage.as_ref() {
         for change in &mut changed.functions {
@@ -2879,7 +2879,7 @@ fn check_changed(
             change
                 .before
                 .as_ref()
-                .is_some_and(|before| leadline::diff::regression_violates(before, after, limits))
+                .is_some_and(|before| analysis::diff::regression_violates(before, after, limits))
         });
         if absolute || delta {
             grouped
@@ -2915,7 +2915,7 @@ fn check_changed(
         .collect();
     let quality_gate = evaluate_quality_gate(
         gate,
-        leadline::quality::SCOPE_CHANGED,
+        analysis::quality::SCOPE_CHANGED,
         thresholds,
         scoped,
         scanners,
@@ -3032,7 +3032,7 @@ fn check_baseline(
         .collect();
     let quality_gate = evaluate_quality_gate(
         gate,
-        leadline::quality::SCOPE_OVERALL,
+        analysis::quality::SCOPE_OVERALL,
         thresholds,
         scoped,
         scanners,
@@ -3188,7 +3188,7 @@ fn test_targets_command(args: &[String]) -> Result<ExitCode, CliError> {
     if report.files.is_empty() {
         return Err(no_supported_files(&path));
     }
-    let targets = leadline::test_targets::test_targets(&report, &coverage);
+    let targets = analysis::test_targets::test_targets(&report, &coverage);
     let total = targets.len();
     let limit = top.unwrap_or(TEST_TARGETS_MAX).min(total);
     let truncated = total > limit;
@@ -3553,7 +3553,7 @@ struct ScannerReports<'a> {
 struct MetricGate<'a> {
     thresholds: &'a Thresholds,
     regressions: &'a [leadline::sarif::FunctionViolation<'a>],
-    quality_gate: Option<&'a leadline::quality::QualityGateReport>,
+    quality_gate: Option<&'a analysis::quality::QualityGateReport>,
 }
 
 impl CommonOptions {
@@ -3911,7 +3911,7 @@ impl CommonOptions {
 /// Stamps the gate verdict into one machine-readable document.
 fn stamp_quality_gate(
     document: &mut serde_json::Value,
-    quality_gate: Option<&leadline::quality::QualityGateReport>,
+    quality_gate: Option<&analysis::quality::QualityGateReport>,
 ) -> Result<(), CliError> {
     let Some(quality_gate) = quality_gate else {
         return Ok(());
@@ -3933,8 +3933,8 @@ fn has_scanner_findings(
 }
 
 /// Terminal verdict line for a configured gate, plus its failed conditions.
-fn print_quality_gate(report: Option<&leadline::quality::QualityGateReport>) {
-    use leadline::quality::GateStatus;
+fn print_quality_gate(report: Option<&analysis::quality::QualityGateReport>) {
+    use analysis::quality::GateStatus;
     let Some(report) = report else {
         return;
     };

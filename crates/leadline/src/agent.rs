@@ -1,8 +1,8 @@
-use crate::diff::ChangedReport;
-use crate::graph::DependencyReport;
-use crate::hotspots::HotspotReport;
-use crate::impact::ImpactReport;
-use crate::risk::RiskReport;
+use analysis::diff::ChangedReport;
+use analysis::graph::DependencyReport;
+use analysis::hotspots::HotspotReport;
+use analysis::impact::ImpactReport;
+use analysis::risk::RiskReport;
 use codegraph::coupling::CouplingReport;
 use model::core::{AnalysisReport, FunctionAnalysis, FunctionMetrics, MetricContribution};
 use serde_json::{Value, json};
@@ -265,7 +265,7 @@ pub fn coupling_agent_json(report: &CouplingReport) -> Value {
 /// Unused-code projection. The entry set travels with the rows so an agent can
 /// see what "unused" was measured against, and the honesty fields (`complete`,
 /// `reason`, `unresolved`, `export_star_files`) travel with them too.
-pub fn unused_agent_json(report: &crate::unused::UnusedReport) -> Value {
+pub fn unused_agent_json(report: &analysis::unused::UnusedReport) -> Value {
     let entry_points: Vec<Value> = report
         .entry_points
         .iter()
@@ -470,7 +470,7 @@ pub fn project_agent_json(report: &crate::project::Project) -> Value {
 }
 
 /// Compact agent-oriented view of a debt comparison.
-pub fn debt_agent_json(report: &crate::debt::DebtReport) -> Value {
+pub fn debt_agent_json(report: &analysis::debt::DebtReport) -> Value {
     let findings: Vec<Value> = report
         .findings
         .iter()
@@ -490,7 +490,7 @@ pub fn debt_agent_json(report: &crate::debt::DebtReport) -> Value {
     let risk_changes: Vec<Value> = report
         .risk_changes
         .iter()
-        .filter(|change| change.status != crate::debt::RiskChangeStatus::Unchanged)
+        .filter(|change| change.status != analysis::debt::RiskChangeStatus::Unchanged)
         .take(50)
         .map(|change| {
             json!({
@@ -734,7 +734,7 @@ fn max_abs_delta(before: Option<&FunctionAnalysis>, after: Option<&FunctionAnaly
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diff::FunctionChange;
+    use analysis::diff::FunctionChange;
     use model::core::{FileAnalysis, FunctionKind, Language, MetricSpecs};
 
     fn metrics(cognitive: u32, cyclomatic: u32, crap: Option<f64>) -> FunctionMetrics {

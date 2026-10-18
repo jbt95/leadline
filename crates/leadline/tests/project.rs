@@ -1,7 +1,7 @@
+use analysis::duplication::detect;
+use analysis::graph::{DependencyEdge, DependencyFile, DependencyReport};
 use codegraph::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow};
 use config::DuplicationConfig;
-use leadline::duplication::detect;
-use leadline::graph::{DependencyEdge, DependencyFile, DependencyReport};
 use leadline::project::{PROJECT_SCHEMA_VERSION, ProjectInputs, build};
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
@@ -96,7 +96,7 @@ fn graph() -> DependencyReport {
     }
 }
 
-fn duplication() -> leadline::duplication::DuplicationReport {
+fn duplication() -> analysis::duplication::DuplicationReport {
     detect(
         &[
             SourceEntry {
@@ -159,8 +159,8 @@ fn project_joins_every_section_and_recomputes_aggregates() {
         files: vec![],
         modules: vec![],
     };
-    let policy = leadline::policy::evaluate(&graph, &[]);
-    let risk = leadline::risk::build(
+    let policy = analysis::policy::evaluate(&graph, &[]);
+    let risk = analysis::risk::build(
         &analysis,
         &history,
         &graph,

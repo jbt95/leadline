@@ -34,7 +34,7 @@ fn adapter_and_existing_consumers_disable_fetch_locks_and_stdin() {
         assert!(git::run_optional(&root, &["arbitrary-failure"]).is_err());
         assert_eq!(git::repo_root(&root).unwrap(), Some(plain_path(&root)));
 
-        let changed = leadline::diff::analyze_changed(&root, "HEAD").unwrap();
+        let changed = analysis::diff::analyze_changed(&root, "HEAD").unwrap();
         assert_eq!(changed.base, "HEAD");
         assert!(changed.functions.is_empty());
         assert!(changed.parse_errors.is_empty());
@@ -90,7 +90,7 @@ fn diff_treats_a_path_missing_from_the_base_as_absent() {
     git(&root, &["commit", "--allow-empty", "-qm", "base"]);
     std::fs::write(root.join("added.ts"), "function added() { return 1; }\n").unwrap();
 
-    let report = leadline::diff::analyze_changed(&root, "HEAD").unwrap();
+    let report = analysis::diff::analyze_changed(&root, "HEAD").unwrap();
     assert_eq!(report.functions.len(), 1);
     assert!(report.functions[0].before.is_none());
     assert!(report.functions[0].after.is_some());
@@ -111,7 +111,7 @@ fn diff_propagates_a_missing_object_failure() {
 
     let error = {
         let _env = FakeGitEnv::install(&bin, &log, &root);
-        leadline::diff::analyze_changed(&root, "HEAD").unwrap_err()
+        analysis::diff::analyze_changed(&root, "HEAD").unwrap_err()
     };
     assert!(error.to_string().contains("missing promisor object"));
 

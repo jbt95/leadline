@@ -445,7 +445,7 @@ pub fn regression_violations<'a>(
     limits: &config::RegressionLimits,
     path: &'a str,
 ) -> Vec<FunctionViolation<'a>> {
-    let dimensions = crate::diff::regression_dimensions(before, after, limits);
+    let dimensions = analysis::diff::regression_dimensions(before, after, limits);
     let mut out = Vec::new();
     let location = |rule_id: &'static str, message: String| FunctionViolation {
         rule_id,

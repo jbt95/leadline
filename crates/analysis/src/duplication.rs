@@ -106,10 +106,10 @@ pub fn detect(entries: &[SourceEntry], config: &DuplicationConfig) -> Duplicatio
 }
 
 #[derive(Default)]
-pub(crate) struct TokenizedFiles {
-    pub(crate) files: Vec<(String, parse::parser::TokenizedSource)>,
-    pub(crate) diagnostics: Vec<DuplicationDiagnostic>,
-    pub(crate) total_tokens: usize,
+pub struct TokenizedFiles {
+    pub files: Vec<(String, parse::parser::TokenizedSource)>,
+    pub diagnostics: Vec<DuplicationDiagnostic>,
+    pub total_tokens: usize,
 }
 
 /// Tokenizes every entry in parallel, preserving input order in the result.
@@ -156,7 +156,7 @@ pub(crate) fn tokenize(entries: &[SourceEntry], config: &DuplicationConfig) -> T
 }
 
 /// Detects clones over already-tokenized files.
-pub(crate) fn detect_tokenized(
+pub fn detect_tokenized(
     tokenized: TokenizedFiles,
     config: &DuplicationConfig,
     token_ceiling: usize,
@@ -654,12 +654,12 @@ pub fn compare(
     }
 }
 
-pub(crate) struct ExcludeMatcher {
+pub struct ExcludeMatcher {
     matcher: ignore::gitignore::Gitignore,
 }
 
 impl ExcludeMatcher {
-    pub(crate) fn new(patterns: &[String]) -> Self {
+    pub fn new(patterns: &[String]) -> Self {
         let mut builder = ignore::gitignore::GitignoreBuilder::new("");
         for pattern in patterns {
             let _ = builder.add_line(None, pattern);
@@ -673,7 +673,7 @@ impl ExcludeMatcher {
         }
     }
 
-    pub(crate) fn matches(&self, path: &str) -> bool {
+    pub fn matches(&self, path: &str) -> bool {
         self.matcher
             .matched_path_or_any_parents(std::path::Path::new(path), false)
             .is_ignore()

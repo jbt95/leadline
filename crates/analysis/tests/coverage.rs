@@ -133,7 +133,7 @@ fn zero_hit_contribution_lines_become_test_targets() {
     let coverage = lcov_lines("src/payment.ts", &lines);
     probe = analyzed("src/payment.ts", source, &coverage);
     let report = test_report(vec![probe]);
-    let targets = leadline::test_targets::test_targets(&report, &coverage);
+    let targets = analysis::test_targets::test_targets(&report, &coverage);
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].path, "src/payment.ts");
     assert_eq!(targets[0].function, "pay");
@@ -153,7 +153,7 @@ fn covered_contribution_lines_produce_no_targets() {
     let coverage = lcov_lines("src/payment.ts", &lines);
     let file = analyzed("src/payment.ts", source, &coverage);
     let report = test_report(vec![file]);
-    assert!(leadline::test_targets::test_targets(&report, &coverage).is_empty());
+    assert!(analysis::test_targets::test_targets(&report, &coverage).is_empty());
 }
 
 #[test]
@@ -165,7 +165,7 @@ fn unknown_lines_are_separate_from_uncovered() {
     let coverage = lcov_lines("src/payment.ts", &[(contributions[0].line, 0)]);
     let file = analyzed("src/payment.ts", source, &coverage);
     let report = test_report(vec![file]);
-    let targets = leadline::test_targets::test_targets(&report, &coverage);
+    let targets = analysis::test_targets::test_targets(&report, &coverage);
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].uncovered.len(), 1);
     assert_eq!(
@@ -185,7 +185,7 @@ fn functions_without_any_known_coverage_produce_no_targets() {
     let coverage = lcov_lines("other.ts", &[(2, 0)]);
     let file = analyzed("src/payment.ts", source, &coverage);
     let report = test_report(vec![file]);
-    assert!(leadline::test_targets::test_targets(&report, &coverage).is_empty());
+    assert!(analysis::test_targets::test_targets(&report, &coverage).is_empty());
 }
 
 #[test]
@@ -211,7 +211,7 @@ fn targets_sort_by_crap_then_path_function_line() {
     let file_b = analyzed("b.ts", complex, &coverage);
     let file_a = analyzed("a.ts", simple, &coverage);
     let report = test_report(vec![file_b, file_a]);
-    let targets = leadline::test_targets::test_targets(&report, &coverage);
+    let targets = analysis::test_targets::test_targets(&report, &coverage);
     assert_eq!(targets.len(), 2);
     let crap: Vec<Option<f64>> = targets.iter().map(|target| target.crap).collect();
     assert!(crap[0] >= crap[1]);

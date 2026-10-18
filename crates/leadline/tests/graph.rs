@@ -1,6 +1,6 @@
 mod common;
 
-use leadline::graph::{DEPENDENCY_SCHEMA_VERSION, DependencyReport, analyze_dependencies};
+use analysis::graph::{DEPENDENCY_SCHEMA_VERSION, DependencyReport, analyze_dependencies};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -999,7 +999,7 @@ fn cli_dependencies_agent_json_reports_unresolved() {
 
 #[test]
 fn external_packages_from_changed_sources() {
-    use leadline::graph::external_packages_from_sources;
+    use analysis::graph::external_packages_from_sources;
     use parse::source_snapshot::SourceEntry;
     let entries = vec![
         SourceEntry {

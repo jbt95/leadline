@@ -1,8 +1,8 @@
-use crate::diff::ChangedReport;
-use crate::graph::DependencyReport;
-use crate::hotspots::HotspotReport;
-use crate::impact::ImpactReport;
-use crate::risk::RiskReport;
+use analysis::diff::ChangedReport;
+use analysis::graph::DependencyReport;
+use analysis::hotspots::HotspotReport;
+use analysis::impact::ImpactReport;
+use analysis::risk::RiskReport;
 use codegraph::coupling::CouplingReport;
 use model::core::{AnalysisReport, FunctionAnalysis};
 use std::fmt::Write;
@@ -143,14 +143,14 @@ pub fn terminal_dependencies(report: &DependencyReport) -> String {
         report.edges.len(),
         report.cycles.len()
     );
-    let mut by_fan_in: Vec<&crate::graph::DependencyFile> = report.files.iter().collect();
+    let mut by_fan_in: Vec<&analysis::graph::DependencyFile> = report.files.iter().collect();
     by_fan_in.sort_by(|left, right| {
         right
             .fan_in
             .cmp(&left.fan_in)
             .then(left.path.cmp(&right.path))
     });
-    let mut by_fan_out: Vec<&crate::graph::DependencyFile> = report.files.iter().collect();
+    let mut by_fan_out: Vec<&analysis::graph::DependencyFile> = report.files.iter().collect();
     by_fan_out.sort_by(|left, right| {
         right
             .fan_out
@@ -187,7 +187,7 @@ pub fn terminal_dependencies(report: &DependencyReport) -> String {
 }
 
 /// Terminal summary of unused files, dependencies, and exports.
-pub fn terminal_unused(report: &crate::unused::UnusedReport) -> String {
+pub fn terminal_unused(report: &analysis::unused::UnusedReport) -> String {
     let mut output = String::new();
     let _ = writeln!(
         output,
@@ -451,7 +451,7 @@ pub fn terminal_project(report: &crate::project::Project) -> String {
 }
 
 /// Terminal summary of a full-state debt comparison.
-pub fn terminal_debt(report: &crate::debt::DebtReport) -> String {
+pub fn terminal_debt(report: &analysis::debt::DebtReport) -> String {
     let mut output = String::new();
     let _ = writeln!(
         output,
@@ -480,9 +480,9 @@ pub fn terminal_debt(report: &crate::debt::DebtReport) -> String {
         let _ = writeln!(output, "\nFindings");
         for finding in report.findings.iter().take(20) {
             let status = match finding.status {
-                crate::debt::DebtStatus::New => "new",
-                crate::debt::DebtStatus::Existing => "existing",
-                crate::debt::DebtStatus::Resolved => "resolved",
+                analysis::debt::DebtStatus::New => "new",
+                analysis::debt::DebtStatus::Existing => "existing",
+                analysis::debt::DebtStatus::Resolved => "resolved",
             };
             let _ = writeln!(
                 output,
@@ -506,11 +506,11 @@ pub fn terminal_debt(report: &crate::debt::DebtReport) -> String {
         let _ = writeln!(output, "\nRisk changes");
         for change in report.risk_changes.iter().take(20) {
             let status = match change.status {
-                crate::debt::RiskChangeStatus::Added => "added",
-                crate::debt::RiskChangeStatus::Increased => "increased",
-                crate::debt::RiskChangeStatus::Decreased => "decreased",
-                crate::debt::RiskChangeStatus::Removed => "removed",
-                crate::debt::RiskChangeStatus::Unchanged => "unchanged",
+                analysis::debt::RiskChangeStatus::Added => "added",
+                analysis::debt::RiskChangeStatus::Increased => "increased",
+                analysis::debt::RiskChangeStatus::Decreased => "decreased",
+                analysis::debt::RiskChangeStatus::Removed => "removed",
+                analysis::debt::RiskChangeStatus::Unchanged => "unchanged",
             };
             let _ = writeln!(
                 output,
@@ -532,7 +532,7 @@ pub fn terminal_debt(report: &crate::debt::DebtReport) -> String {
 }
 
 /// Terminal summary of one duplication report.
-pub fn terminal_duplication(report: &crate::duplication::DuplicationReport) -> String {
+pub fn terminal_duplication(report: &analysis::duplication::DuplicationReport) -> String {
     let mut output = String::new();
     let _ = writeln!(
         output,
@@ -567,7 +567,9 @@ pub fn terminal_duplication(report: &crate::duplication::DuplicationReport) -> S
 }
 
 /// Terminal summary of duplication drift.
-pub fn terminal_duplication_drift(report: &crate::duplication::DuplicationDriftReport) -> String {
+pub fn terminal_duplication_drift(
+    report: &analysis::duplication::DuplicationDriftReport,
+) -> String {
     let mut output = String::new();
     let _ = writeln!(output, "Duplication drift (model: {})", report.model);
     let _ = writeln!(
@@ -579,9 +581,9 @@ pub fn terminal_duplication_drift(report: &crate::duplication::DuplicationDriftR
     );
     for group in report.groups.iter().take(10) {
         let status = match group.status {
-            Some(crate::duplication::GroupStatus::New) => "new",
-            Some(crate::duplication::GroupStatus::Existing) => "existing",
-            Some(crate::duplication::GroupStatus::Resolved) => "resolved",
+            Some(analysis::duplication::GroupStatus::New) => "new",
+            Some(analysis::duplication::GroupStatus::Existing) => "existing",
+            Some(analysis::duplication::GroupStatus::Resolved) => "resolved",
             None => "unknown",
         };
         let _ = writeln!(
@@ -596,7 +598,7 @@ pub fn terminal_duplication_drift(report: &crate::duplication::DuplicationDriftR
 }
 
 /// Terminal summary of policy violations.
-pub fn terminal_policy(report: &crate::policy::PolicyReport) -> String {
+pub fn terminal_policy(report: &analysis::policy::PolicyReport) -> String {
     let mut output = String::new();
     let _ = writeln!(
         output,
@@ -605,9 +607,9 @@ pub fn terminal_policy(report: &crate::policy::PolicyReport) -> String {
     );
     for violation in report.violations.iter().take(20) {
         let status = match violation.status {
-            Some(crate::policy::PolicyStatus::New) => " [new]",
-            Some(crate::policy::PolicyStatus::Existing) => " [existing]",
-            Some(crate::policy::PolicyStatus::Resolved) => " [resolved]",
+            Some(analysis::policy::PolicyStatus::New) => " [new]",
+            Some(analysis::policy::PolicyStatus::Existing) => " [existing]",
+            Some(analysis::policy::PolicyStatus::Resolved) => " [resolved]",
             None => "",
         };
         let _ = writeln!(
@@ -630,7 +632,7 @@ pub fn terminal_policy(report: &crate::policy::PolicyReport) -> String {
 /// Terminal summary of normalized mutation and test-map inputs.
 pub fn terminal_mutation(
     report: &crate::mutation::MutationReport,
-    relationships: Option<&crate::test_relationships::TestRelationshipReport>,
+    relationships: Option<&analysis::test_relationships::TestRelationshipReport>,
 ) -> String {
     let mut output = String::new();
     let _ = writeln!(output, "Mutation (model: {})", report.model);

@@ -161,7 +161,7 @@ fn rejects_invalid_paths_depth_size_and_row_counts() {
 
 #[test]
 fn changed_import_evidence_marks_direct_matches() {
-    use leadline::graph::external_packages_from_sources;
+    use analysis::graph::external_packages_from_sources;
     use leadline::vulnerabilities::add_changed_import_evidence;
     use parse::source_snapshot::SourceEntry;
     let osv = [fixture("osv.json")];
@@ -201,7 +201,7 @@ fn changed_import_evidence_marks_direct_matches() {
 
 #[test]
 fn changed_import_evidence_stays_unknown_without_comparison() {
-    use leadline::graph::external_packages_from_sources;
+    use analysis::graph::external_packages_from_sources;
     use leadline::vulnerabilities::add_changed_import_evidence;
     use parse::source_snapshot::SourceEntry;
     let root = temporary_directory();

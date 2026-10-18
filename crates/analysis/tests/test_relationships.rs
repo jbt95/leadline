@@ -1,4 +1,4 @@
-use leadline::test_relationships::ingest;
+use analysis::test_relationships::ingest;
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
     MetricSpecs, OUTPUT_SCHEMA_VERSION,

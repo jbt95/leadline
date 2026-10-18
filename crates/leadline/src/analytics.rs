@@ -4,17 +4,17 @@
 //! analysis, graph, Git analytics, ownership, external reports, risk) so CLI
 //! and future frontends share one pipeline.
 
-use crate::debt::{
+use crate::mutation::{MutationInput, ingest as ingest_mutation};
+use crate::project::{Project, ProjectInputs, build as build_project};
+use crate::snapshots::{SnapshotOutcome, TrendPoint, TrendStore};
+use analysis::debt::{
     DEBT_SCHEMA_VERSION, DebtReport, RISK_CHANGE_MODEL, classify, compare_risks, summarize,
 };
-use crate::duplication::detect;
-use crate::graph::{analyze_dependencies, analyze_dependencies_from_sources};
-use crate::mutation::{MutationInput, ingest as ingest_mutation};
-use crate::policy::{PolicyReport, evaluate as evaluate_policy};
-use crate::project::{Project, ProjectInputs, build as build_project};
-use crate::risk::{RiskReport, build as build_risk};
-use crate::snapshots::{SnapshotOutcome, TrendPoint, TrendStore};
-use crate::test_relationships::ingest as ingest_test_relationships;
+use analysis::duplication::detect;
+use analysis::graph::{analyze_dependencies, analyze_dependencies_from_sources};
+use analysis::policy::{PolicyReport, evaluate as evaluate_policy};
+use analysis::risk::{RiskReport, build as build_risk};
+use analysis::test_relationships::ingest as ingest_test_relationships;
 use codegraph::history::{
     HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow, analyze_git_at_with_mailmap,
 };
@@ -76,14 +76,14 @@ fn bundle_parts(
     config: &config::DuplicationConfig,
 ) -> Result<(
     AnalysisReport,
-    crate::graph::DependencyReport,
-    crate::duplication::DuplicationReport,
+    analysis::graph::DependencyReport,
+    analysis::duplication::DuplicationReport,
 )> {
     let bundles = parse::parser::parse_bundles(entries)?;
-    let excluded = crate::duplication::ExcludeMatcher::new(&config.excludes);
+    let excluded = analysis::duplication::ExcludeMatcher::new(&config.excludes);
     let mut files = Vec::with_capacity(bundles.len());
     let mut dependencies = Vec::with_capacity(bundles.len());
-    let mut tokenized = crate::duplication::TokenizedFiles::default();
+    let mut tokenized = analysis::duplication::TokenizedFiles::default();
     for (path, bundle) in bundles {
         if !excluded.matches(&path) {
             if bundle.analysis.parse_errors.is_empty() {
@@ -92,7 +92,7 @@ fn bundle_parts(
             } else {
                 tokenized
                     .diagnostics
-                    .push(crate::duplication::DuplicationDiagnostic {
+                    .push(analysis::duplication::DuplicationDiagnostic {
                         path: path.clone(),
                         reason: "parse errors exclude the file from clone candidates".to_owned(),
                     });
@@ -102,12 +102,12 @@ fn bundle_parts(
         files.push(bundle.analysis);
     }
     let analysis = parse::analysis_report(files);
-    let graph = crate::graph::dependency_report_from_parsed(dependencies);
-    let duplication = crate::duplication::detect_tokenized(
+    let graph = analysis::graph::dependency_report_from_parsed(dependencies);
+    let duplication = analysis::duplication::detect_tokenized(
         tokenized,
         config,
-        crate::duplication::TOKEN_CEILING,
-        crate::duplication::COMPARISON_CEILING,
+        analysis::duplication::TOKEN_CEILING,
+        analysis::duplication::COMPARISON_CEILING,
     );
     Ok((analysis, graph, duplication))
 }
@@ -116,8 +116,8 @@ fn build_from_parts(
     context: &SnapshotContext,
     snapshot: &SourceSnapshot,
     analysis: &model::core::AnalysisReport,
-    graph: &crate::graph::DependencyReport,
-    duplication: &crate::duplication::DuplicationReport,
+    graph: &analysis::graph::DependencyReport,
+    duplication: &analysis::duplication::DuplicationReport,
     request: &ProjectRequest,
     budget: &mut InputBudget,
 ) -> Result<Project> {
@@ -371,12 +371,12 @@ pub fn analyze_debt(request: &DebtRequest) -> Result<DebtReport> {
     })
 }
 
-fn project_risk_entries(project: &Project) -> Vec<crate::debt::RiskSideEntry> {
+fn project_risk_entries(project: &Project) -> Vec<analysis::debt::RiskSideEntry> {
     project
         .risk
         .rows
         .iter()
-        .map(|row| crate::debt::RiskSideEntry {
+        .map(|row| analysis::debt::RiskSideEntry {
             path: row.path.clone(),
             score: Some(row.score),
             components: row
@@ -491,7 +491,12 @@ pub fn analyze_policy(
             let (_, base_snapshot) = load(path, SnapshotTarget::Revision(base.to_owned()))?;
             let base_graph = analyze_dependencies_from_sources(&base_snapshot.entries)?;
             let renames = detect_renames(path, base).unwrap_or_default();
-            Ok(crate::policy::compare(&base_graph, &graph, rules, &renames))
+            Ok(analysis::policy::compare(
+                &base_graph,
+                &graph,
+                rules,
+                &renames,
+            ))
         }
         None => Ok(evaluate_policy(&graph, rules)),
     }
@@ -500,8 +505,8 @@ pub fn analyze_policy(
 /// One duplication run: a current-state report or a drift comparison.
 #[derive(Clone, Debug, PartialEq)]
 pub enum DuplicationOutcome {
-    Single(crate::duplication::DuplicationReport),
-    Drift(crate::duplication::DuplicationDriftReport),
+    Single(analysis::duplication::DuplicationReport),
+    Drift(analysis::duplication::DuplicationDriftReport),
 }
 
 /// Detects clones for one state, or compares occurrences against `base`.
@@ -518,7 +523,7 @@ pub fn analyze_duplication(
                 load(path, SnapshotTarget::Revision(base.to_owned()))?;
             let before = detect(&base_snapshot.entries, &base_context.config.duplication);
             let renames = detect_renames(path, base).unwrap_or_default();
-            Ok(DuplicationOutcome::Drift(crate::duplication::compare(
+            Ok(DuplicationOutcome::Drift(analysis::duplication::compare(
                 &before, &after, &renames,
             )))
         }
@@ -534,7 +539,7 @@ pub fn analyze_mutation(
     test_maps: &[PathBuf],
 ) -> Result<(
     crate::mutation::MutationReport,
-    Option<crate::test_relationships::TestRelationshipReport>,
+    Option<analysis::test_relationships::TestRelationshipReport>,
 )> {
     let (_, snapshot) = load(path, target)?;
     let analysis = parse::analyze_sources(&snapshot.entries, None)?;

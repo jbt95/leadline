@@ -1,7 +1,7 @@
-use config::Thresholds;
-use leadline::debt::{
+use analysis::debt::{
     DebtStatus, RiskChangeStatus, RiskSideEntry, classify, compare_risks, risk_entries, summarize,
 };
+use config::Thresholds;
 use model::core::{FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, Language};
 use std::collections::BTreeMap;
 
@@ -64,10 +64,10 @@ fn thresholds() -> Thresholds {
 }
 
 fn dimension<'a>(
-    findings: &'a [leadline::debt::DebtFinding],
+    findings: &'a [analysis::debt::DebtFinding],
     name: &str,
     dimension: &str,
-) -> &'a leadline::debt::DebtFinding {
+) -> &'a analysis::debt::DebtFinding {
     findings
         .iter()
         .find(|finding| finding.name == name && finding.dimension == dimension)
@@ -243,7 +243,7 @@ fn removes_and_summarizes() {
 
 #[test]
 fn projection_matches_score_and_components() {
-    let graph = leadline::graph::DependencyReport {
+    let graph = analysis::graph::DependencyReport {
         schema_version: 1,
         metric_profile: "default",
         analyzer_version: "test",
@@ -256,8 +256,8 @@ fn projection_matches_score_and_components() {
         files: vec![],
         modules: vec![],
     };
-    let policy = leadline::policy::evaluate(&graph, &[]);
-    let report = leadline::risk::build(
+    let policy = analysis::policy::evaluate(&graph, &[]);
+    let report = analysis::risk::build(
         &model::core::AnalysisReport {
             schema_version: 1,
             metric_profile: "default",

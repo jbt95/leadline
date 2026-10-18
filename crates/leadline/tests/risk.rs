@@ -1,13 +1,13 @@
 mod common;
 
+use analysis::graph::{
+    DEPENDENCY_SCHEMA_VERSION, DependencyEdge, DependencyFile, DependencyReport,
+};
+use analysis::policy::{PolicyReport, PolicyStatus, PolicyViolation, evaluate};
+use analysis::risk::{COMPONENT_WEIGHTS, RISK_MODEL, RiskReport, build};
 use codegraph::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow};
 use codegraph::ownership::{OwnershipMode, OwnershipReport, build as build_ownership};
 use config::Severity;
-use leadline::graph::{
-    DEPENDENCY_SCHEMA_VERSION, DependencyEdge, DependencyFile, DependencyReport,
-};
-use leadline::policy::{PolicyReport, PolicyStatus, PolicyViolation, evaluate};
-use leadline::risk::{COMPONENT_WEIGHTS, RISK_MODEL, RiskReport, build};
 use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
     MetricSpecs, OUTPUT_SCHEMA_VERSION,
