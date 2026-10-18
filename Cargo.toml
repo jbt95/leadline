@@ -1,18 +1,28 @@
-[package]
-name = "leadline"
+# Workspace manifest.
+#
+# The root is a virtual manifest: it declares the members, the package metadata
+# every crate inherits, the shared dependency versions, and the build profiles
+# (`[profile]` is only accepted at the workspace root). There is no `[package]`
+# here, so `cargo install --path .` is not valid any more; the binary crate
+# lives in `crates/leadline` and installs with `cargo install --path
+# crates/leadline`.
+#
+# Nothing in this workspace is published. Releases ship prebuilt binaries
+# through `install.sh` and the GitHub release, so the crates carry no
+# `documentation`, `exclude`, or registry-facing metadata, and the crate names
+# do not need to be free on crates.io.
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
 version = "1.0.1"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"
-description = "Fast function-level complexity analysis for C, C++, Go, Java, JavaScript, Python, Rust, TypeScript, TSX, and Zig"
-readme = "README.md"
-documentation = "https://docs.rs/leadline"
 repository = "https://github.com/jbt95/leadline"
-keywords = ["complexity", "static-analysis", "java", "typescript", "crap"]
-categories = ["command-line-utilities", "development-tools"]
-exclude = [".agents/**", ".github/**", "AGENTS.md", "docs/superpowers/**", "skills-lock.json"]
 
-[dependencies]
+[workspace.dependencies]
 blake3 = "1.8.7"
 ignore = "0.4"
 quick-xml = "0.42"
@@ -30,43 +40,9 @@ tree-sitter-cpp = "0.23.4"
 tree-sitter-rust = "0.24.2"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-zig = "1.1.2"
-
-[dev-dependencies]
 criterion = "0.8"
-
-[target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_System_ProcessStatus",
-    "Win32_System_Threading",
-] }
-
-[[bench]]
-name = "analyzer"
-harness = false
-
-[[bench]]
-name = "history"
-harness = false
-
-[[bench]]
-name = "duplication"
-harness = false
-
-[[bench]]
-name = "source_snapshot"
-harness = false
-
-[[bench]]
-name = "index"
-harness = false
-
-[[bench]]
-name = "realworld"
-harness = false
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [profile.release]
 lto = "thin"

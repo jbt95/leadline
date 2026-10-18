@@ -102,7 +102,7 @@ fn version_and_subcommand_help_are_available() {
 fn skill_prints_canonical_skill_text() {
     let expected = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("integrations/common/leadline-skill/SKILL.md"),
+            .join("../../integrations/common/leadline-skill/SKILL.md"),
     )
     .unwrap();
     for args in [&["skill"][..], &["--skill"][..]] {
@@ -116,7 +116,7 @@ fn skill_prints_canonical_skill_text() {
 fn embedded_skill_matches_security_contract() {
     let skill = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("integrations/common/leadline-skill/SKILL.md"),
+            .join("../../integrations/common/leadline-skill/SKILL.md"),
     )
     .unwrap();
     for term in [

@@ -75,7 +75,7 @@ const VERSIONED_STUBS: [(&str, &str); 13] = [
 const CHANGELOG_STUB: &str = "# Changelog\n\n## Unreleased\n\n### Added\n\n- A feature.\n\n## 0.1.0 - 2026-01-01\n\n- The first one.\n";
 
 fn script() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/release.sh")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/release.sh")
 }
 
 fn git(root: &Path, args: &[&str]) {

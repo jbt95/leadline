@@ -221,9 +221,9 @@ fn stats_rejects_foreign_origins_and_hosts() {
 /// loses or empties a file fails the build rather than the served page.
 #[test]
 fn embedded_dashboard_assets_are_complete() {
-    let index = include_str!("../web/dist/index.html");
-    let app = include_str!("../web/dist/assets/app.js");
-    let css = include_str!("../web/dist/assets/index.css");
+    let index = include_str!("../../../web/dist/index.html");
+    let app = include_str!("../../../web/dist/assets/app.js");
+    let css = include_str!("../../../web/dist/assets/index.css");
     assert!(!index.is_empty());
     assert!(index.contains("id=\"root\""));
     assert!(app.len() > 10_000);
@@ -256,7 +256,7 @@ fn web_dist_matches_web_src_fingerprint() {
             }
         }
     }
-    let web = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web");
+    let web = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web");
     let mut files = Vec::new();
     walk(&web.join("src"), &web, &mut files);
     files.sort();

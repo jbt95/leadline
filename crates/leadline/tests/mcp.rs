@@ -1240,7 +1240,7 @@ fn native_tool_names_do_not_collide_with_mcp_tool_names() {
         "leadline_function".to_owned(),
         "leadline_gate".to_owned(),
     ]);
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     for plugin in [
         "integrations/opencode/plugin/leadline.ts",
         "integrations/opencode/plugin-v2/index.ts",

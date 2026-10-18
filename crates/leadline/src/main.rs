@@ -224,7 +224,7 @@ fn dispatch_command(args: Vec<String>) -> Result<ExitCode, CliError> {
     /// works wherever the binary runs.
     const SKILL_TEXT: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/integrations/common/leadline-skill/SKILL.md"
+        "/../../integrations/common/leadline-skill/SKILL.md"
     ));
 
     match command {

@@ -16,10 +16,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// `web/`, checked in) and embedded here: the binary serves a complete UI
 /// with nothing beside it. Asset names are hash-free by Vite config so
 /// these paths stay stable across rebuilds.
-const INDEX_HTML: &str = include_str!("../web/dist/index.html");
-const APP_JS: &str = include_str!("../web/dist/assets/app.js");
-const APP_CSS: &str = include_str!("../web/dist/assets/index.css");
-const LOGO_SVG: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/logo.svg"));
+const INDEX_HTML: &str = include_str!("../../../web/dist/index.html");
+const APP_JS: &str = include_str!("../../../web/dist/assets/app.js");
+const APP_CSS: &str = include_str!("../../../web/dist/assets/index.css");
+const LOGO_SVG: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../assets/logo.svg"
+));
 
 const HTML_CONTENT_TYPE: &str = "text/html";
 const CSS_CONTENT_TYPE: &str = "text/css";

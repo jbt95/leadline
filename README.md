@@ -58,7 +58,7 @@ Pin a version with `LEADLINE_VERSION=v0.9.0`, or choose a destination with
 source with Rust 1.90 or later:
 
 ```console
-cargo install --path .
+cargo install --path crates/leadline
 ```
 
 Release artifacts support macOS ARM64, macOS x86-64, Linux ARM64, Linux x86-64, and Windows x86-64. Update an installed binary in place with `leadline update`; `leadline update --integrations` also refreshes detected Pi, OMP, and Claude Code integrations through each harness's own CLI. See [docs/installation.md](docs/installation.md) for per-OS install blocks, verification, updating, and uninstall.

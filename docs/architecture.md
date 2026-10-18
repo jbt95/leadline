@@ -1,6 +1,19 @@
 # Architecture
 
-`leadline` is one Rust package with small internal modules. A multi-crate workspace would add release and dependency work without improving the initial interface.
+`leadline` is a Cargo workspace. The binary crate is `crates/leadline`, and the
+analysis code is split across library crates that depend in one direction,
+lowest first: `model`, `config`, `git`, `parse`, `codegraph`, `analysis`,
+`artifacts`, `report`, and `surfaces`, with `update` standing alone and `tia`
+reserved for test impact analysis. A crate may never depend on one above it in
+that order.
+
+This reverses the earlier one-package decision. That decision weighed workspace
+overhead against an unchanged interface, and neither side of the trade still
+holds: the overhead is small because nothing is published to a registry
+(releases ship prebuilt binaries through `install.sh` and the GitHub release),
+and the interface does change, because test impact analysis has to depend on the
+parser, the dependency graph, and the coverage readers without dragging in the
+MCP server, the metrics server, or the self-updater.
 
 ```text
 paths -> discovery -> source bytes -> TreeSitterBackend -> metric events

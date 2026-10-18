@@ -17,7 +17,9 @@ const HOOKS: &[&str] = &[
 ];
 
 fn hook_path(relative: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(relative)
 }
 
 /// A fake `leadline` first on `PATH` that records every call in `$HOOK_LOG`.

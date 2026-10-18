@@ -39,7 +39,7 @@ fn fixture_root() -> PathBuf {
     if let Ok(dir) = std::env::var("LEADLINE_REALWORLD_DIR") {
         return PathBuf::from(dir);
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/realworld")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/realworld")
 }
 
 fn analyze_smoke(name: &str, root: &std::path::Path) -> (usize, usize) {

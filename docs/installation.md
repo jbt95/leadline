@@ -31,7 +31,7 @@ Then add `%USERPROFILE%\.local\bin` to `Path` (System Properties → Environment
 Requires Rust 1.90 or later:
 
 ```console
-cargo install --path .
+cargo install --path crates/leadline
 ```
 
 ## Verify
