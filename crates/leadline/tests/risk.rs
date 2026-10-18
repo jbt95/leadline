@@ -57,6 +57,7 @@ fn file_with_metrics(
             metrics: metrics(cognitive, cyclomatic, crap),
             contributions: vec![],
             suppressed_metrics: vec![],
+            symbol_key: String::new(),
             source_fingerprint: 0,
         }],
         parse_errors: vec![],

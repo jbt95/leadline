@@ -55,6 +55,7 @@ fn function_full(name: &str, start_line: u32, metrics: FunctionMetrics) -> Funct
         metrics,
         contributions: Vec::new(),
         suppressed_metrics: Vec::new(),
+        symbol_key: String::new(),
         source_fingerprint: 0,
     }
 }

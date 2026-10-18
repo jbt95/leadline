@@ -41,6 +41,7 @@ fn function(name: &str, cognitive: u32, cyclomatic: u32, crap: Option<f64>) -> F
         metrics: metrics(cognitive, cyclomatic, crap),
         contributions: vec![],
         suppressed_metrics: vec![],
+        symbol_key: String::new(),
         source_fingerprint: 0,
     }
 }

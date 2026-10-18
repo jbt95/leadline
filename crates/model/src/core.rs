@@ -122,6 +122,7 @@ pub enum Event {
 pub struct FunctionInput {
     pub name: String,
     pub id: String,
+    pub symbol_key: String,
     pub kind: FunctionKind,
     pub language: Language,
     pub recursive: bool,
@@ -230,6 +231,10 @@ pub struct FunctionAnalysis {
     /// functions, so the key is omitted rather than repeated as `[]`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub suppressed_metrics: Vec<SuppressionMetric>,
+    /// Stable test-impact-analysis identity; internal data the public report
+    /// must not carry, exactly as `source_fingerprint` is.
+    #[serde(skip)]
+    pub symbol_key: String,
     #[serde(skip)]
     pub source_fingerprint: u64,
 }
@@ -600,6 +605,7 @@ pub fn analyze_function(input: FunctionInput, source: &[u8]) -> FunctionAnalysis
         },
         contributions,
         suppressed_metrics: input.suppressed_metrics,
+        symbol_key: input.symbol_key,
         source_fingerprint: input.source_fingerprint,
     }
 }
@@ -620,6 +626,7 @@ mod tests {
         FunctionInput {
             name: "f".to_owned(),
             id: "f".to_owned(),
+            symbol_key: String::new(),
             kind: FunctionKind::Function,
             language: Language::TypeScript,
             recursive: false,

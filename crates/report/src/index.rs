@@ -112,8 +112,9 @@ fn content_key_for(version: &str, content: &[u8]) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-// Core analysis types only derive Serialize (source_fingerprint is skipped),
-// so the index keeps its own serializable mirror and converts on load/save.
+// Core analysis types only derive Serialize (source_fingerprint and
+// symbol_key are skipped), so the index keeps its own serializable mirror and
+// converts on load/save.
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IndexedFunction {
@@ -128,6 +129,15 @@ pub struct IndexedFunction {
     contributions: Vec<IndexedContribution>,
     #[serde(default)]
     suppressed_metrics: Vec<IndexedSuppression>,
+    /// Stable TIA key, persisted so a warm load never re-parses for it.
+    ///
+    /// The default and the unchanged `INDEX_SCHEMA_VERSION` are deliberate: an
+    /// index without the field can only come from a build of this same
+    /// analyzer version, and an empty key is inert until a recorder consumes
+    /// keys. A bump stays reserved for a missing fact that changes a decision,
+    /// the way the suppression field was.
+    #[serde(default)]
+    symbol_key: String,
     source_fingerprint: u64,
 }
 
@@ -332,6 +342,7 @@ impl From<&FunctionAnalysis> for IndexedFunction {
                 .copied()
                 .map(IndexedSuppression::from)
                 .collect(),
+            symbol_key: function.symbol_key.clone(),
             source_fingerprint: function.source_fingerprint,
         }
     }
@@ -358,6 +369,7 @@ impl From<IndexedFunction> for FunctionAnalysis {
                 .into_iter()
                 .map(SuppressionMetric::from)
                 .collect(),
+            symbol_key: function.symbol_key,
             source_fingerprint: function.source_fingerprint,
         }
     }

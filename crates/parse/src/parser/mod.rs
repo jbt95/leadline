@@ -684,10 +684,20 @@ fn analyze_node(
     let end_byte = node.end_byte() as u64;
     let name = function_name(node, language, source);
     let recursive = !name.starts_with('<') && calls_self(node, language, &name, source);
+    let parameters = function_parameters(node, language, source);
+    // The key needs both the path and the resolved name, so it is built here
+    // where `function_id` is built too, not in the parser arms.
+    let symbol_key = model::symbol::symbol_key(&model::symbol::SymbolParts {
+        path: display_path,
+        name: &name,
+        arity: parameters.count,
+        parameter_types: &parameters.types,
+    });
     analyze_function(
         FunctionInput {
             name,
             id: model::core::function_id(display_path, kind, start_byte, end_byte),
+            symbol_key,
             kind,
             language,
             recursive,
@@ -695,7 +705,7 @@ fn analyze_node(
             end_line,
             start_byte,
             end_byte,
-            parameters: parameter_count(node, language, source),
+            parameters: parameters.count,
             logical_loc,
             events,
             suppressed_metrics,
@@ -1432,38 +1442,101 @@ fn calls_self(root: Node<'_>, language: Language, name: &str, source: &[u8]) -> 
     false
 }
 
-fn parameter_count(node: Node<'_>, language: Language, source: &[u8]) -> u32 {
+/// Parameter count plus the type spellings the grammar exposes for them.
+#[derive(Debug)]
+struct Parameters {
+    count: u32,
+    /// One spelling per parameter in source order, or empty when any
+    /// parameter has no exposed type.
+    types: Vec<String>,
+}
+
+impl Parameters {
+    /// No parameters, and therefore no spelling to carry.
+    fn none() -> Parameters {
+        Parameters {
+            count: 0,
+            types: Vec::new(),
+        }
+    }
+
+    /// A partial list cannot spell the parameter list, so one missing type
+    /// keeps the whole function on the key's arity form.
+    fn collapse(count: u32, types: Vec<Option<String>>) -> Parameters {
+        if types.iter().any(Option::is_none) {
+            return Parameters {
+                count,
+                types: Vec::new(),
+            };
+        }
+        Parameters {
+            count,
+            types: types.into_iter().flatten().collect(),
+        }
+    }
+}
+
+/// The type spelling one parameter exposes, `None` when the grammar exposes
+/// none for it.
+fn type_spelling(parameter: Node<'_>, source: &[u8]) -> Option<String> {
+    let kind = parameter.child_by_field_name("type")?;
+    // TypeScript wraps the annotation in a `type_annotation` whose text starts
+    // with the `:` separator; the annotation's first named child is the type.
+    let kind = match kind.kind() {
+        "type_annotation" => kind.named_child(0).unwrap_or(kind),
+        _ => kind,
+    };
+    Some(node_text(kind, source).to_owned())
+}
+
+/// Counts `children` and reads each one's `type` field, so the count and the
+/// type spellings come from one walk of the parameter node.
+fn parameters_from<'tree>(
+    children: impl Iterator<Item = Node<'tree>>,
+    source: &[u8],
+) -> Parameters {
+    let mut count = 0;
+    let mut types = Vec::new();
+    for child in children {
+        count += 1;
+        types.push(type_spelling(child, source));
+    }
+    Parameters::collapse(count, types)
+}
+
+/// The parameters of `node`, for the metric count and the symbol key.
+fn function_parameters(node: Node<'_>, language: Language, source: &[u8]) -> Parameters {
     // Python's `parameters` node is also the kind name Rust uses, but Python
     // adds named `keyword_separator` (`*`) and `positional_separator` (`/`)
     // children and keeps comments inside the list, so the count is an
     // allow-list of the six parameter carriers. `self` is a plain
     // `identifier`, so the receiver counts like any other parameter.
     if language == Language::Python {
-        return node
-            .child_by_field_name("parameters")
-            .map_or(0, |parameters| {
-                let mut cursor = parameters.walk();
-                parameters
-                    .named_children(&mut cursor)
-                    .filter(|child| {
-                        matches!(
-                            child.kind(),
-                            "identifier"
-                                | "typed_parameter"
-                                | "default_parameter"
-                                | "typed_default_parameter"
-                                | "list_splat_pattern"
-                                | "dictionary_splat_pattern"
-                        )
-                    })
-                    .count() as u32
-            });
+        let Some(parameters) = node.child_by_field_name("parameters") else {
+            return Parameters::none();
+        };
+        let mut cursor = parameters.walk();
+        return parameters_from(
+            parameters.named_children(&mut cursor).filter(|child| {
+                matches!(
+                    child.kind(),
+                    "identifier"
+                        | "typed_parameter"
+                        | "default_parameter"
+                        | "typed_default_parameter"
+                        | "list_splat_pattern"
+                        | "dictionary_splat_pattern"
+                )
+            }),
+            source,
+        );
     }
     if matches!(language, Language::C | Language::Cpp)
         && let Some(parameters) = c_family_function_parameters(node)
     {
         let mut count = 0;
         let mut lone_void = false;
+        let mut types = Vec::new();
         let mut cursor = parameters.walk();
         for declaration in parameters
             .named_children(&mut cursor)
@@ -1480,8 +1553,16 @@ fn parameter_count(node: Node<'_>, language: Language, source: &[u8]) -> u32 {
                 && declaration
                     .child_by_field_name("type")
                     .is_some_and(|kind| node_text(kind, source) == "void");
+            // The declarator carries any pointer or array suffix, so the
+            // spelling is the declared base type alone; `char *a` and
+            // `char a` collapse, which over-selects rather than drops.
+            types.push(type_spelling(declaration, source));
         }
-        return if lone_void { 0 } else { count };
+        return if lone_void {
+            Parameters::none()
+        } else {
+            Parameters::collapse(count, types)
+        };
     }
     if language == Language::Zig
         && let Some(parameters) = node
@@ -1489,10 +1570,12 @@ fn parameter_count(node: Node<'_>, language: Language, source: &[u8]) -> u32 {
             .find(|child| child.kind() == "parameters")
     {
         let mut cursor = parameters.walk();
-        return parameters
-            .named_children(&mut cursor)
-            .filter(|child| child.kind() == "parameter")
-            .count() as u32;
+        return parameters_from(
+            parameters
+                .named_children(&mut cursor)
+                .filter(|child| child.kind() == "parameter"),
+            source,
+        );
     }
     if let Some(parameters) = node.child_by_field_name("parameters") {
         // Go groups names (`func f(a, b, c bool)` is one
@@ -1500,17 +1583,22 @@ fn parameter_count(node: Node<'_>, language: Language, source: &[u8]) -> u32 {
         // tree-sitter-go emits `parameter_list`, so this arm is Go-only.
         // The receiver (`receiver` field) is never counted.
         if language == Language::Go && parameters.kind() == "parameter_list" {
+            let mut count = 0;
+            let mut types = Vec::new();
             let mut cursor = parameters.walk();
-            return parameters
-                .named_children(&mut cursor)
-                .map(|declaration| {
-                    let mut inner = declaration.walk();
-                    (declaration
-                        .children_by_field_name("name", &mut inner)
-                        .count() as u32)
-                        .max(1)
-                })
-                .sum();
+            for declaration in parameters.named_children(&mut cursor) {
+                let mut inner = declaration.walk();
+                let names = (declaration
+                    .children_by_field_name("name", &mut inner)
+                    .count() as u32)
+                    .max(1);
+                count += names;
+                // One declaration spells one type for every name it groups;
+                // `...` is punctuation and is left out of the spelling.
+                let spelling = type_spelling(declaration, source);
+                types.extend(std::iter::repeat_n(spelling, names as usize));
+            }
+            return Parameters::collapse(count, types);
         }
         // Rust receivers (`self`, `&self`, `&mut self`) are dispatch syntax,
         // not inputs; Go receivers are excluded the same way. Only Rust
@@ -1518,44 +1606,53 @@ fn parameter_count(node: Node<'_>, language: Language, source: &[u8]) -> u32 {
         // language's parameter list.
         if parameters.kind() == "parameters" {
             let mut cursor = parameters.walk();
-            return parameters
-                .named_children(&mut cursor)
-                .filter(|child| child.kind() != "self_parameter")
-                .count() as u32;
+            return parameters_from(
+                parameters
+                    .named_children(&mut cursor)
+                    .filter(|child| child.kind() != "self_parameter"),
+                source,
+            );
         }
-        return if matches!(
+        // Grammars that expose a lone parameter without a list node.
+        if matches!(
             parameters.kind(),
             "identifier" | "formal_parameter" | "spread_parameter"
         ) {
-            1
-        } else {
-            parameters.named_child_count() as u32
-        };
+            return parameters_from(std::iter::once(parameters), source);
+        }
+        let mut cursor = parameters.walk();
+        return parameters_from(parameters.named_children(&mut cursor), source);
     }
     if node.kind() == "compact_constructor_declaration" {
         let mut ancestor = node.parent();
         while let Some(current) = ancestor {
             if current.kind() == "record_declaration" {
-                return current
-                    .child_by_field_name("parameters")
-                    .map_or(0, |parameters| parameters.named_child_count() as u32);
+                let Some(parameters) = current.child_by_field_name("parameters") else {
+                    return Parameters::none();
+                };
+                let mut cursor = parameters.walk();
+                return parameters_from(parameters.named_children(&mut cursor), source);
             }
             ancestor = current.parent();
         }
     }
     if node.kind() == "lambda_expression" {
-        return node.named_child(0).map_or(0, |parameters| {
-            if matches!(
-                parameters.kind(),
-                "formal_parameters" | "inferred_parameters"
-            ) {
-                parameters.named_child_count() as u32
-            } else {
-                1
-            }
-        });
+        let Some(parameters) = node.named_child(0) else {
+            return Parameters::none();
+        };
+        if matches!(
+            parameters.kind(),
+            "formal_parameters" | "inferred_parameters"
+        ) {
+            let mut cursor = parameters.walk();
+            return parameters_from(parameters.named_children(&mut cursor), source);
+        }
+        return parameters_from(std::iter::once(parameters), source);
     }
-    node.child_by_field_name("parameter").map_or(0, |_| 1)
+    node.child_by_field_name("parameter")
+        .map_or(Parameters::none(), |parameter| {
+            parameters_from(std::iter::once(parameter), source)
+        })
 }
 
 /// True when a Rust `function_item` sits in an `impl` or `trait` body:
@@ -2242,6 +2339,76 @@ fn fingerprint(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn symbol_key_survives_a_body_only_edit() {
+        let before = crate::analyze_source(
+            "src/billing.rs",
+            b"pub fn charge(cents: u32) -> u32 { cents }\n",
+        )
+        .unwrap();
+        let after = crate::analyze_source(
+            "src/billing.rs",
+            b"pub fn charge(cents: u32) -> u32 { cents + cents / 2 }\n",
+        )
+        .unwrap();
+        assert_eq!(
+            before.functions[0].symbol_key, after.functions[0].symbol_key,
+            "a body-only edit must keep the key"
+        );
+        assert_eq!(before.functions[0].symbol_key, "src/billing.rs:charge(u32)");
+    }
+
+    #[test]
+    fn symbol_key_distinguishes_same_arity_overloads() {
+        let java = crate::analyze_source(
+            "src/Billing.java",
+            b"class Billing {\n  void charge(int cents) {}\n  void charge(String currency) {}\n}\n",
+        )
+        .unwrap();
+        let keys: Vec<&str> = java
+            .functions
+            .iter()
+            .map(|function| function.symbol_key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "src/Billing.java:charge(int)",
+                "src/Billing.java:charge(String)",
+            ]
+        );
+    }
+
+    #[test]
+    fn symbol_key_falls_back_to_arity_without_parameter_types() {
+        // Plain JavaScript spells no type at all, so same-arity keys collapse
+        // into one; the collapse only ever over-selects.
+        let js =
+            crate::analyze_source("web/app.js", b"function charge(a, b) { return a; }\n").unwrap();
+        assert_eq!(js.functions[0].symbol_key, "web/app.js:charge/2");
+
+        // Python annotates per parameter, so one unannotated parameter keeps
+        // the whole function on the arity form rather than a partial list.
+        let python = crate::analyze_source(
+            "web/app.py",
+            b"def charge(a: int, b):\n    return a\n\ndef refund(a, b):\n    return b\n",
+        )
+        .unwrap();
+        assert_eq!(python.functions[0].symbol_key, "web/app.py:charge/2");
+        assert_eq!(python.functions[1].symbol_key, "web/app.py:refund/2");
+    }
+
+    #[test]
+    fn symbol_key_names_a_bound_lambda_after_its_binding() {
+        let typescript =
+            crate::analyze_source("web/app.ts", b"const charge = (cents: number) => cents;\n")
+                .unwrap();
+        assert_eq!(
+            typescript.functions[0].symbol_key,
+            "web/app.ts:charge(number)"
+        );
+    }
 
     #[test]
     fn host_sql_sites_detect_dynamic_query_in_loop() {

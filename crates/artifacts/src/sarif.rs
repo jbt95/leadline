@@ -540,6 +540,7 @@ mod tests {
             start_byte: u64::from(start_line),
             end_byte: u64::from(start_line + 5),
             metrics,
+            symbol_key: String::new(),
             source_fingerprint: 0,
             contributions: Vec::new(),
             suppressed_metrics: Vec::new(),

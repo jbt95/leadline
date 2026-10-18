@@ -4,6 +4,24 @@ mod common;
 use common::temporary_directory;
 
 #[test]
+fn symbol_key_is_persisted_and_reused_without_reparsing() {
+    let dir = temporary_directory();
+    let entries = [parse::source_snapshot::SourceEntry {
+        path: "a.ts".to_owned(),
+        bytes: b"export function charge(cents: number) { return cents; }\n".to_vec(),
+    }];
+    let (cold, index, _) = report::index::refresh_files(None, ".", "cfg", &entries).unwrap();
+    index.save(&dir).unwrap();
+
+    let stored = AnalysisIndex::open(&dir);
+    let (warm, _, reuse) =
+        report::index::refresh_files(Some(&stored), ".", "cfg", &entries).unwrap();
+    assert_eq!(reuse.reused, 1, "the stored entry must serve the warm run");
+    assert_eq!(warm.files[0].functions, cold.files[0].functions);
+    assert_eq!(warm.files[0].functions[0].symbol_key, "a.ts:charge(number)");
+}
+
+#[test]
 fn content_key_is_content_sensitive() {
     assert_ne!(content_key(b"let a = 1;"), content_key(b"let a = 2;"));
 }

@@ -69,6 +69,7 @@ impl BaselineFunction {
             },
             contributions: Vec::new(),
             suppressed_metrics: Vec::new(),
+            symbol_key: String::new(),
             source_fingerprint: 0,
         }
     }

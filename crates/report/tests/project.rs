@@ -41,6 +41,7 @@ fn function(name: &str, cognitive: u32, loc: u32) -> FunctionAnalysis {
         },
         contributions: vec![],
         suppressed_metrics: vec![],
+        symbol_key: String::new(),
         source_fingerprint: 0,
     }
 }

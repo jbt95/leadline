@@ -777,6 +777,7 @@ mod tests {
             start_byte: 0,
             end_byte: 10,
             metrics: metrics(cognitive, cyclomatic, crap),
+            symbol_key: String::new(),
             source_fingerprint: 0,
             contributions: Vec::new(),
             suppressed_metrics: Vec::new(),

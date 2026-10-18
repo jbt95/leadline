@@ -7,6 +7,7 @@
 
 pub mod core;
 pub mod security;
+pub mod symbol;
 
 /// Default index directory, relative to an analysis root.
 ///

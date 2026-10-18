@@ -384,6 +384,7 @@ mod tests {
             metrics,
             contributions: Vec::new(),
             suppressed_metrics: suppressed,
+            symbol_key: String::new(),
             source_fingerprint: 0,
         }
     }
