@@ -4,6 +4,13 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Fixed
+
+- CI: skip redundant `rustup` downloads when the runner already meets MSRV
+  1.90; otherwise install the pinned toolchain with bounded retries instead of
+  `rustup update stable`, so transient DNS failures during toolchain setup do not
+  fail whole matrix jobs.
+
 ## 1.1.0 - 2026-10-18
 
 ### Added

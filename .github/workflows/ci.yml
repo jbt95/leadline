@@ -28,7 +28,8 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install Rust
-        run: rustup update stable --no-self-update
+        shell: bash
+        run: bash scripts/ci-install-rust.sh minimum
       - name: Install lint tools
         if: matrix.runner == 'ubuntu-24.04'
         run: rustup component add clippy rustfmt
@@ -53,7 +54,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - run: rustup toolchain install 1.90 --profile minimal
+      - name: Install Rust 1.90
+        shell: bash
+        run: bash scripts/ci-install-rust.sh exact
       - run: rustup run 1.90 cargo check --locked
 
   supply-chain:
@@ -65,7 +68,8 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install Rust
-        run: rustup update stable --no-self-update
+        shell: bash
+        run: bash scripts/ci-install-rust.sh minimum
       - name: Audit dependencies
         uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
