@@ -1,6 +1,6 @@
 use config::{
     Config, DuplicationConfig, QualityGateConfig, Rating, RegressionLimits, Severity, SqlConfig,
-    Thresholds, UnusedConfig, VulnerabilityConfig, load_from, parse_str,
+    Thresholds, TiaConfig, UnusedConfig, VulnerabilityConfig, load_from, parse_str,
 };
 
 use std::path::PathBuf;
@@ -51,6 +51,7 @@ fn parses_full_config() {
                 entries: vec!["src/cli.ts".to_string()],
                 include_tests: true,
             },
+            tia: TiaConfig::default(),
             index: None,
             quality_gate: Some(QualityGateConfig {
                 name: "team-default".to_string(),
@@ -452,4 +453,62 @@ fn index_path_must_stay_inside_the_repository() {
 #[test]
 fn unknown_index_key_is_rejected() {
     assert!(config::parse_str("[index]\ncache = true\n").is_err());
+}
+
+#[test]
+fn tia_parses_each_key() {
+    let config = parse_str(
+        "[tia]\ntest_globs = [\"**/*.check.ts\"]\nalways_run = [\"**/migrations/**\", \"tsconfig*.json\", \"*.lock\"]\nexclude = [\"vendor/**\"]\n",
+    )
+    .unwrap();
+    assert_eq!(config.tia.test_globs, ["**/*.check.ts"]);
+    assert_eq!(
+        config.tia.always_run,
+        ["**/migrations/**", "tsconfig*.json", "*.lock"]
+    );
+    assert_eq!(config.tia.exclude, ["vendor/**"]);
+}
+
+#[test]
+fn tia_defaults_to_three_empty_lists() {
+    let config = parse_str("[thresholds.function]\ncognitive = 15\n").unwrap();
+    assert_eq!(config.tia, TiaConfig::default());
+    assert!(config.tia.test_globs.is_empty());
+    assert!(config.tia.always_run.is_empty());
+    assert!(config.tia.exclude.is_empty());
+    // A bare section is the same as no section: no glob is added.
+    assert_eq!(parse_str("[tia]\n").unwrap().tia, TiaConfig::default());
+}
+
+#[test]
+fn tia_rejects_unknown_keys_and_invalid_globs() {
+    assert!(
+        parse_str("[tia]\nbogus = []\n")
+            .unwrap_err()
+            .message()
+            .contains("unknown key `bogus` in [tia]")
+    );
+    for doc in [
+        "[tia]\ntest_globs = \"not-an-array\"\n",
+        "[tia]\ntest_globs = [1]\n",
+        // An empty pattern could only ever match nothing.
+        "[tia]\nalways_run = [\"\"]\n",
+        // Drive prefixes become absolute on Windows and never match here.
+        "[tia]\nexclude = [\"C:/vendor/**\"]\n",
+        "[tia]\nalways_run = [\"C:x/**\"]\n",
+    ] {
+        assert!(parse_str(doc).is_err(), "accepted: {doc:?}");
+    }
+    assert!(
+        parse_str("[tia]\nexclude = [\"C:/vendor/**\"]\n")
+            .unwrap_err()
+            .message()
+            .contains("may not use a drive prefix")
+    );
+    assert!(
+        parse_str("[tia]\ntest_globs = [\"\"]\n")
+            .unwrap_err()
+            .message()
+            .contains("must not be empty")
+    );
 }

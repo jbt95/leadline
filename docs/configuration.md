@@ -107,6 +107,16 @@ Defaults match SonarQube's non-Java clone gate (100 tokens, 10 lines); lower the
 | `entries` | list of glob strings | empty | Entry-point patterns for `unused`, gitignore-style and analysis-root-relative. `--entry` adds patterns for one invocation. |
 | `include_tests` | bool | `false` | Analyze test files as ordinary candidates. Without it, `*.test.*`, `*.spec.*`, and files under `test`/`tests`/`__tests__` stay out of both unused lists and are counted in `excluded_test_files`. `--include-tests` overrides it for one invocation. |
 
+## `[tia]`
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `test_globs` | list of glob strings | empty | Extra test-file patterns, **added to** the built-in per-language test-file conventions, never replacing them. A file is a test file when it matches a convention or one of these patterns. |
+| `always_run` | list of glob strings | empty | Patterns whose change selects every test file. A root config, lockfile, or migration edit has no import edge to any test, so without a matching pattern such a change would select nothing. |
+| `exclude` | list of glob strings | empty | Paths dropped from the selection even when a convention or `test_globs` selected them. |
+
+Patterns are analysis-root-relative with `/` separators; an empty pattern or a Windows drive prefix is rejected. Absent section means three empty lists. Unknown keys are a config error (exit `2`), like every other section.
+
 ## `[[architecture.rules]]`
 
 Ordered deny rules over resolved dependency edges. Each rule needs `name` (unique), `source` (one glob), `deny` (at least one glob), and `severity` (`info`, `warning`, or `error`). Globs are analysis-root-relative gitignore-style patterns; negation, absolute/drive paths, trailing `/`, and escaping `..` are rejected. Violations classify `new`, `existing`, or `resolved` against `--base`.

@@ -54,6 +54,7 @@ pub struct Config {
     pub vulnerabilities: VulnerabilityConfig,
     pub sql: SqlConfig,
     pub unused: UnusedConfig,
+    pub tia: TiaConfig,
     pub index: Option<IndexConfig>,
     pub quality_gate: Option<QualityGateConfig>,
 }
@@ -105,6 +106,22 @@ pub struct UnusedConfig {
     pub entries: Vec<String>,
     /// Whether test files are analyzed as ordinary candidates.
     pub include_tests: bool,
+}
+
+/// Test-impact-analysis settings.
+///
+/// `test_globs` is **additive** to the built-in per-language test-file
+/// conventions, never a replacement for them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TiaConfig {
+    /// Extra test-file patterns, added to the built-in conventions.
+    pub test_globs: Vec<String>,
+    /// Patterns whose change selects every test file; a root config or
+    /// lockfile edit has no import edge to any test, so this list is the only
+    /// thing that keeps such a change from selecting nothing.
+    pub always_run: Vec<String>,
+    /// Patterns excluded from selection even when selected.
+    pub exclude: Vec<String>,
 }
 
 /// Analysis index settings; `[index]` presence enables the warm path.
@@ -259,6 +276,7 @@ impl Default for Config {
             vulnerabilities: VulnerabilityConfig::default(),
             sql: SqlConfig::default(),
             unused: UnusedConfig::default(),
+            tia: TiaConfig::default(),
             index: None,
             quality_gate: None,
         }
@@ -306,6 +324,24 @@ impl Config {
         }
         for pattern in &self.unused.entries {
             validate_analysis_pattern("unused entry", pattern)?;
+        }
+        // The three `[tia]` lists match analysis-root-relative paths, so they
+        // take the same guard as every other glob list plus the drive-prefix
+        // rejection a `C:` pattern needs: it would never match and would
+        // silently narrow `always_run` instead of failing.
+        for (label, patterns) in [
+            ("tia test glob", &self.tia.test_globs),
+            ("tia always_run pattern", &self.tia.always_run),
+            ("tia exclude", &self.tia.exclude),
+        ] {
+            for pattern in patterns {
+                validate_analysis_pattern(label, pattern)?;
+                if has_drive_prefix(pattern) {
+                    return Err(ConfigError::new(format!(
+                        "{label} {pattern:?} may not use a drive prefix"
+                    )));
+                }
+            }
         }
         if let Some(gate) = &self.quality_gate {
             validate_quality_gate_config(gate)?;
@@ -510,6 +546,7 @@ pub fn parse_str(text: &str) -> Result<Config, ConfigError> {
             "regressions" => read_regressions(&mut config, value)?,
             "duplication" => read_duplication(&mut config, value)?,
             "unused" => read_unused(&mut config, value)?,
+            "tia" => read_tia(&mut config, value)?,
             "sql" => read_sql(&mut config, value)?,
             "quality_gate" => config.quality_gate = Some(read_quality_gate(value)?),
             "index" => config.index = read_index(value)?,
@@ -908,6 +945,19 @@ fn read_unused(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
                 })?;
             }
             _ => return Err(unknown_key("unused", key)),
+        }
+    }
+    Ok(())
+}
+
+fn read_tia(config: &mut Config, value: &Value) -> Result<(), ConfigError> {
+    let table = section_table("tia", value)?;
+    for (key, item) in table {
+        match key.as_str() {
+            "test_globs" => config.tia.test_globs = string_array(key, item)?,
+            "always_run" => config.tia.always_run = string_array(key, item)?,
+            "exclude" => config.tia.exclude = string_array(key, item)?,
+            _ => return Err(unknown_key("tia", key)),
         }
     }
     Ok(())
