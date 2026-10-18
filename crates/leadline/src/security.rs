@@ -5,60 +5,19 @@
 //! paths never survive normalization.
 
 use crate::external::{INPUT_BYTES_LIMIT, InputBudget, read_bounded, strict_relative_path};
+use model::Result;
+use model::security::{
+    ChangeComparison, FindingState, SecurityFinding, SecuritySeverity, agent_page,
+    merge_report_ids, severity_from_label, severity_from_score, state_rank,
+};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-
-/// Normalized finding severity. Declaration order is ascending severity.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SecuritySeverity {
-    Unknown,
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-/// New/existing state against supplied baselines or SARIF `baselineState`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FindingState {
-    New,
-    Existing,
-    Unknown,
-}
 
 /// Current and baseline SARIF inputs. Baselines contribute keys only.
 pub struct SecurityInputs<'a> {
     pub current: &'a [PathBuf],
     pub baseline: &'a [PathBuf],
-}
-
-/// One normalized finding. Unavailable evidence stays `None` and serializes
-/// as `null`; enrichment fills the `Option` analytics fields later.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct SecurityFinding {
-    pub tool: String,
-    pub rule_id: String,
-    pub severity: SecuritySeverity,
-    pub path: Option<String>,
-    pub start_line: Option<u32>,
-    pub end_line: Option<u32>,
-    pub fingerprint: String,
-    pub state: FindingState,
-    pub changed: Option<bool>,
-    pub report_ids: Vec<String>,
-    pub function_id: Option<String>,
-    pub cognitive: Option<u32>,
-    pub cyclomatic: Option<u32>,
-    pub crap: Option<f64>,
-    pub coverage: Option<f64>,
-    pub risk_score: Option<f64>,
-    pub fan_in: Option<u64>,
-    pub blast_radius: Option<u64>,
-    pub concentration_percent: Option<f64>,
-    pub reason: Option<String>,
 }
 
 /// Deterministically ordered normalized findings.
@@ -69,7 +28,7 @@ pub struct SecurityReport {
 
 /// Read current SARIF files, classify against baselines, deduplicate by
 /// semantic key while merging provenance report IDs, and sort.
-pub fn read_security_reports(inputs: SecurityInputs<'_>) -> crate::Result<SecurityReport> {
+pub fn read_security_reports(inputs: SecurityInputs<'_>) -> model::Result<SecurityReport> {
     let mut budget = InputBudget::new();
     let mut baseline_keys = BTreeSet::new();
     for path in inputs.baseline {
@@ -106,16 +65,6 @@ pub fn read_security_reports(inputs: SecurityInputs<'_>) -> crate::Result<Securi
     Ok(SecurityReport { findings })
 }
 
-/// Merge provenance report IDs into one row, keeping them sorted and unique.
-pub(crate) fn merge_report_ids(existing: &mut Vec<String>, incoming: &[String]) {
-    for id in incoming {
-        if !existing.contains(id) {
-            existing.push(id.clone());
-        }
-    }
-    existing.sort();
-}
-
 /// Join findings against project functions, file risk, and changed paths.
 ///
 /// One indexed pass: functions and risk rows are grouped by path once, then
@@ -143,7 +92,7 @@ pub fn enrich(
         let mut attributed = false;
         if let (Some(path), Some(line)) = (finding.path.as_deref(), finding.start_line) {
             if let Some(candidates) = functions.get(path) {
-                let best = crate::core::innermost_containing(
+                let best = model::core::innermost_containing(
                     candidates,
                     line,
                     |function| (function.start_line, function.end_line),
@@ -223,15 +172,6 @@ pub fn agent_json(report: &SecurityReport, top: usize) -> serde_json::Value {
     agent_page(&report.findings, top)
 }
 
-/// Shared bounded agent projection for every scanner report: first `top`
-/// findings plus a `truncated` flag.
-pub fn agent_page<T: Serialize>(findings: &[T], top: usize) -> serde_json::Value {
-    serde_json::json!({
-        "findings": findings.iter().take(top).collect::<Vec<_>>(),
-        "truncated": findings.len() > top,
-    })
-}
-
 /// Human-readable terminal rendering, deterministic in report order.
 pub fn terminal_text(report: &SecurityReport) -> String {
     if report.findings.is_empty() {
@@ -264,70 +204,6 @@ pub fn terminal_text(report: &SecurityReport) -> String {
         ));
     }
     out
-}
-
-impl SecuritySeverity {
-    /// Stable lowercase identifier shared by terminal output and gates.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SecuritySeverity::Unknown => "unknown",
-            SecuritySeverity::Low => "low",
-            SecuritySeverity::Medium => "medium",
-            SecuritySeverity::High => "high",
-            SecuritySeverity::Critical => "critical",
-        }
-    }
-}
-
-impl FindingState {
-    /// Stable lowercase identifier shared by terminal output.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            FindingState::New => "new",
-            FindingState::Existing => "existing",
-            FindingState::Unknown => "unknown",
-        }
-    }
-}
-
-/// Parse a `--fail-on-severity` gate level.
-pub fn parse_gate_severity(raw: &str) -> Option<SecuritySeverity> {
-    match raw {
-        "low" => Some(SecuritySeverity::Low),
-        "medium" => Some(SecuritySeverity::Medium),
-        "high" => Some(SecuritySeverity::High),
-        "critical" => Some(SecuritySeverity::Critical),
-        _ => None,
-    }
-}
-
-/// Git comparison backing `changed` attribution.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ChangeComparison {
-    Base(String),
-    Staged,
-    Target(String),
-}
-
-impl ChangeComparison {
-    /// The base revision and comparison target this request means.
-    ///
-    /// `Staged` is the index against `HEAD`: what a commit is about to add.
-    /// It used to resolve the index against `HEAD~1`, which failed outright in
-    /// a repository with a single commit and, where it did resolve, reported
-    /// findings from the previous commit as changed. `--staged` cannot be
-    /// paired with an explicit base, so the base is fixed here rather than
-    /// defaulted from the `HEAD~1` that `changed` and `diff` default to.
-    pub fn options(&self) -> (String, crate::diff::ComparisonTarget) {
-        match self {
-            Self::Base(base) => (base.clone(), crate::diff::ComparisonTarget::Worktree),
-            Self::Staged => ("HEAD".to_owned(), crate::diff::ComparisonTarget::Index),
-            Self::Target(revision) => (
-                "HEAD~1".to_owned(),
-                crate::diff::ComparisonTarget::Revision(revision.clone()),
-            ),
-        }
-    }
 }
 
 /// One assembled security request shared by the CLI, `check`, and MCP.
@@ -396,7 +272,7 @@ pub fn assemble(request: &SecurityRequest) -> Result<SecurityOutcome, SecurityEr
     let changed = match &request.comparison {
         None => None,
         Some(comparison) => {
-            let (base, target) = comparison.options();
+            let (base, target) = crate::diff::comparison_options(comparison);
             let options = crate::diff::ChangeOptions {
                 base,
                 target,
@@ -448,15 +324,6 @@ fn compare_findings(left: &SecurityFinding, right: &SecurityFinding) -> std::cmp
         .then(left.fingerprint.cmp(&right.fingerprint))
 }
 
-/// Sort rank for finding state: `new`, `existing`, `unknown`.
-pub(crate) fn state_rank(state: FindingState) -> u8 {
-    match state {
-        FindingState::New => 0,
-        FindingState::Existing => 1,
-        FindingState::Unknown => 2,
-    }
-}
-
 fn compare_optional(left: &Option<String>, right: &Option<String>) -> std::cmp::Ordering {
     match (left, right) {
         (Some(a), Some(b)) => a.cmp(b),
@@ -470,7 +337,7 @@ fn compare_optional(left: &Option<String>, right: &Option<String>) -> std::cmp::
 fn read_one(
     path: &Path,
     budget: &mut InputBudget,
-) -> crate::Result<(Vec<SecurityFinding>, String)> {
+) -> model::Result<(Vec<SecurityFinding>, String)> {
     let report_id = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -528,7 +395,7 @@ fn parse_result(
     tool: &str,
     rule_severity: &BTreeMap<String, SecuritySeverity>,
     path: &Path,
-) -> crate::Result<SecurityFinding> {
+) -> model::Result<SecurityFinding> {
     let rule_id = result
         .get("ruleId")
         .and_then(|id| id.as_str())
@@ -625,7 +492,7 @@ fn location(result: &serde_json::Value) -> Option<(&str, Option<u32>, Option<u32
 /// their scheme; anything else with a URI scheme is rejected. Percent escapes
 /// are decoded, so `src/a%20b.ts` names `src/a b.ts`; decoding happens before
 /// the path checks, so an encoded traversal is still rejected.
-fn normalize_uri(uri: &str, report: &Path) -> crate::Result<String> {
+fn normalize_uri(uri: &str, report: &Path) -> model::Result<String> {
     let slashed = uri.replace('\\', "/");
     let (without_scheme, file_authority) = match slashed.strip_prefix("file://") {
         Some(rest) => (rest, Some(rest.split('/').next().unwrap_or(""))),
@@ -760,34 +627,6 @@ fn parse_severity(value: Option<&serde_json::Value>) -> SecuritySeverity {
         return SecuritySeverity::Unknown;
     }
     severity_from_label(text)
-}
-
-/// Shared literal severity labels for scanner adapters (`moderate` is medium).
-///
-/// Case-insensitive; anything unrecognized stays unknown.
-pub(crate) fn severity_from_label(text: &str) -> SecuritySeverity {
-    match text.to_ascii_lowercase().as_str() {
-        "critical" => SecuritySeverity::Critical,
-        "high" | "error" => SecuritySeverity::High,
-        "medium" | "moderate" | "warning" => SecuritySeverity::Medium,
-        "low" | "note" => SecuritySeverity::Low,
-        _ => SecuritySeverity::Unknown,
-    }
-}
-
-/// Shared numeric 0-10 scores: `<4` low, `<7` medium, `<9` high, `>=9` critical.
-pub(crate) fn severity_from_score(score: f64) -> SecuritySeverity {
-    if !score.is_finite() {
-        SecuritySeverity::Unknown
-    } else if score < 4.0 {
-        SecuritySeverity::Low
-    } else if score < 7.0 {
-        SecuritySeverity::Medium
-    } else if score < 9.0 {
-        SecuritySeverity::High
-    } else {
-        SecuritySeverity::Critical
-    }
 }
 
 /// Severity fallback when a result carries no severity property and its

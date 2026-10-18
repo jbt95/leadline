@@ -1,10 +1,6 @@
 mod common;
 
 use leadline::config::Severity;
-use leadline::core::{
-    AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
-    MetricSpecs, OUTPUT_SCHEMA_VERSION,
-};
 use leadline::graph::{
     DEPENDENCY_SCHEMA_VERSION, DependencyEdge, DependencyFile, DependencyReport,
 };
@@ -12,6 +8,10 @@ use leadline::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, Hist
 use leadline::ownership::{OwnershipMode, OwnershipReport, build as build_ownership};
 use leadline::policy::{PolicyReport, PolicyStatus, PolicyViolation, evaluate};
 use leadline::risk::{COMPONENT_WEIGHTS, RISK_MODEL, RiskReport, build};
+use model::core::{
+    AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
+    MetricSpecs, OUTPUT_SCHEMA_VERSION,
+};
 
 fn metrics(cognitive: u32, cyclomatic: u32, crap: Option<f64>) -> FunctionMetrics {
     FunctionMetrics {
@@ -45,7 +45,7 @@ fn file_with_metrics(
 ) -> FileAnalysis {
     FileAnalysis {
         path: path.to_owned(),
-        language: leadline::core::Language::TypeScript,
+        language: model::core::Language::TypeScript,
         functions: vec![FunctionAnalysis {
             name: "f".to_owned(),
             id: "f".to_owned(),

@@ -1,10 +1,10 @@
-use crate::core::{AnalysisReport, FunctionAnalysis, FunctionMetrics, MetricContribution};
 use crate::coupling::CouplingReport;
 use crate::diff::ChangedReport;
 use crate::graph::DependencyReport;
 use crate::hotspots::HotspotReport;
 use crate::impact::ImpactReport;
 use crate::risk::RiskReport;
+use model::core::{AnalysisReport, FunctionAnalysis, FunctionMetrics, MetricContribution};
 use serde_json::{Value, json};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -734,8 +734,8 @@ fn max_abs_delta(before: Option<&FunctionAnalysis>, after: Option<&FunctionAnaly
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FileAnalysis, FunctionKind, Language, MetricSpecs};
     use crate::diff::FunctionChange;
+    use model::core::{FileAnalysis, FunctionKind, Language, MetricSpecs};
 
     fn metrics(cognitive: u32, cyclomatic: u32, crap: Option<f64>) -> FunctionMetrics {
         FunctionMetrics {

@@ -4,8 +4,6 @@
 //! analysis, graph, Git analytics, ownership, external reports, risk) so CLI
 //! and future frontends share one pipeline.
 
-use crate::Result;
-use crate::core::AnalysisReport;
 use crate::debt::{
     DEBT_SCHEMA_VERSION, DebtReport, RISK_CHANGE_MODEL, classify, compare_risks, summarize,
 };
@@ -23,6 +21,8 @@ use crate::risk::{RiskReport, build as build_risk};
 use crate::snapshots::{SnapshotOutcome, TrendPoint, TrendStore};
 use crate::source_snapshot::{SnapshotContext, SnapshotTarget, SourceSnapshot, load};
 use crate::test_relationships::ingest as ingest_test_relationships;
+use model::Result;
+use model::core::AnalysisReport;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -115,7 +115,7 @@ fn bundle_parts(
 fn build_from_parts(
     context: &SnapshotContext,
     snapshot: &SourceSnapshot,
-    analysis: &crate::core::AnalysisReport,
+    analysis: &model::core::AnalysisReport,
     graph: &crate::graph::DependencyReport,
     duplication: &crate::duplication::DuplicationReport,
     request: &ProjectRequest,
@@ -348,8 +348,8 @@ pub fn analyze_debt(request: &DebtRequest) -> Result<DebtReport> {
         BTreeMap::new()
     };
 
-    let before_files: Vec<&crate::core::FileAnalysis> = before_analysis.files.iter().collect();
-    let after_files: Vec<&crate::core::FileAnalysis> = after_analysis.files.iter().collect();
+    let before_files: Vec<&model::core::FileAnalysis> = before_analysis.files.iter().collect();
+    let after_files: Vec<&model::core::FileAnalysis> = after_analysis.files.iter().collect();
     let thresholds = after_context.config.thresholds.clone();
     let (findings, unknown) = classify(&before_files, &after_files, &thresholds);
 

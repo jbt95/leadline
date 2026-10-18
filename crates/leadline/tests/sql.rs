@@ -533,7 +533,7 @@ fn reports_tables_absent_from_migrations() {
     );
 }
 
-fn host_functions(path: &str, source: &[u8]) -> Vec<leadline::core::FunctionAnalysis> {
+fn host_functions(path: &str, source: &[u8]) -> Vec<model::core::FunctionAnalysis> {
     leadline::analyze_source(path, source).unwrap().functions
 }
 

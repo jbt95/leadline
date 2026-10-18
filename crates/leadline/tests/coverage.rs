@@ -84,9 +84,9 @@ fn repeated_lcov_lines_accumulate_execution_counts() {
     coverage.apply(&mut file);
     assert_eq!(file.functions[0].metrics.coverage, Some(1.0));
 }
-use leadline::core::{AnalysisReport, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION};
+use model::core::{AnalysisReport, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION};
 
-fn test_report(files: Vec<leadline::core::FileAnalysis>) -> AnalysisReport {
+fn test_report(files: Vec<model::core::FileAnalysis>) -> AnalysisReport {
     AnalysisReport {
         schema_version: OUTPUT_SCHEMA_VERSION,
         metric_profile: METRIC_PROFILE,
@@ -105,7 +105,7 @@ fn lcov_lines(path: &str, hits: &[(u32, u64)]) -> CoverageMap {
     CoverageMap::from_lcov(&text).unwrap()
 }
 
-fn analyzed(path: &str, source: &[u8], coverage: &CoverageMap) -> leadline::core::FileAnalysis {
+fn analyzed(path: &str, source: &[u8], coverage: &CoverageMap) -> model::core::FileAnalysis {
     let mut file = leadline::analyze_source(path, source).unwrap();
     coverage.apply(&mut file);
     file

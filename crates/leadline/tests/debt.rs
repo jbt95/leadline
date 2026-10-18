@@ -1,8 +1,8 @@
 use leadline::config::Thresholds;
-use leadline::core::{FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, Language};
 use leadline::debt::{
     DebtStatus, RiskChangeStatus, RiskSideEntry, classify, compare_risks, risk_entries, summarize,
 };
+use model::core::{FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, Language};
 use std::collections::BTreeMap;
 
 fn metrics(cognitive: u32, cyclomatic: u32, crap: Option<f64>) -> FunctionMetrics {
@@ -258,7 +258,7 @@ fn projection_matches_score_and_components() {
     };
     let policy = leadline::policy::evaluate(&graph, &[]);
     let report = leadline::risk::build(
-        &leadline::core::AnalysisReport {
+        &model::core::AnalysisReport {
             schema_version: 1,
             metric_profile: "default",
             analyzer_version: "test",

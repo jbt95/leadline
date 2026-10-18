@@ -9,7 +9,7 @@
 //! instead of passing silently.
 
 use crate::config::{QualityGateConfig, Rating};
-use crate::core::{FunctionAnalysis, FunctionMetrics, Thresholds};
+use model::core::{FunctionAnalysis, FunctionMetrics, Thresholds};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -370,7 +370,7 @@ pub fn suppressed_violation_count<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FunctionKind, FunctionMetrics, SuppressionMetric};
+    use model::core::{FunctionKind, FunctionMetrics, SuppressionMetric};
 
     fn function(metrics: FunctionMetrics, suppressed: Vec<SuppressionMetric>) -> FunctionAnalysis {
         FunctionAnalysis {

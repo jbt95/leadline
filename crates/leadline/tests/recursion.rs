@@ -1,7 +1,7 @@
 fn function_named<'a>(
-    file: &'a leadline::core::FileAnalysis,
+    file: &'a model::core::FileAnalysis,
     name: &str,
-) -> &'a leadline::core::FunctionAnalysis {
+) -> &'a model::core::FunctionAnalysis {
     file.functions
         .iter()
         .find(|function| function.name == name)

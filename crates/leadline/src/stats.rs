@@ -98,7 +98,7 @@ impl std::fmt::Display for AnalysisError {
 impl std::error::Error for AnalysisError {}
 
 /// Serves until the process is interrupted.
-pub fn serve(request: ProjectRequest, options: ServeOptions) -> crate::Result<()> {
+pub fn serve(request: ProjectRequest, options: ServeOptions) -> model::Result<()> {
     let (listener, port, fell_back) = crate::http::bind(&options.host, options.port)?;
     if fell_back {
         eprintln!(
@@ -227,7 +227,7 @@ fn unix_millis() -> u64 {
 
 impl Server {
     /// Analyzes once, so every request is answered from a snapshot.
-    fn started(request: ProjectRequest) -> crate::Result<Self> {
+    fn started(request: ProjectRequest) -> model::Result<Self> {
         let snapshot = Self::analyze(&request)?;
         let telemetry = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
         spawn_sampler(Arc::clone(&telemetry));
@@ -240,7 +240,7 @@ impl Server {
     }
 
     /// Builds the canonical model and serializes it once per analysis.
-    fn analyze(request: &ProjectRequest) -> crate::Result<Snapshot> {
+    fn analyze(request: &ProjectRequest) -> model::Result<Snapshot> {
         let started = std::time::Instant::now();
         let project = crate::analytics::build(request)?;
         // Pretty JSON plus a trailing newline: byte-identical to

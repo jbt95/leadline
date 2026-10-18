@@ -26,11 +26,11 @@
 //!   an unavailable report instead of an error, so source snapshots keep
 //!   working.
 
-use crate::Result;
 use crate::coupling::{ProjectCoupling, ProjectCouplingAccumulator};
 use crate::discovery::SourceFilter;
 use crate::git;
 use crate::source_snapshot::SnapshotContext;
+use model::Result;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead, BufReader};

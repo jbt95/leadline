@@ -6,9 +6,9 @@
 //! the report incomplete instead of dropping candidates silently.
 
 use crate::config::DuplicationConfig;
-use crate::core::Language;
 use crate::parser::normalized_tokens;
 use crate::source_snapshot::SourceEntry;
+use model::core::Language;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};

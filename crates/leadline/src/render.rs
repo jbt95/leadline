@@ -75,7 +75,7 @@ impl GateVerdict {
 /// set is rebuilt from a saved check document.
 ///
 /// `f64` so one struct covers the integer metric limits and CRAP; the
-/// comparisons mirror [`crate::core::Thresholds::violation_reasons`].
+/// comparisons mirror [`model::core::Thresholds::violation_reasons`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GateLimits {
     pub cognitive: Option<f64>,
@@ -347,7 +347,7 @@ fn push_function(
 }
 
 /// Failed limit names for one metrics object, mirroring
-/// [`crate::core::Thresholds::violation_reasons`] order: cognitive,
+/// [`model::core::Thresholds::violation_reasons`] order: cognitive,
 /// cyclomatic, max_nesting, then CRAP.
 ///
 /// A metric the document does not carry cannot be compared and does not fire,

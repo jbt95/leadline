@@ -1,12 +1,12 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use leadline::core::{
-    AnalysisReport, FileAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION,
-};
 use leadline::coupling::{CouplingOptions, analyze_coupling};
 use leadline::history::{
     FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow, analyze_history,
 };
 use leadline::hotspots::build;
+use model::core::{
+    AnalysisReport, FileAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION,
+};
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

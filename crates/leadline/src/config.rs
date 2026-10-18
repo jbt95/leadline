@@ -79,7 +79,7 @@ impl Default for DuplicationConfig {
 /// Vulnerability gate settings.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct VulnerabilityConfig {
-    pub minimum_severity: Option<crate::security::SecuritySeverity>,
+    pub minimum_severity: Option<model::security::SecuritySeverity>,
 }
 
 /// Static PostgreSQL risk settings.
@@ -224,7 +224,7 @@ pub struct Thresholds {
 }
 
 /// Configuration failure. Implements [`std::error::Error`], so the std
-/// blanket `From` converts it into the crate's `crate::Error` box.
+/// blanket `From` converts it into the model error box.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfigError(String);
 
@@ -638,7 +638,7 @@ fn read_vulnerabilities(config: &mut Config, value: &Value) -> Result<(), Config
         match key.as_str() {
             "minimum_severity" => {
                 let raw = read_string(key, item)?;
-                let severity = crate::security::parse_gate_severity(&raw).ok_or_else(|| {
+                let severity = model::security::parse_gate_severity(&raw).ok_or_else(|| {
                     ConfigError::new(format!(
                         "unknown minimum_severity '{raw}': expected 'low', 'medium', 'high', or 'critical'"
                     ))
@@ -790,7 +790,7 @@ fn read_index(value: &Value) -> Result<Option<IndexConfig>, ConfigError> {
         }
     }
     Ok(Some(IndexConfig {
-        path: path.unwrap_or_else(|| crate::index::DEFAULT_INDEX_DIR.to_owned()),
+        path: path.unwrap_or_else(|| model::DEFAULT_INDEX_DIR.to_owned()),
     }))
 }
 

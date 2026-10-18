@@ -2,11 +2,11 @@
 
 mod common;
 
-use leadline::core::{
-    AnalysisReport, FileAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION,
-};
 use leadline::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow};
 use leadline::hotspots::{HOTSPOT_MODEL, build};
+use model::core::{
+    AnalysisReport, FileAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -176,7 +176,7 @@ fn missing_git_history_falls_back_to_complexity_ranking() {
 fn coverage_and_crap_are_carried_into_hotspots() {
     let mut file = analyze("src/a.ts", HIGH);
     for function in &mut file.functions {
-        leadline::core::apply_coverage(function, Some(0.5));
+        model::core::apply_coverage(function, Some(0.5));
     }
     let report = analysis(vec![file]);
     let history = history(vec![history_file("src/a.ts", 1, 5, 5)], true);

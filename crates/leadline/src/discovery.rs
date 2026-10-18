@@ -1,6 +1,6 @@
-use crate::Result;
 use crate::parser::detect_language;
 use ignore::{DirEntry, WalkBuilder, WalkState};
+use model::Result;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 

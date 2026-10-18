@@ -1,15 +1,15 @@
 use leadline::agent::{Budget, SortKey};
 use leadline::config::{self, Config, RegressionLimits};
-use leadline::core::{
-    AnalysisReport, FileAnalysis, FunctionAnalysis, METRIC_PROFILE, MetricSpecs,
-    OUTPUT_SCHEMA_VERSION, Thresholds,
-};
 use leadline::coupling::CouplingOptions;
 use leadline::coverage::CoverageMap;
 use leadline::history::HistoryWindow;
 use leadline::mutation::MutationInput;
 use leadline::ownership::OwnershipMode;
 use leadline::source_snapshot::SnapshotTarget;
+use model::core::{
+    AnalysisReport, FileAnalysis, FunctionAnalysis, METRIC_PROFILE, MetricSpecs,
+    OUTPUT_SCHEMA_VERSION, Thresholds,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -324,7 +324,7 @@ fn index_command(args: &[String]) -> Result<ExitCode, CliError> {
                 .as_ref()
                 .and_then(|config| config.index.as_ref())
                 .map(|index| index.path.as_str())
-                .unwrap_or(leadline::index::DEFAULT_INDEX_DIR),
+                .unwrap_or(model::DEFAULT_INDEX_DIR),
         ),
     };
     let fingerprint = leadline::config::fingerprint(&config_dir(&root));
@@ -1544,7 +1544,7 @@ fn comparison_from_flags(
     staged: bool,
     target: &Option<String>,
     changed_only: bool,
-) -> Result<Option<leadline::security::ChangeComparison>, CliError> {
+) -> Result<Option<model::security::ChangeComparison>, CliError> {
     if base.is_some() && staged {
         return Err(CliError::usage("--base and --staged are exclusive"));
     }
@@ -1561,11 +1561,11 @@ fn comparison_from_flags(
     }
     Ok(match (base, staged, target) {
         (None, false, None) => None,
-        (Some(base), false, None) => Some(leadline::security::ChangeComparison::Base(base.clone())),
-        (None, true, None) => Some(leadline::security::ChangeComparison::Staged),
-        (None, false, Some(revision)) => Some(leadline::security::ChangeComparison::Target(
-            revision.clone(),
-        )),
+        (Some(base), false, None) => Some(model::security::ChangeComparison::Base(base.clone())),
+        (None, true, None) => Some(model::security::ChangeComparison::Staged),
+        (None, false, Some(revision)) => {
+            Some(model::security::ChangeComparison::Target(revision.clone()))
+        }
         _ => unreachable!("exclusive comparison flags are rejected above"),
     })
 }
@@ -2304,9 +2304,9 @@ fn parse_plan_limit(raw: Option<&String>, flag: &str) -> Result<f64, CliError> {
 fn parse_severity_flag(
     raw: Option<&String>,
     flag: &str,
-) -> Result<leadline::security::SecuritySeverity, CliError> {
+) -> Result<model::security::SecuritySeverity, CliError> {
     let raw = raw.ok_or_else(|| CliError::usage(format!("{flag} requires a level")))?;
-    leadline::security::parse_gate_severity(raw).ok_or_else(|| {
+    model::security::parse_gate_severity(raw).ok_or_else(|| {
         CliError::usage(format!(
             "unknown {flag} '{raw}': expected 'low', 'medium', 'high', or 'critical'"
         ))
@@ -2378,11 +2378,11 @@ struct CheckArgs {
     regressions: bool,
     sarifs: Vec<PathBuf>,
     baseline_sarifs: Vec<PathBuf>,
-    fail_on_severity: Option<leadline::security::SecuritySeverity>,
+    fail_on_severity: Option<model::security::SecuritySeverity>,
     new_only: bool,
     changed_only: bool,
     sql: bool,
-    sql_fail_on_severity: Option<leadline::security::SecuritySeverity>,
+    sql_fail_on_severity: Option<model::security::SecuritySeverity>,
     common: Vec<String>,
     artifacts: VulnerabilityArtifactArgs,
 }
@@ -2638,7 +2638,7 @@ fn assemble_scanners(
         let comparison = args
             .base
             .as_ref()
-            .map(|revision| leadline::security::ChangeComparison::Base(revision.clone()));
+            .map(|revision| model::security::ChangeComparison::Base(revision.clone()));
         Some(
             leadline::security::assemble(&leadline::security::SecurityRequest {
                 path: options.path.clone(),
@@ -2657,7 +2657,7 @@ fn assemble_scanners(
         let comparison = args
             .base
             .as_ref()
-            .map(|revision| leadline::security::ChangeComparison::Base(revision.clone()));
+            .map(|revision| model::security::ChangeComparison::Base(revision.clone()));
         Some(
             leadline::vulnerabilities::assemble(&leadline::vulnerabilities::VulnerabilityRequest {
                 path: options.path.clone(),

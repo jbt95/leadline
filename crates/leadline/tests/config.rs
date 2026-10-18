@@ -252,7 +252,7 @@ fn rejects_non_default_profiles() {
 fn error_converts_into_crate_error() {
     let error = parse_str("[bogus]\n").unwrap_err();
     assert!(!error.to_string().is_empty());
-    let boxed: leadline::Error = error.into();
+    let boxed: model::Error = error.into();
     assert!(!boxed.to_string().is_empty());
 }
 
@@ -333,7 +333,7 @@ minimum_severity = 'high'
     assert_eq!(
         config.vulnerabilities,
         VulnerabilityConfig {
-            minimum_severity: Some(leadline::security::SecuritySeverity::High),
+            minimum_severity: Some(model::security::SecuritySeverity::High),
         }
     );
     assert!(

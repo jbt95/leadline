@@ -5,8 +5,8 @@
 //! lock-protected and atomically renamed so concurrent writers cannot lose a
 //! point or leave a torn store.
 
-use crate::Result;
 use crate::project::Project;
+use model::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Write;

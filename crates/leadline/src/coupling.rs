@@ -28,8 +28,8 @@
 //! [`MAX_PROJECT_PAIRS`] unique pairs; crossing the ceiling makes coupling
 //! incomplete instead of silently dropping pairs.
 
-use crate::Result;
 use crate::history::{CommitFile, CommitMeta, walk_commits};
+use model::Result;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;

@@ -329,7 +329,7 @@ fn temporary_directory() -> PathBuf {
     path
 }
 
-fn regression_analysis(name: &str, cognitive: u32) -> leadline::core::FunctionAnalysis {
+fn regression_analysis(name: &str, cognitive: u32) -> model::core::FunctionAnalysis {
     let source = format!("function {name}() {{ return 1; }}\n");
     let mut function = leadline::analyze_source("src/a.ts", source.as_bytes())
         .unwrap()
@@ -391,9 +391,9 @@ fn added_and_removed_functions_are_not_delta_regressions() {
     };
     let report = leadline::diff::ChangedReport {
         schema_version: 1,
-        metric_profile: leadline::core::METRIC_PROFILE,
+        metric_profile: model::core::METRIC_PROFILE,
         analyzer_version: "test",
-        metric_specs: leadline::core::MetricSpecs::default(),
+        metric_specs: model::core::MetricSpecs::default(),
         base: "base".to_owned(),
         functions: vec![added_change, removed_change],
         parse_errors: Vec::new(),

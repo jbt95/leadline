@@ -1,9 +1,9 @@
-use crate::Result;
-use crate::core::{
+use crate::source_snapshot::SourceEntry;
+use model::Result;
+use model::core::{
     DecisionKind, Event, FileAnalysis, FunctionInput, FunctionKind, Language, LogicalOperator,
     ParseDiagnostic, Span, analyze_function,
 };
-use crate::source_snapshot::SourceEntry;
 use rayon::prelude::*;
 use std::cell::RefCell;
 use std::path::Path;
@@ -510,7 +510,7 @@ fn discover_tree<'tree>(
 struct SuppressionComment {
     start_line: u32,
     end_line: u32,
-    metrics: Vec<crate::core::SuppressionMetric>,
+    metrics: Vec<model::core::SuppressionMetric>,
 }
 
 /// The suppression comment `node` carries, when it is a comment at all.
@@ -529,7 +529,7 @@ fn suppression_comment(node: Node<'_>, source: &[u8]) -> Option<SuppressionComme
 fn parse_suppression_comment(node: Node<'_>, source: &[u8]) -> Option<SuppressionComment> {
     let text = String::from_utf8_lossy(&source[node.byte_range()]);
     let metrics = if contains_ignore_ascii_case(&text, "NOSONAR") {
-        crate::core::SuppressionMetric::all()
+        model::core::SuppressionMetric::all()
     } else {
         let named = text
             .to_ascii_lowercase()
@@ -551,7 +551,7 @@ fn parse_suppression_comment(node: Node<'_>, source: &[u8]) -> Option<Suppressio
 }
 
 /// Parses one `leadline: ignore` dimension list into canonical order.
-fn parse_metric_list(list: &str) -> Vec<crate::core::SuppressionMetric> {
+fn parse_metric_list(list: &str) -> Vec<model::core::SuppressionMetric> {
     let mut metrics: Vec<_> = list
         .split(',')
         .filter_map(|token| {
@@ -560,7 +560,7 @@ fn parse_metric_list(list: &str) -> Vec<crate::core::SuppressionMetric> {
                 .chars()
                 .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
                 .collect();
-            crate::core::SuppressionMetric::parse(&name)
+            model::core::SuppressionMetric::parse(&name)
         })
         .collect();
     metrics.sort();
@@ -580,7 +580,7 @@ fn suppression_for(
     function: Node<'_>,
     comments: &[SuppressionComment],
     nodes: &[Node<'_>],
-) -> Vec<crate::core::SuppressionMetric> {
+) -> Vec<model::core::SuppressionMetric> {
     let start_line = function.start_position().row as u32 + 1;
     let end_line = function.end_position().row as u32 + 1;
     let mut metrics = Vec::new();
@@ -675,8 +675,8 @@ fn analyze_node(
     node: Node<'_>,
     language: Language,
     source: &[u8],
-    suppressed_metrics: Vec<crate::core::SuppressionMetric>,
-) -> crate::core::FunctionAnalysis {
+    suppressed_metrics: Vec<model::core::SuppressionMetric>,
+) -> model::core::FunctionAnalysis {
     let mut events = Vec::new();
     let mut logical_loc = 0;
     walk_function(node, language, source, &mut logical_loc, &mut events);
@@ -690,7 +690,7 @@ fn analyze_node(
     analyze_function(
         FunctionInput {
             name,
-            id: crate::core::function_id(display_path, kind, start_byte, end_byte),
+            id: model::core::function_id(display_path, kind, start_byte, end_byte),
             kind,
             language,
             recursive,
@@ -1953,7 +1953,7 @@ fn is_loop_kind(kind: &str) -> bool {
 /// literal text is never inspected or retained. Loop state walks ancestors
 /// until a function boundary and stops there, so calls in a nested function
 /// are never attributed to an outer loop. Dedplicated by span and flags.
-pub(crate) fn host_sql_sites(path: &str, source: &[u8]) -> crate::Result<Vec<HostSqlSite>> {
+pub(crate) fn host_sql_sites(path: &str, source: &[u8]) -> model::Result<Vec<HostSqlSite>> {
     let (language, tree) = parse_tree(path, source)?;
     Ok(host_sql_sites_from_tree(language, source, tree.root_node()))
 }

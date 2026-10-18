@@ -4,11 +4,11 @@
 //! from file names or directory layout. Unresolved rows stay visible with a
 //! stable reason instead of failing the whole report.
 
-use crate::Result;
-use crate::core::AnalysisReport;
 use crate::external::{
     INPUT_BYTES_LIMIT, InputBudget, read_bounded, strict_relative_path, validate_json_depth,
 };
+use model::Result;
+use model::core::AnalysisReport;
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::PathBuf;

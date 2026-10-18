@@ -1,10 +1,10 @@
-use leadline::core::{
-    AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
-    MetricSpecs, OUTPUT_SCHEMA_VERSION,
-};
 use leadline::external::InputBudget;
 use leadline::mutation::{MutationInput, MutationStatus, ingest};
 use leadline::source_snapshot::SourceEntry;
+use model::core::{
+    AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
+    MetricSpecs, OUTPUT_SCHEMA_VERSION,
+};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -70,7 +70,7 @@ fn analysis() -> AnalysisReport {
         metric_specs: MetricSpecs::default(),
         files: vec![FileAnalysis {
             path: "src/a.ts".to_owned(),
-            language: leadline::core::Language::TypeScript,
+            language: model::core::Language::TypeScript,
             functions: vec![function("outer", 1, 40), function("inner", 10, 20)],
             parse_errors: vec![],
         }],

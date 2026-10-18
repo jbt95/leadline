@@ -10,7 +10,7 @@
 //! delta regressions; deleted functions are ignored.
 
 use crate::config::RegressionLimits;
-use crate::core::{
+use model::core::{
     AnalysisReport, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
 };
 use serde::{Deserialize, Serialize};
@@ -128,7 +128,7 @@ impl Baseline {
 
     /// Read and validate a baseline file. Rejects unknown schemas,
     /// unknown metric profiles, and duplicate `(path, id)` identities.
-    pub fn read(path: &Path) -> crate::Result<Self> {
+    pub fn read(path: &Path) -> model::Result<Self> {
         let text = std::fs::read_to_string(path)
             .map_err(|error| format!("baseline: cannot read {}: {error}", path.display()))?;
         let baseline: Self = serde_json::from_str(&text)
@@ -139,7 +139,7 @@ impl Baseline {
 
     /// Write atomically: encode to a sibling temporary file, then rename
     /// over the destination so readers never see a partial snapshot.
-    pub fn write(&self, path: &Path) -> crate::Result<()> {
+    pub fn write(&self, path: &Path) -> model::Result<()> {
         let text = serde_json::to_string_pretty(self)?;
         let file_name = path
             .file_name()
@@ -212,7 +212,7 @@ impl Baseline {
         regressions
     }
 
-    fn validate(&self) -> crate::Result<()> {
+    fn validate(&self) -> model::Result<()> {
         if self.schema_version != BASELINE_SCHEMA_VERSION {
             return Err(format!(
                 "baseline: unsupported schema_version {}, expected {BASELINE_SCHEMA_VERSION}",

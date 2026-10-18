@@ -1,4 +1,4 @@
-use leadline::core::{AnalysisReport, FunctionKind, Language, MetricSpecs};
+use model::core::{AnalysisReport, FunctionKind, Language, MetricSpecs};
 use std::path::Path;
 
 fn function_metrics(path: &str, source: &str) -> (u32, u32, u32) {
@@ -178,8 +178,8 @@ fn terminal_report_keeps_human_readable_metric_labels() {
     let file =
         leadline::analyze_source("fixture.ts", b"function score(x) { if (x) return 1; }").unwrap();
     let report = AnalysisReport {
-        schema_version: leadline::core::OUTPUT_SCHEMA_VERSION,
-        metric_profile: leadline::core::METRIC_PROFILE,
+        schema_version: model::core::OUTPUT_SCHEMA_VERSION,
+        metric_profile: model::core::METRIC_PROFILE,
         analyzer_version: env!("CARGO_PKG_VERSION"),
         metric_specs: MetricSpecs::default(),
         files: vec![file],

@@ -1,9 +1,9 @@
 //! Deterministic internal source dependency graph extraction.
 
-use crate::core::METRIC_PROFILE;
 use crate::parser::{ParsedDependencies, RawDependency, RawDependencyKind, extract_dependencies};
 use crate::source_snapshot::SourceEntry;
 use crate::{Result, normalized_relative_path};
+use model::core::METRIC_PROFILE;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -73,7 +73,7 @@ pub fn analyze_dependencies(path: &Path, excludes: &[String]) -> Result<Dependen
         .map(|file| {
             let display_path = normalized_relative_path(file, root);
             let parsed = std::fs::read(file)
-                .map_err(crate::Error::from)
+                .map_err(model::Error::from)
                 .and_then(|source| extract_dependencies(&display_path, &source));
             (display_path, parsed)
         })

@@ -4,7 +4,6 @@
 //! thin. Every section is deterministic, every optional section is `None` when
 //! unavailable, and the DTO is published whole (no piecemeal schema growth).
 
-use crate::core::{AnalysisReport, Language};
 use crate::duplication::DuplicationReport;
 use crate::graph::DependencyReport;
 use crate::history::{FileHistory, GitAnalyticsSnapshot};
@@ -13,6 +12,7 @@ use crate::ownership::OwnershipReport;
 use crate::policy::{PolicyReport, PolicyViolation};
 use crate::risk::RiskReport;
 use crate::test_relationships::TestRelationshipReport;
+use model::core::{AnalysisReport, Language};
 use serde::Serialize;
 use std::collections::BTreeMap;
 

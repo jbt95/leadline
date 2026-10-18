@@ -6,7 +6,7 @@
 //! literal labels and plain numeric scores map to severities.
 
 use crate::external::{INPUT_BYTES_LIMIT, InputBudget, read_bounded, strict_relative_path};
-use crate::security::{FindingState, SecuritySeverity, merge_report_ids};
+use model::security::{FindingState, SecuritySeverity, merge_report_ids};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -58,7 +58,7 @@ pub struct VulnerabilityReport {
 /// Without baseline files every finding is new.
 pub fn read_vulnerability_reports(
     inputs: VulnerabilityInputs<'_>,
-) -> crate::Result<VulnerabilityReport> {
+) -> model::Result<VulnerabilityReport> {
     for paths in [
         inputs.osv,
         inputs.trivy,
@@ -208,7 +208,7 @@ pub struct VulnerabilityRequest {
     pub trivy: Vec<PathBuf>,
     pub baseline_osv: Vec<PathBuf>,
     pub baseline_trivy: Vec<PathBuf>,
-    pub comparison: Option<crate::security::ChangeComparison>,
+    pub comparison: Option<model::security::ChangeComparison>,
     pub gate: Option<SecuritySeverity>,
 }
 
@@ -220,7 +220,7 @@ pub struct VulnerabilityOutcome {
 
 /// Read scanner inputs, attach changed-import evidence, and apply the gate:
 /// the single assembly path for every `vulnerabilities` surface.
-pub fn assemble(request: &VulnerabilityRequest) -> crate::Result<VulnerabilityOutcome> {
+pub fn assemble(request: &VulnerabilityRequest) -> model::Result<VulnerabilityOutcome> {
     let mut report = read_vulnerability_reports(VulnerabilityInputs {
         osv: &request.osv,
         trivy: &request.trivy,
@@ -230,7 +230,7 @@ pub fn assemble(request: &VulnerabilityRequest) -> crate::Result<VulnerabilityOu
     let (imports, available) = match &request.comparison {
         None => (Vec::new(), false),
         Some(comparison) => {
-            let (base, target) = comparison.options();
+            let (base, target) = crate::diff::comparison_options(comparison);
             let options = crate::diff::ChangeOptions {
                 base,
                 target,
@@ -256,7 +256,7 @@ pub fn assemble(request: &VulnerabilityRequest) -> crate::Result<VulnerabilityOu
 
 /// Bounded agent projection: first `top` findings plus a `truncated` flag.
 pub fn agent_json(report: &VulnerabilityReport, top: usize) -> serde_json::Value {
-    crate::security::agent_page(&report.findings, top)
+    model::security::agent_page(&report.findings, top)
 }
 
 /// Human-readable terminal rendering, deterministic in report order.
@@ -318,7 +318,7 @@ fn compare_findings(
         .severity
         .cmp(&left.severity)
         .then(
-            crate::security::state_rank(left.state).cmp(&crate::security::state_rank(right.state)),
+            model::security::state_rank(left.state).cmp(&model::security::state_rank(right.state)),
         )
         .then(left.ecosystem.cmp(&right.ecosystem))
         .then(left.package.cmp(&right.package))
@@ -327,7 +327,7 @@ fn compare_findings(
 }
 
 /// Provenance report ID: the input file name.
-fn report_id(path: &Path) -> crate::Result<String> {
+fn report_id(path: &Path) -> model::Result<String> {
     Ok(path
         .file_name()
         .and_then(|name| name.to_str())
@@ -340,7 +340,7 @@ fn report_id(path: &Path) -> crate::Result<String> {
         .to_owned())
 }
 
-fn read_bounded_json(path: &Path, budget: &mut InputBudget) -> crate::Result<serde_json::Value> {
+fn read_bounded_json(path: &Path, budget: &mut InputBudget) -> model::Result<serde_json::Value> {
     let bytes = read_bounded(path, INPUT_BYTES_LIMIT, budget)?;
     crate::external::validate_json_depth(&bytes)?;
     serde_json::from_slice(&bytes)
@@ -352,7 +352,7 @@ fn read_bounded_json(path: &Path, budget: &mut InputBudget) -> crate::Result<ser
 fn read_osv(
     path: &Path,
     budget: &mut InputBudget,
-) -> crate::Result<(Vec<VulnerabilityFinding>, String)> {
+) -> model::Result<(Vec<VulnerabilityFinding>, String)> {
     let value = read_bounded_json(path, budget)?;
     let results = value
         .get("results")
@@ -434,7 +434,7 @@ fn osv_severity(vulnerability: &serde_json::Value) -> SecuritySeverity {
         .and_then(|specific| specific.get("severity"))
         .and_then(|severity| severity.as_str())
     {
-        let mapped = crate::security::severity_from_label(label);
+        let mapped = model::security::severity_from_label(label);
         if mapped != SecuritySeverity::Unknown {
             return mapped;
         }
@@ -447,7 +447,7 @@ fn osv_severity(vulnerability: &serde_json::Value) -> SecuritySeverity {
                 .iter()
                 .filter_map(|entry| entry.get("score").and_then(|score| score.as_str()))
                 .filter_map(|score| score.parse::<f64>().ok().filter(|score| score.is_finite()))
-                .map(crate::security::severity_from_score)
+                .map(model::security::severity_from_score)
                 .next()
         })
         .unwrap_or(SecuritySeverity::Unknown)
@@ -485,7 +485,7 @@ fn osv_fixed_versions(vulnerability: &serde_json::Value) -> Vec<String> {
 fn read_trivy(
     path: &Path,
     budget: &mut InputBudget,
-) -> crate::Result<(Vec<VulnerabilityFinding>, String)> {
+) -> model::Result<(Vec<VulnerabilityFinding>, String)> {
     let value = read_bounded_json(path, budget)?;
     let results = value
         .get("Results")
@@ -538,7 +538,7 @@ fn read_trivy(
             let severity = vulnerability
                 .get("Severity")
                 .and_then(|severity| severity.as_str())
-                .map(crate::security::severity_from_label)
+                .map(model::security::severity_from_label)
                 .unwrap_or(SecuritySeverity::Unknown);
             budget.consume_rows(1)?;
             findings.push(VulnerabilityFinding {

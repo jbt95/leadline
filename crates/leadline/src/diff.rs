@@ -1,12 +1,13 @@
-use crate::Result;
 use crate::config::{RegressionLimits, Thresholds};
-use crate::core::{
-    FunctionAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION, ParseDiagnostic,
-};
 use crate::git;
 use crate::parser::detect_language;
 use crate::source_snapshot::SourceEntry;
 use crate::strip_verbatim_prefix;
+use model::Result;
+use model::core::{
+    FunctionAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION, ParseDiagnostic,
+};
+use model::security::ChangeComparison;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,6 +51,25 @@ pub struct ChangeOptions {
     pub base: String,
     pub target: ComparisonTarget,
     pub detect_renames: bool,
+}
+
+/// The base revision and comparison target a scanner comparison request means.
+///
+/// `Staged` is the index against `HEAD`: what a commit is about to add. It used
+/// to resolve the index against `HEAD~1`, which failed outright in a repository
+/// with a single commit and, where it did resolve, reported findings from the
+/// previous commit as changed. `--staged` cannot be paired with an explicit
+/// base, so the base is fixed here rather than defaulted from the `HEAD~1` that
+/// `changed` and `diff` default to.
+pub fn comparison_options(comparison: &ChangeComparison) -> (String, ComparisonTarget) {
+    match comparison {
+        ChangeComparison::Base(base) => (base.clone(), ComparisonTarget::Worktree),
+        ChangeComparison::Staged => ("HEAD".to_owned(), ComparisonTarget::Index),
+        ChangeComparison::Target(revision) => (
+            "HEAD~1".to_owned(),
+            ComparisonTarget::Revision(revision.clone()),
+        ),
+    }
 }
 
 /// Returns which metric deltas exceed their configured limits, in gate order.
@@ -158,7 +178,7 @@ pub fn analyze_changed(path: &Path, base: &str) -> Result<ChangedReport> {
 pub fn changed_source_entries(
     path: &Path,
     options: &ChangeOptions,
-) -> crate::Result<Vec<SourceEntry>> {
+) -> model::Result<Vec<SourceEntry>> {
     let changed = changed_paths_in_scope(path, options)?;
     let mut entries = Vec::new();
     for relative in changed.paths {
@@ -185,7 +205,7 @@ pub fn changed_source_entries(
 /// as [`analyze_changes`], and deleted paths stay in the set. Paths match the
 /// artifact and project paths of the same root, so a subdirectory run
 /// attributes `src/app.py` as `app.py`.
-pub fn changed_paths(path: &Path, options: &ChangeOptions) -> crate::Result<BTreeSet<String>> {
+pub fn changed_paths(path: &Path, options: &ChangeOptions) -> model::Result<BTreeSet<String>> {
     let changed = changed_paths_in_scope(path, options)?;
     if changed.base.is_empty() {
         return Ok(changed.paths);
@@ -215,7 +235,7 @@ struct ChangedPaths {
 /// validation, scope filtering, rename handling, and untracked pickup for
 /// worktree targets. Paths stay Git-root-relative here; [`changed_paths`]
 /// rebases them.
-fn changed_paths_in_scope(path: &Path, options: &ChangeOptions) -> crate::Result<ChangedPaths> {
+fn changed_paths_in_scope(path: &Path, options: &ChangeOptions) -> model::Result<ChangedPaths> {
     git::validate_revision(&options.base)?;
     if let ComparisonTarget::Revision(target) = &options.target {
         git::validate_revision(target)?;
@@ -284,8 +304,8 @@ pub fn analyze_changes(path: &Path, options: &ChangeOptions) -> Result<ChangedRe
     };
     type FileOutcome = Result<(
         String,
-        Option<crate::core::FileAnalysis>,
-        Option<crate::core::FileAnalysis>,
+        Option<model::core::FileAnalysis>,
+        Option<model::core::FileAnalysis>,
     )>;
     let outcomes: Vec<FileOutcome> = analyzable
         .par_iter()
@@ -561,7 +581,7 @@ mod tests {
         );
     }
 
-    use crate::core::{FunctionKind, FunctionMetrics};
+    use model::core::{FunctionKind, FunctionMetrics};
 
     fn test_analysis(name: &str, cognitive: u32) -> FunctionAnalysis {
         FunctionAnalysis {

@@ -61,7 +61,7 @@ pub struct Statement {
 /// Rejects invalid UTF-8, unclosed quotes/comments/dollar quotes,
 /// parenthesis nesting above 128, and inputs above 64 MiB. Statements split
 /// only on depth-zero semicolons outside comments and literals.
-pub fn tokenize_statements(source: &[u8]) -> crate::Result<Vec<Statement>> {
+pub fn tokenize_statements(source: &[u8]) -> model::Result<Vec<Statement>> {
     if source.len() as u64 > MAX_SQL_BYTES {
         return Err("SQL input exceeds the 64 MiB limit".into());
     }
@@ -133,7 +133,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn run(mut self) -> crate::Result<Vec<Statement>> {
+    fn run(mut self) -> model::Result<Vec<Statement>> {
         while self.pos < self.bytes.len() {
             self.skip_trivia()?;
             if self.pushed > MAX_SQL_TOKENS {
@@ -198,7 +198,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Whitespace, `--` line comments, and (nested) `/* */` block comments.
-    fn skip_trivia(&mut self) -> crate::Result<()> {
+    fn skip_trivia(&mut self) -> model::Result<()> {
         loop {
             while self.pos < self.bytes.len()
                 && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\r' | b'\n')
@@ -244,7 +244,7 @@ impl<'a> Lexer<'a> {
         Ok(())
     }
 
-    fn lex_word(&mut self) -> crate::Result<()> {
+    fn lex_word(&mut self) -> model::Result<()> {
         let start = self.pos;
         while self.pos < self.bytes.len() && is_word_continue(self.bytes[self.pos]) {
             self.pos += 1;
@@ -271,7 +271,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// String, quoted-identifier, dollar-quote, number, or `$n` parameter.
-    fn lex_literal_or_param(&mut self) -> crate::Result<()> {
+    fn lex_literal_or_param(&mut self) -> model::Result<()> {
         let byte = self.bytes[self.pos];
         if byte == b'"' {
             return self.lex_quoted_ident();
@@ -320,7 +320,7 @@ impl<'a> Lexer<'a> {
         None
     }
 
-    fn lex_dollar_quoted(&mut self, tag: &str) -> crate::Result<()> {
+    fn lex_dollar_quoted(&mut self, tag: &str) -> model::Result<()> {
         let rest = &self.bytes[self.pos + tag.len()..];
         let Some(end) = rest
             .windows(tag.len())
@@ -337,7 +337,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// `'...'` string; `escaped` selects backslash-escape (`E''`) rules.
-    fn lex_quoted(&mut self, escaped: bool) -> crate::Result<()> {
+    fn lex_quoted(&mut self, escaped: bool) -> model::Result<()> {
         debug_assert_eq!(self.bytes[self.pos], b'\'');
         let mut index = self.pos + 1;
         let mut first = true;
@@ -379,7 +379,7 @@ impl<'a> Lexer<'a> {
         Err("SQL string literal is never closed".into())
     }
 
-    fn lex_quoted_ident(&mut self) -> crate::Result<()> {
+    fn lex_quoted_ident(&mut self) -> model::Result<()> {
         debug_assert_eq!(self.bytes[self.pos], b'"');
         let mut index = self.pos + 1;
         let mut name = Vec::new();
@@ -516,16 +516,16 @@ impl SqlRule {
         }
     }
 
-    pub fn severity(self) -> crate::security::SecuritySeverity {
+    pub fn severity(self) -> model::security::SecuritySeverity {
         match self {
             SqlRule::UpdateDeleteWithoutWhere | SqlRule::DynamicConcatenation => {
-                crate::security::SecuritySeverity::High
+                model::security::SecuritySeverity::High
             }
             SqlRule::LeadingWildcard
             | SqlRule::NonsargablePredicate
             | SqlRule::LargeOffset
             | SqlRule::UnknownTable
-            | SqlRule::QueryInLoop => crate::security::SecuritySeverity::Medium,
+            | SqlRule::QueryInLoop => model::security::SecuritySeverity::Medium,
         }
     }
 
@@ -570,7 +570,7 @@ impl Default for SqlOptions {
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct SqlFinding {
     pub rule_id: String,
-    pub severity: crate::security::SecuritySeverity,
+    pub severity: model::security::SecuritySeverity,
     pub path: String,
     pub start_line: u32,
     pub end_line: u32,
@@ -591,7 +591,7 @@ pub fn analyze_sql_bytes(
     path: &str,
     source: &[u8],
     options: &SqlOptions,
-) -> crate::Result<SqlReport> {
+) -> model::Result<SqlReport> {
     let statements = tokenize_statements(source)?;
     let mut findings = Vec::new();
     for statement in &statements {
@@ -907,8 +907,8 @@ fn large_offset(path: &str, statement: &Statement, options: &SqlOptions) -> Opti
 pub fn analyze_host_sql(
     path: &str,
     source: &[u8],
-    functions: &[crate::core::FunctionAnalysis],
-) -> crate::Result<Vec<SqlFinding>> {
+    functions: &[model::core::FunctionAnalysis],
+) -> model::Result<Vec<SqlFinding>> {
     let sites = crate::parser::host_sql_sites(path, source)?;
     Ok(host_sql_findings(path, &sites, functions))
 }
@@ -917,11 +917,11 @@ pub fn analyze_host_sql(
 fn host_sql_findings(
     path: &str,
     sites: &[crate::parser::HostSqlSite],
-    functions: &[crate::core::FunctionAnalysis],
+    functions: &[model::core::FunctionAnalysis],
 ) -> Vec<SqlFinding> {
     let mut findings = Vec::new();
     for site in sites {
-        let function_id = crate::core::innermost_containing(
+        let function_id = model::core::innermost_containing(
             functions,
             site.line,
             |function| (function.start_line, function.end_line),
@@ -958,7 +958,7 @@ fn host_sql_findings(
 /// Gate violations: findings at or above `minimum`, in report order.
 pub fn sql_gate_violations(
     report: &SqlReport,
-    minimum: crate::security::SecuritySeverity,
+    minimum: model::security::SecuritySeverity,
 ) -> Vec<&SqlFinding> {
     report
         .findings
@@ -969,7 +969,7 @@ pub fn sql_gate_violations(
 
 /// Bounded agent projection: first `top` findings plus a `truncated` flag.
 pub fn agent_json(report: &SqlReport, top: usize) -> serde_json::Value {
-    crate::security::agent_page(&report.findings, top)
+    model::security::agent_page(&report.findings, top)
 }
 
 /// Human-readable terminal rendering, deterministic in report order.
@@ -1005,7 +1005,7 @@ pub struct SqlOutcome {
 /// Split a report into projections and gate violations.
 pub fn outcome(
     report: SqlReport,
-    minimum: Option<crate::security::SecuritySeverity>,
+    minimum: Option<model::security::SecuritySeverity>,
 ) -> SqlOutcome {
     let violations = minimum
         .map(|level| sql_gate_violations(&report, level))
@@ -1046,7 +1046,7 @@ pub fn analyze_sql_path(
     root: &std::path::Path,
     config: &crate::config::SqlConfig,
     excludes: &[String],
-) -> crate::Result<SqlReport> {
+) -> model::Result<SqlReport> {
     let options = SqlOptions {
         large_offset: config.large_offset,
     };
@@ -1209,7 +1209,7 @@ fn plain_word(token: &Token, words: &[&str]) -> bool {
 /// Duplicate declarations collapse; the result holds normalized
 /// `schema.name` entries. Rename targets stay declared so references after a
 /// rename resolve instead of reading as unknown tables.
-pub fn collect_declared_tables(files: &[SqlFile]) -> crate::Result<BTreeSet<String>> {
+pub fn collect_declared_tables(files: &[SqlFile]) -> model::Result<BTreeSet<String>> {
     let mut declared = BTreeSet::new();
     for file in files {
         for statement in &file.statements {

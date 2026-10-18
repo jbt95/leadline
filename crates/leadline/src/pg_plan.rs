@@ -37,7 +37,7 @@ pub struct QueryPlan {
 /// The query ID is the UTF-8 filename without `.json`. Non-`.json` regular
 /// files are ignored. Symlinks, nested directories, non-file entries,
 /// non-UTF-8 names, and empty or control-character stems are rejected.
-pub fn load_plan_directory(path: &Path) -> crate::Result<Vec<QueryPlan>> {
+pub fn load_plan_directory(path: &Path) -> model::Result<Vec<QueryPlan>> {
     let entries = std::fs::read_dir(path)
         .map_err(|error| format!("cannot list plan directory {}: {error}", path.display()))?;
     let mut budget = InputBudget::new();
@@ -84,7 +84,7 @@ pub fn load_plan_directory(path: &Path) -> crate::Result<Vec<QueryPlan>> {
     Ok(plans)
 }
 
-fn parse_explain(bytes: &[u8], query_id: &str) -> crate::Result<QueryPlan> {
+fn parse_explain(bytes: &[u8], query_id: &str) -> model::Result<QueryPlan> {
     let value: serde_json::Value = serde_json::from_slice(bytes)
         .map_err(|error| format!("invalid plan JSON {query_id:?}: {error}"))?;
     let statements = value.as_array().ok_or_else(|| {
@@ -110,7 +110,7 @@ fn parse_node(
     value: &serde_json::Value,
     query_id: &str,
     depth: usize,
-) -> crate::Result<PgPlanNode> {
+) -> model::Result<PgPlanNode> {
     if depth > MAX_PLAN_DEPTH {
         return Err(format!("plan nesting exceeds {MAX_PLAN_DEPTH} levels: {query_id:?}").into());
     }
@@ -163,7 +163,7 @@ fn qualified_relation(object: &serde_json::Map<String, serde_json::Value>) -> Op
 fn optional_cost(
     object: &serde_json::Map<String, serde_json::Value>,
     query_id: &str,
-) -> crate::Result<Option<f64>> {
+) -> model::Result<Option<f64>> {
     let Some(value) = object.get("Total Cost") else {
         return Ok(None);
     };
@@ -186,7 +186,7 @@ fn optional_count(
     object: &serde_json::Map<String, serde_json::Value>,
     key: &str,
     query_id: &str,
-) -> crate::Result<Option<u64>> {
+) -> model::Result<Option<u64>> {
     let Some(value) = object.get(key) else {
         return Ok(None);
     };
@@ -380,7 +380,7 @@ pub fn compare_plan_directories(
     current: &Path,
     baseline: &Path,
     limits: &PlanLimits,
-) -> crate::Result<PgPlanReport> {
+) -> model::Result<PgPlanReport> {
     let current_plans = load_plan_directory(current)?;
     let baseline_plans = load_plan_directory(baseline)?;
     let baseline_by_id: std::collections::BTreeMap<&str, &QueryPlan> = baseline_plans

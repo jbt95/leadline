@@ -219,7 +219,7 @@ fn run_optional_when(
     }
 }
 
-fn command_error(output: &Output) -> crate::Error {
+fn command_error(output: &Output) -> model::Error {
     String::from_utf8_lossy(&output.stderr)
         .trim()
         .to_owned()

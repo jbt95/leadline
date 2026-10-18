@@ -1,9 +1,9 @@
-use leadline::core::{
+use leadline::external::InputBudget;
+use leadline::test_relationships::ingest;
+use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
     MetricSpecs, OUTPUT_SCHEMA_VERSION,
 };
-use leadline::external::InputBudget;
-use leadline::test_relationships::ingest;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -70,19 +70,19 @@ fn analysis() -> AnalysisReport {
         files: vec![
             FileAnalysis {
                 path: "src/payment.ts".to_owned(),
-                language: leadline::core::Language::TypeScript,
+                language: model::core::Language::TypeScript,
                 functions: vec![function("charge", 10), function("charge", 30)],
                 parse_errors: vec![],
             },
             FileAnalysis {
                 path: "tests/payment.test.ts".to_owned(),
-                language: leadline::core::Language::TypeScript,
+                language: model::core::Language::TypeScript,
                 functions: vec![function("payment", 1)],
                 parse_errors: vec![],
             },
             FileAnalysis {
                 path: "tests/charge.test.ts".to_owned(),
-                language: leadline::core::Language::TypeScript,
+                language: model::core::Language::TypeScript,
                 functions: vec![function("chargeTest", 1)],
                 parse_errors: vec![],
             },

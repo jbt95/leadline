@@ -4,13 +4,13 @@
 //! preserved as provenance. Nothing here executes tools, resolves packages,
 //! or guesses function identity by name alone.
 
-use crate::Result;
-use crate::core::AnalysisReport;
 use crate::external::{
     INPUT_BYTES_LIMIT, InputBudget, read_bounded, strict_relative_path, validate_json_depth,
     validate_xml_preamble_and_depth,
 };
 use crate::source_snapshot::SourceEntry;
+use model::Result;
+use model::core::AnalysisReport;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use serde::Serialize;
@@ -171,7 +171,7 @@ pub fn ingest(
     let summary = summarize(&mutants);
     Ok(MutationReport {
         schema_version: MUTATION_SCHEMA_VERSION,
-        metric_profile: crate::core::METRIC_PROFILE,
+        metric_profile: model::core::METRIC_PROFILE,
         analyzer_version: env!("CARGO_PKG_VERSION"),
         model: MUTATION_MODEL,
         summary,
@@ -282,8 +282,8 @@ enum FunctionMatch {
     Ambiguous,
 }
 
-fn innermost_function(file: &crate::core::FileAnalysis, start: u32, end: u32) -> FunctionMatch {
-    let mut best: Option<&crate::core::FunctionAnalysis> = None;
+fn innermost_function(file: &model::core::FileAnalysis, start: u32, end: u32) -> FunctionMatch {
+    let mut best: Option<&model::core::FunctionAnalysis> = None;
     let mut ambiguous = false;
     for function in &file.functions {
         if function.start_line <= start && function.end_line >= end {

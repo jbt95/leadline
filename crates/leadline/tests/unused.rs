@@ -232,7 +232,7 @@ fn fixture_reports_exact_lists_and_identical_bytes_across_runs() {
     let report = analyze_unused(&root, &[], &[], &UnusedConfig::default()).unwrap();
 
     assert_eq!(report.schema_version, UNUSED_SCHEMA_VERSION);
-    assert_eq!(report.metric_profile, leadline::core::METRIC_PROFILE);
+    assert_eq!(report.metric_profile, model::core::METRIC_PROFILE);
     assert_eq!(report.analyzer_version, env!("CARGO_PKG_VERSION"));
     assert_eq!(report.files_analyzed, 6);
     assert_eq!(report.unresolved, 0);

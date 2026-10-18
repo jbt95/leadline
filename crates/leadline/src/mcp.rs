@@ -14,12 +14,12 @@
 
 use crate::agent::{SortKey, changed_causes};
 use crate::config::RegressionLimits;
-use crate::core::{
-    FunctionAnalysis, FunctionMetrics, METRIC_PROFILE, OUTPUT_SCHEMA_VERSION, Thresholds,
-};
 use crate::http::{
     DEFAULT_HOST, DEFAULT_PORT, JSON_CONTENT_TYPE, MAX_HTTP_BODY, Request, bad_request, bind,
     http_error, parse_port,
+};
+use model::core::{
+    FunctionAnalysis, FunctionMetrics, METRIC_PROFILE, OUTPUT_SCHEMA_VERSION, Thresholds,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::io::BufRead as _;
@@ -74,7 +74,7 @@ const TOOL_NAMES: [&str; 20] = [
 /// every line: live clients keep stdin open while waiting, so buffering
 /// until EOF would deadlock them into a request timeout. Lines past
 /// [`MAX_STDIO_LINE`] fail instead of growing a buffer without bound.
-pub fn serve() -> crate::Result<()> {
+pub fn serve() -> model::Result<()> {
     crate::telemetry::arm();
     let _ = TRANSPORT.set("stdio");
     let started = std::time::Instant::now();
@@ -88,7 +88,7 @@ pub fn serve() -> crate::Result<()> {
 }
 
 /// The stdio request loop, which ends at EOF on stdin.
-fn serve_stdio() -> crate::Result<()> {
+fn serve_stdio() -> model::Result<()> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
@@ -113,7 +113,7 @@ fn serve_stdio() -> crate::Result<()> {
 fn read_request_line(
     reader: &mut impl std::io::BufRead,
     limit: usize,
-) -> crate::Result<Option<String>> {
+) -> model::Result<Option<String>> {
     let mut line = String::new();
     let mut limited = std::io::Read::take(&mut *reader, limit as u64 + 1);
     let read = limited.read_line(&mut line)?;
@@ -181,7 +181,7 @@ pub fn parse_mcp_args(args: &[String]) -> Result<Option<HttpOptions>, String> {
 /// object (or batch array) as the body, and `GET /health` reports status
 /// for observability. Diagnostics go to stderr, including the actual port
 /// when a taken port falls back to a free one.
-pub fn serve_http(host: &str, port: u16) -> crate::Result<()> {
+pub fn serve_http(host: &str, port: u16) -> model::Result<()> {
     let (listener, actual, fell_back) = bind(host, port)?;
     if fell_back {
         eprintln!("leadline: port {port} in use, using free port {actual}");
@@ -610,7 +610,7 @@ fn arguments_or_empty(params: &serde_json::Value) -> serde_json::Value {
 // ---------------------------------------------------------------------------
 
 fn metric_specs() -> Result<serde_json::Value, (i64, String)> {
-    serde_json::to_value(crate::core::MetricSpecs::default())
+    serde_json::to_value(model::core::MetricSpecs::default())
         .map_err(|error| (-32603, format!("internal error: {error}")))
 }
 
@@ -672,7 +672,7 @@ fn agent_envelope(
 fn change_comparion(
     params: &serde_json::Value,
     tool: &str,
-) -> Result<Option<crate::security::ChangeComparison>, (i64, String)> {
+) -> Result<Option<model::security::ChangeComparison>, (i64, String)> {
     let base = opt_str(params, "base")?;
     let staged = opt_flag(params, "staged", tool)?;
     let target = opt_str(params, "target")?;
@@ -690,10 +690,10 @@ fn change_comparion(
     }
     Ok(match (base, staged, target) {
         (Some(revision), false, None) => {
-            Some(crate::security::ChangeComparison::Base(revision.to_owned()))
+            Some(model::security::ChangeComparison::Base(revision.to_owned()))
         }
-        (None, true, None) => Some(crate::security::ChangeComparison::Staged),
-        (None, false, Some(revision)) => Some(crate::security::ChangeComparison::Target(
+        (None, true, None) => Some(model::security::ChangeComparison::Staged),
+        (None, false, Some(revision)) => Some(model::security::ChangeComparison::Target(
             revision.to_owned(),
         )),
         (None, false, None) => None,
@@ -704,10 +704,10 @@ fn change_comparion(
 /// One `minimum_severity` gate floor, or an invalid-params error naming the choices.
 fn opt_gate_severity(
     params: &serde_json::Value,
-) -> Result<Option<crate::security::SecuritySeverity>, (i64, String)> {
+) -> Result<Option<model::security::SecuritySeverity>, (i64, String)> {
     Ok(match opt_str(params, "minimum_severity")? {
         None => None,
-        Some(raw) => Some(crate::security::parse_gate_severity(raw).ok_or((
+        Some(raw) => Some(model::security::parse_gate_severity(raw).ok_or((
             -32602,
             format!(
                 "unknown minimum_severity '{raw}': expected 'low', 'medium', 'high', or 'critical'"
@@ -1219,7 +1219,7 @@ fn mcp_quality_gate(
     gate: Option<&crate::config::QualityGateConfig>,
     thresholds: &Thresholds,
     scope: &'static str,
-    functions: Vec<&crate::core::FunctionAnalysis>,
+    functions: Vec<&model::core::FunctionAnalysis>,
 ) -> Option<crate::quality::QualityGateReport> {
     let gate = gate?;
     let suppressed_violations =
@@ -1328,7 +1328,7 @@ fn check_changed_rows(
 /// holds `(path, id)` keys that gain the `regression` reason (empty for plain
 /// checks, so plain paths behave exactly as before).
 fn check_path_rows(
-    report: &crate::core::AnalysisReport,
+    report: &model::core::AnalysisReport,
     thresholds: &Thresholds,
     regressed: &BTreeSet<(String, String)>,
     reuse: Option<crate::index::Reuse>,
@@ -2017,7 +2017,7 @@ fn tool_risk(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Stri
 fn analyze_optional_coverage(
     params: &serde_json::Value,
     path: &str,
-) -> Result<(crate::core::AnalysisReport, Vec<String>), (i64, String)> {
+) -> Result<(model::core::AnalysisReport, Vec<String>), (i64, String)> {
     let coverage = optional_coverage(params)?;
     let config = load_config(path)?;
     let excludes = config_excludes(config.as_ref());
@@ -2379,7 +2379,7 @@ fn analyze_read_only(
     path: &str,
     coverage: Option<&crate::coverage::CoverageMap>,
     excludes: &[String],
-) -> Result<(crate::core::AnalysisReport, Option<crate::index::Reuse>), (i64, String)> {
+) -> Result<(model::core::AnalysisReport, Option<crate::index::Reuse>), (i64, String)> {
     let index_dir = index_directory(params, config, path)?;
     if coverage.is_none()
         && let Some(dir) = index_dir

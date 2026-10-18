@@ -3,7 +3,7 @@
 //! This is the only networked code path in the project and it runs only for
 //! the explicit `leadline update` command. Everything else stays offline.
 
-use crate::Result;
+use model::Result;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -762,7 +762,7 @@ mod tests {
     }
 
     /// True when an error reports that a required external tool is absent.
-    fn missing_tool(error: &crate::Error) -> bool {
+    fn missing_tool(error: &model::Error) -> bool {
         error.to_string().contains("is required")
     }
 

@@ -1,7 +1,7 @@
 use leadline::security::{
-    FindingState, SecurityFinding, SecurityGate, SecurityInputs, SecurityReport, SecuritySeverity,
-    enrich, read_security_reports,
+    SecurityGate, SecurityInputs, SecurityReport, enrich, read_security_reports,
 };
+use model::security::{FindingState, SecurityFinding, SecuritySeverity};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 mod common;

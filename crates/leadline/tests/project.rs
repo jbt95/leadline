@@ -1,13 +1,13 @@
 use leadline::config::DuplicationConfig;
-use leadline::core::{
-    AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
-    MetricSpecs, OUTPUT_SCHEMA_VERSION,
-};
 use leadline::duplication::detect;
 use leadline::graph::{DependencyEdge, DependencyFile, DependencyReport};
 use leadline::history::{FileHistory, HISTORY_SCHEMA_VERSION, HistoryReport, HistoryWindow};
 use leadline::project::{PROJECT_SCHEMA_VERSION, ProjectInputs, build};
 use leadline::source_snapshot::SourceEntry;
+use model::core::{
+    AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE,
+    MetricSpecs, OUTPUT_SCHEMA_VERSION,
+};
 
 fn function(name: &str, cognitive: u32, loc: u32) -> FunctionAnalysis {
     FunctionAnalysis {
@@ -54,13 +54,13 @@ fn analysis() -> AnalysisReport {
         files: vec![
             FileAnalysis {
                 path: "src/a.ts".to_owned(),
-                language: leadline::core::Language::TypeScript,
+                language: model::core::Language::TypeScript,
                 functions: vec![function("f", 10, 5), function("g", 30, 7)],
                 parse_errors: vec![],
             },
             FileAnalysis {
                 path: "src/deep/b.ts".to_owned(),
-                language: leadline::core::Language::TypeScript,
+                language: model::core::Language::TypeScript,
                 functions: vec![function("h", 5, 3)],
                 parse_errors: vec![],
             },

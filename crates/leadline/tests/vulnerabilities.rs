@@ -1,5 +1,5 @@
-use leadline::security::{FindingState, SecuritySeverity};
 use leadline::vulnerabilities::{VulnerabilityInputs, read_vulnerability_reports};
+use model::security::{FindingState, SecuritySeverity};
 use std::path::PathBuf;
 mod common;
 use common::{temporary_directory, write_temp};

@@ -5,11 +5,11 @@
 //! merges after analysis, so any coverage input bypasses the index. Files with
 //! parse errors are never stored.
 
-use crate::core::{
+use crate::history::FileHistory;
+use model::core::{
     FunctionAnalysis, FunctionKind, FunctionMetrics, METRIC_PROFILE, MetricContribution,
     OUTPUT_SCHEMA_VERSION, SuppressionMetric,
 };
-use crate::history::FileHistory;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -18,7 +18,6 @@ use std::path::Path;
 // suppression facts, so it is rebuilt rather than reused.
 pub const INDEX_SCHEMA_VERSION: u32 = 2;
 pub const INDEX_FILE_NAME: &str = "index.json";
-pub const DEFAULT_INDEX_DIR: &str = ".leadline";
 
 /// Parser backend versions baked into the index key.
 /// Bump when tree-sitter or any grammar crate changes.
@@ -385,7 +384,7 @@ pub fn scope_label(path: &Path) -> String {
 pub fn load_entries(
     root: &Path,
     excludes: &[String],
-) -> crate::Result<Vec<crate::source_snapshot::SourceEntry>> {
+) -> model::Result<Vec<crate::source_snapshot::SourceEntry>> {
     let discovered = crate::discovery::discover_with_excludes(root, excludes)?;
     let mut entries = Vec::with_capacity(discovered.len());
     for file in discovered {
@@ -407,7 +406,7 @@ pub fn refresh_files(
     scope: &str,
     config_fingerprint: &str,
     entries: &[crate::source_snapshot::SourceEntry],
-) -> crate::Result<(crate::core::AnalysisReport, AnalysisIndex, Reuse)> {
+) -> model::Result<(model::core::AnalysisReport, AnalysisIndex, Reuse)> {
     let reusable = previous.filter(|index| index.is_usable(scope, config_fingerprint));
     let mut ordered: Vec<&crate::source_snapshot::SourceEntry> = entries.iter().collect();
     ordered.sort_by(|left, right| left.path.cmp(&right.path));
@@ -416,8 +415,8 @@ pub fn refresh_files(
     // `collect` preserves the path-sorted order and the serial pass below
     // assembles `files` and the index exactly as the serial version did.
     enum Outcome {
-        Reused(IndexedFile, crate::core::FileAnalysis),
-        Analyzed(String, crate::Result<crate::core::FileAnalysis>),
+        Reused(IndexedFile, model::core::FileAnalysis),
+        Analyzed(String, model::Result<model::core::FileAnalysis>),
     }
     let outcomes: Vec<Outcome> = ordered
         .par_iter()
@@ -475,16 +474,16 @@ pub fn refresh_files(
 fn rebuild(
     entry: &crate::source_snapshot::SourceEntry,
     file: &IndexedFile,
-) -> Option<crate::core::FileAnalysis> {
+) -> Option<model::core::FileAnalysis> {
     let language = crate::parser::detect_language(&entry.path)?;
-    Some(crate::core::FileAnalysis {
+    Some(model::core::FileAnalysis {
         path: entry.path.clone(),
         language,
         functions: file
             .functions
             .iter()
             .cloned()
-            .map(crate::core::FunctionAnalysis::from)
+            .map(model::core::FunctionAnalysis::from)
             .collect(),
         parse_errors: Vec::new(),
     })
@@ -531,7 +530,7 @@ pub struct IndexOutcome {
 }
 
 /// Build or refresh the index, then write it.
-pub fn build(request: &IndexRequest<'_>) -> crate::Result<IndexOutcome> {
+pub fn build(request: &IndexRequest<'_>) -> model::Result<IndexOutcome> {
     let stored = std::fs::read(request.index_dir.join(INDEX_FILE_NAME)).ok();
     let previous = if request.verify {
         None
@@ -601,10 +600,10 @@ fn resolve_file_key(display: &str, previous: &AnalysisIndex) -> String {
 
 /// Point `analysis` at the cold display path, re-deriving function ids so a
 /// repository-relative entry reports exactly what a cold file analysis would.
-fn retarget_to_display(analysis: &mut crate::core::FileAnalysis, display: &str) {
+fn retarget_to_display(analysis: &mut model::core::FileAnalysis, display: &str) {
     analysis.path = display.to_owned();
     for function in &mut analysis.functions {
-        function.id = crate::core::function_id(
+        function.id = model::core::function_id(
             display,
             function.kind,
             function.start_byte,
@@ -626,7 +625,7 @@ pub fn refresh_file_index(
     file: &Path,
     previous: &AnalysisIndex,
     config_fingerprint: &str,
-) -> crate::Result<(crate::core::AnalysisReport, AnalysisIndex, Reuse)> {
+) -> model::Result<(model::core::AnalysisReport, AnalysisIndex, Reuse)> {
     let display = crate::normalize_path(file);
     let bytes = std::fs::read(file)?;
     let usable = file_reusable(previous, config_fingerprint);
@@ -674,7 +673,7 @@ pub fn warm_report(
     scope: &str,
     config_fingerprint: &str,
     excludes: &[String],
-) -> crate::Result<(crate::core::AnalysisReport, Reuse)> {
+) -> model::Result<(model::core::AnalysisReport, Reuse)> {
     let previous = AnalysisIndex::open(index_dir);
     warm_report_with(&previous, root, scope, config_fingerprint, excludes)
 }
@@ -686,7 +685,7 @@ pub fn warm_report_with(
     scope: &str,
     config_fingerprint: &str,
     excludes: &[String],
-) -> crate::Result<(crate::core::AnalysisReport, Reuse)> {
+) -> model::Result<(model::core::AnalysisReport, Reuse)> {
     if root.is_file() {
         let (report, _, reuse) = refresh_file_index(root, previous, config_fingerprint)?;
         return Ok((report, reuse));

@@ -5,7 +5,7 @@
 //! analysis root. This module owns the one set of limits every adapter uses,
 //! so the rules exist once and adapters stay small.
 
-use crate::Result;
+use model::Result;
 use std::path::Path;
 
 /// Per-file external report limit.

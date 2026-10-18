@@ -1,13 +1,13 @@
 //! Coverage-aware test targets: rank functions by uncovered risk.
 //!
-//! Pure over an already-covered [`AnalysisReport`](crate::core::AnalysisReport):
+//! Pure over an already-covered [`AnalysisReport`](model::core::AnalysisReport):
 //! a contribution line is uncovered only with known zero hits, covered with
 //! any positive hit count, and unknown when no record names the line.
 //! Unknown lines are reported separately and never count as uncovered.
 //! Test-targets ranks line-coverage gaps only; branch data feeds function coverage/CRAP.
 
-use crate::core::{AnalysisReport, MetricContribution};
 use crate::coverage::CoverageMap;
+use model::core::{AnalysisReport, MetricContribution};
 use serde::Serialize;
 
 /// One function worth testing: identity, risk, and decision lines by state.

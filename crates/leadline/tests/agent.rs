@@ -1,11 +1,11 @@
 use leadline::agent::{
     Budget, analyze_agent_json, changed_agent_json, changed_agent_json_budgeted,
 };
-use leadline::core::{
+use leadline::diff::{ChangedReport, FunctionChange};
+use model::core::{
     AnalysisReport, FileAnalysis, FunctionAnalysis, FunctionKind, FunctionMetrics, Language,
     MetricContribution, MetricSpecs,
 };
-use leadline::diff::{ChangedReport, FunctionChange};
 use serde_json::json;
 
 fn metrics(

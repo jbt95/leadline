@@ -1,6 +1,6 @@
 //! SARIF 2.1.0 output for GitHub code scanning and other SARIF consumers.
 
-use crate::core::{AnalysisReport, FunctionMetrics, Thresholds};
+use model::core::{AnalysisReport, FunctionMetrics, Thresholds};
 use serde_json::{Value, json};
 
 const SARIF_SCHEMA: &str =
@@ -237,7 +237,7 @@ fn pg_plan_message(violation: &crate::pg_plan::QueryPlanChange) -> String {
 /// message `"{tool} finding {rule_id}"`. Scanner messages, snippets, and
 /// source text never cross over. Pathless findings carry no locations.
 /// Callers pass the full report or only gate violations.
-pub fn security_findings_to_sarif(findings: &[crate::security::SecurityFinding]) -> Value {
+pub fn security_findings_to_sarif(findings: &[model::security::SecurityFinding]) -> Value {
     let mut seen = std::collections::BTreeSet::new();
     let mut rules = Vec::new();
     for finding in findings {
@@ -279,13 +279,13 @@ pub fn security_findings_to_sarif(findings: &[crate::security::SecurityFinding])
 }
 
 /// SARIF level from normalized severity, shared by every scanner projection.
-fn severity_level(severity: crate::security::SecuritySeverity) -> &'static str {
+fn severity_level(severity: model::security::SecuritySeverity) -> &'static str {
     match severity {
-        crate::security::SecuritySeverity::Critical | crate::security::SecuritySeverity::High => {
+        model::security::SecuritySeverity::Critical | model::security::SecuritySeverity::High => {
             "error"
         }
-        crate::security::SecuritySeverity::Medium => "warning",
-        crate::security::SecuritySeverity::Low | crate::security::SecuritySeverity::Unknown => {
+        model::security::SecuritySeverity::Medium => "warning",
+        model::security::SecuritySeverity::Low | model::security::SecuritySeverity::Unknown => {
             "note"
         }
     }
@@ -440,8 +440,8 @@ fn violations(metrics: &FunctionMetrics, thresholds: &Thresholds) -> Vec<(&'stat
 /// never a synthetic limit. Rule IDs stay dimension-level so consumers group
 /// absolute and regression results per metric.
 pub fn regression_violations<'a>(
-    before: &crate::core::FunctionAnalysis,
-    after: &crate::core::FunctionAnalysis,
+    before: &model::core::FunctionAnalysis,
+    after: &model::core::FunctionAnalysis,
     limits: &crate::config::RegressionLimits,
     path: &'a str,
 ) -> Vec<FunctionViolation<'a>> {
@@ -498,8 +498,8 @@ pub fn regression_violations<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FileAnalysis, FunctionAnalysis, FunctionKind, Language, MetricSpecs};
     use crate::pg_plan::{PlanRegressionKind, QueryPlanChange};
+    use model::core::{FileAnalysis, FunctionAnalysis, FunctionKind, Language, MetricSpecs};
 
     fn metrics(
         cognitive: u32,

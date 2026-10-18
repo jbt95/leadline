@@ -6,8 +6,8 @@
 //! complete per-side scores and expose component deltas.
 
 use crate::config::Thresholds;
-use crate::core::{FileAnalysis, FunctionAnalysis};
 use crate::risk::RiskReport;
+use model::core::{FileAnalysis, FunctionAnalysis};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -136,8 +136,8 @@ pub fn risk_entries(report: &RiskReport) -> Vec<RiskSideEntry> {
 /// Unlike changed-code pairing, unchanged fingerprints are kept: `existing`
 /// debt is only visible when clean pairs are present.
 pub fn pair_complete<'a>(
-    before: &'a [&'a crate::core::FileAnalysis],
-    after: &'a [&'a crate::core::FileAnalysis],
+    before: &'a [&'a model::core::FileAnalysis],
+    after: &'a [&'a model::core::FileAnalysis],
 ) -> Vec<(
     String,
     Option<&'a FunctionAnalysis>,
@@ -187,8 +187,8 @@ pub fn pair_complete<'a>(
 
 /// Classifies threshold-state transitions over complete paired functions.
 pub fn classify(
-    before_files: &[&crate::core::FileAnalysis],
-    after_files: &[&crate::core::FileAnalysis],
+    before_files: &[&model::core::FileAnalysis],
+    after_files: &[&model::core::FileAnalysis],
     thresholds: &Thresholds,
 ) -> (Vec<DebtFinding>, u64) {
     let mut findings = Vec::new();

@@ -2,7 +2,6 @@ pub mod agent;
 pub mod analytics;
 pub mod baseline;
 pub mod config;
-pub mod core;
 pub mod coupling;
 pub mod coverage;
 pub mod debt;
@@ -41,16 +40,15 @@ pub mod unused;
 pub mod update;
 pub mod vulnerabilities;
 
-use crate::core::{
-    AnalysisReport, FileAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION,
-};
 use crate::coverage::CoverageMap;
 use crate::parser::{ParserBackend, TreeSitterBackend};
 use crate::source_snapshot::SourceEntry;
+use model::Result;
+use model::core::{
+    AnalysisReport, FileAnalysis, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION,
+};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
-pub type Error = Box<dyn std::error::Error + Send + Sync>;
-pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub fn analyze_path(path: &Path, coverage: Option<&CoverageMap>) -> Result<AnalysisReport> {
     analyze_path_with_excludes(path, coverage, &[])

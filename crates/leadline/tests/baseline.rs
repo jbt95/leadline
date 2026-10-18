@@ -1,5 +1,5 @@
 use leadline::config::RegressionLimits;
-use leadline::core::{AnalysisReport, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION};
+use model::core::{AnalysisReport, METRIC_PROFILE, MetricSpecs, OUTPUT_SCHEMA_VERSION};
 
 const SIMPLE: &[u8] = b"function calc(x: boolean) { return 1; }\n";
 const COMPLEX: &[u8] =

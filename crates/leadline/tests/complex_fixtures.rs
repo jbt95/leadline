@@ -137,7 +137,7 @@ fn complex_scanner_reports_deduplicate_enrich_and_gate() {
     assert!(injection.function_id.is_some());
     assert_eq!(injection.changed, Some(true));
     let security_gate = leadline::security::SecurityGate {
-        minimum: leadline::security::SecuritySeverity::High,
+        minimum: model::security::SecuritySeverity::High,
         new_only: true,
         changed_only: true,
     };
@@ -186,7 +186,7 @@ fn complex_scanner_reports_deduplicate_enrich_and_gate() {
     assert_eq!(
         leadline::vulnerabilities::vulnerability_gate_violations(
             &vulnerabilities,
-            leadline::security::SecuritySeverity::High,
+            model::security::SecuritySeverity::High,
         )
         .len(),
         1

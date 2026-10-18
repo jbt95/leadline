@@ -1,5 +1,5 @@
-use crate::Result;
-use crate::core::{FileAnalysis, FunctionAnalysis, apply_coverage};
+use model::Result;
+use model::core::{FileAnalysis, FunctionAnalysis, apply_coverage};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};

@@ -1,4 +1,4 @@
-use leadline::core::{FileAnalysis, FunctionAnalysis, FunctionKind};
+use model::core::{FileAnalysis, FunctionAnalysis, FunctionKind};
 use std::path::Path;
 
 fn fixture(relative: &str) -> FileAnalysis {
