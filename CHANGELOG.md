@@ -4,6 +4,8 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+## 1.1.1 - 2026-10-21
+
 ### Added
 
 - MCP HTTP authentication: `--token TOKEN` (or `LEADLINE_MCP_TOKEN`) requires
