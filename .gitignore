@@ -1,5 +1,6 @@
 /target/
 .leadline/
+.mcp-test/
 node_modules/
 .pi
 docs/superpowers

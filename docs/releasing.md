@@ -14,6 +14,13 @@ from the conventional commits since the last tag:
 | `!` after the type or scope, or `BREAKING CHANGE:` in the body | major |
 | anything else (`docs`, `chore`, `ci`, `test`, `refactor`, merges) | none |
 
+The `PR title` workflow validates every pull request title against
+`type(scope)!: summary` (allowed types: `build`, `chore`, `ci`, `docs`,
+`feat`, `fix`, `perf`, `refactor`, `revert`, `style`, `test`). Because a squash
+merge takes its commit title from the pull request title, a title that fails
+this check cannot land on `main` as a commit the release inference ignores.
+Editing the title re-runs the check.
+
 `scripts/release.sh` does the work: it bumps the version in `Cargo.toml`,
 `Cargo.lock`, `package.json`, `integrations/agent-adapter-ts/package.json`,
 `integrations/agent-adapter-ts/package-lock.json`,
@@ -53,7 +60,7 @@ workflow; `workflow_dispatch` can release an existing tag by name.
 
 ## What the release workflow does
 
-1. Build: each matrix entry runs `cargo build --release --locked --target <target>` on its runner, then archives the `leadline` binary as `leadline-<target>.tar.gz` (Unix) or `leadline-<target>.zip` (Windows). `--locked` pins the build to the committed `Cargo.lock`.
+1. Build: each matrix entry installs the pinned Rust 1.90 toolchain (`bash scripts/ci-install-rust.sh exact`), then runs `cargo +1.90 build --release --locked --target <target>` and archives the `leadline` binary as `leadline-<target>.tar.gz` (Unix) or `leadline-<target>.zip` (Windows). The runner's default toolchain never builds a release, and `--locked` pins the build to the committed `Cargo.lock`.
 2. SBOM: the `publish` job scans the tag source with pinned `anchore/sbom-action` (syft `v1.51.1`) and writes CycloneDX JSON to `dist/leadline.cyclonedx.json`.
 3. VERSION and checksums: the publish job writes the tag name to `dist/VERSION`, then `cd dist && sha256sum * > SHA256SUMS` covers every archive, the SBOM, and `VERSION`.
 4. Publish: `gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"` creates the release when it does not exist yet, then `gh release upload "$TAG" dist/* --clobber` attaches every artifact, retried up to five times. `--verify-tag` aborts unless the tag resolves, so a release always names the commit it was built from.

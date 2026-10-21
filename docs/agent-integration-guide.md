@@ -146,7 +146,9 @@ telemetry under its own tool name, so `analyze` and `check` are counted and
 timed separately.
 
 The
-default transport is stdio (`leadline mcp`), matching every `command: leadline, args: [mcp]` harness config; `leadline mcp --port [N] [--host ADDR]` serves the same tools over HTTP (`POST /mcp`, `GET /health`). A bare `--port` means 3000, `0` asks the OS, and a taken port falls back to a free one with the actual address on stderr.
+default transport is stdio (`leadline mcp`), matching every `command: leadline, args: [mcp]` harness config; `leadline mcp --port [N] [--host ADDR] [--token TOKEN]` serves the same tools over HTTP (`POST /mcp`, `GET /health`). A bare `--port` means 3000, `0` asks the OS, and a taken port falls back to a free one with the actual address on stderr. A non-loopback `--host` requires a token (`--token` or `LEADLINE_MCP_TOKEN`), and every request then needs `Authorization: Bearer TOKEN` or it gets `403`.
+
+`initialize` negotiates `protocolVersion` against the supported revisions `2025-11-25`, `2025-06-18`, `2025-03-26`, and `2024-11-05`. A supported request is echoed; any other or missing version is answered with `2025-11-25` rather than echoed back as support. Every caller path (`path`, coverage files, reuse indexes, and artifact files) must stay inside the working directory; absolute paths outside it and `..` traversal are rejected with `-32602`.
 
 HTTP limits apply to every request: 32 MiB body, 64 KiB of headers, an 8 KiB line cap, a five-second whole-request read deadline, a ten-second whole-response write deadline, and 64 concurrent connections (excess connections get 503). At most 64 MiB of request bodies may be buffered across all connections; further declared bodies get 503 instead of multiplying memory. Only HTTP/1.1 is spoken (505 otherwise), malformed request lines and header lines are 400, `Transfer-Encoding` is 501, empty POST bodies are 400, and a request must carry exactly one `Host` and one `Content-Length`. Loopback-bound listeners only accept loopback authorities; browser `Origin`s must be loopback `http(s)` origins (scheme-less origins are rejected). JSON-RPC batches are capped at 64 …
 

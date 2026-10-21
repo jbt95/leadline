@@ -475,6 +475,7 @@ fn mcp_tool_calls_and_gate_failures_are_recorded() {
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_leadline"))
         .arg("mcp")
+        .current_dir(&root)
         .env(VAR, &metrics)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -497,7 +498,7 @@ fn mcp_tool_calls_and_gate_failures_are_recorded() {
             "params": {
                 "name": "check",
                 "arguments": {
-                    "path": root.to_string_lossy(),
+                    "path": ".",
                     "thresholds": { "cognitive": 1 }
                 }
             }

@@ -450,6 +450,7 @@ const LABEL_VALUES: &[(&str, &[&str])] = &[
             "http_bad_request",
             "http_busy",
             "origin_rejected",
+            "unauthorized",
             "body_budget_exhausted",
         ],
     ),

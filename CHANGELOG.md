@@ -4,8 +4,38 @@ All notable changes use this file. Version numbers follow Semantic Versioning.
 
 ## Unreleased
 
+### Added
+
+- MCP HTTP authentication: `--token TOKEN` (or `LEADLINE_MCP_TOKEN`) requires
+  `Authorization: Bearer TOKEN` on every request, including `/health`. A
+  non-loopback `--host` refuses to serve without a token, and a missing or wrong
+  token answers `403` without revealing whether the token was close.
+
+### Changed
+
+- MCP `initialize` negotiates `protocolVersion` against the revisions the server
+  implements (`2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`). A
+  supported request is echoed; an unsupported or missing version is answered
+  with `2025-11-25` instead of being echoed back as support the server does not
+  have.
+
+### Security
+
+- MCP tool paths are contained to the working directory: `path`, coverage
+  files, reuse indexes, and artifact files reject absolute paths outside it,
+  `..` traversal, and symlinks that resolve outside it with `-32602`.
+
+### Performance
+
+- Parser: detect direct recursion during the complexity walk instead of walking
+  each function body a second time, removing one full body walk per function.
+
 ### Fixed
 
+- Release builds use the pinned Rust 1.90 toolchain instead of the runner
+  default, so release binaries match the toolchain CI verifies.
+- Pull request titles are validated as conventional commits, so a squash merge
+  cannot land on `main` with a title the release inference ignores.
 - CI: skip redundant `rustup` downloads when the runner already meets MSRV
   1.90; otherwise install the pinned toolchain with bounded retries instead of
   `rustup update stable`, so transient DNS failures during toolchain setup do not

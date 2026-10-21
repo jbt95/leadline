@@ -79,14 +79,14 @@ leadline changed --base origin/main --format agent-json
    "before": {"cognitive": 12}, "after": {"cognitive": 24}}]}
 ```
 
-**MCP server** (read-only; stdio by default, HTTP with `--port`). The server advertises the twenty analyzer tools directly: `tools/list` returns each name with its own JSON Schema, and `tools/call` routes a name straight to its analyzer. The tools are `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `security_findings`, `sql_plan`, `vulnerabilities`, `sql_risks`, `test_targets`, `dependencies`, `impact`, `coupling`, `hotspots`, `duplication`, `policy`, `risk`, `debt`, and `project`. Each returns analysis data only and none accepts caller-supplied code, so no script can compose them; filesystem access stays inside the reads the analysis path already performs, and the only subprocess is the fixed-argument `git` adapter. Its only writes are the opt-in local metrics store ([docs/telemetry.md](docs/telemetry.md)):
+**MCP server** (read-only; stdio by default, HTTP with `--port`). The server advertises the twenty analyzer tools directly: `tools/list` returns each name with its own JSON Schema, and `tools/call` routes a name straight to its analyzer. The tools are `analyze`, `analyze_changed`, `analyze_function`, `check`, `explain_metric`, `repo_summary`, `security_findings`, `sql_plan`, `vulnerabilities`, `sql_risks`, `test_targets`, `dependencies`, `impact`, `coupling`, `hotspots`, `duplication`, `policy`, `risk`, `debt`, and `project`. Each returns analysis data only and none accepts caller-supplied code, so no script can compose them; filesystem access stays inside the working directory, and the only subprocess is the fixed-argument `git` adapter. Its only writes are the opt-in local metrics store ([docs/telemetry.md](docs/telemetry.md)):
 
 ```console
 leadline mcp
 leadline mcp --port 3000
 ```
 
-A bare `--port` means 3000 (`0` asks the OS for a free port); when the requested port is taken the server picks a free one and prints the actual address to stderr. `GET /health` reports status in HTTP mode.
+A bare `--port` means 3000 (`0` asks the OS for a free port); when the requested port is taken the server picks a free one and prints the actual address to stderr. `GET /health` reports status in HTTP mode. A non-loopback `--host` requires `--token TOKEN` (or `LEADLINE_MCP_TOKEN`), and every request then needs `Authorization: Bearer TOKEN`; a remote bind without a token is a usage error.
 
 A call is a `tools/call` request naming one tool and its arguments, and the
 result is the MCP `CallToolResult` envelope: the report as a `content` text

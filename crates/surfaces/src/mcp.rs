@@ -135,14 +135,18 @@ fn read_request_line(
 pub struct HttpOptions {
     pub host: String,
     pub port: u16,
+    /// Bearer token required on every HTTP request; `None` disables auth.
+    pub token: Option<String>,
 }
 
 /// Parse `mcp` arguments: `--port [N]` enables HTTP mode (a bare `--port`
-/// means [`DEFAULT_PORT`], `0` asks the OS for a free port) and
-/// `--host ADDR` sets the bind address (default loopback).
+/// means [`DEFAULT_PORT`], `0` asks the OS for a free port), `--host ADDR`
+/// sets the bind address (default loopback), and `--token TOKEN` requires a
+/// bearer token on every request.
 pub fn parse_mcp_args(args: &[String]) -> Result<Option<HttpOptions>, String> {
     let mut host: Option<String> = None;
     let mut port: Option<u16> = None;
+    let mut token: Option<String> = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -161,6 +165,17 @@ pub fn parse_mcp_args(args: &[String]) -> Result<Option<HttpOptions>, String> {
                         .ok_or_else(|| "--host requires an address".to_owned())?,
                 );
             }
+            "--token" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| "--token requires a value".to_owned())?;
+                if value.is_empty() {
+                    return Err("--token must not be empty".to_owned());
+                }
+                token = Some(value);
+            }
             other => return Err(format!("unknown mcp option '{other}'")),
         }
         index += 1;
@@ -169,10 +184,13 @@ pub fn parse_mcp_args(args: &[String]) -> Result<Option<HttpOptions>, String> {
         Some(port) => Ok(Some(HttpOptions {
             host: host.unwrap_or_else(|| DEFAULT_HOST.to_owned()),
             port,
+            token,
         })),
-        // `--host` only configures the HTTP transport; silently ignoring it
-        // would start stdio with a flag the caller believes is active.
+        // `--host` and `--token` configure only the HTTP transport; silently
+        // ignoring them would start stdio with a flag the caller believes is
+        // active.
         None if host.is_some() => Err("--host requires --port".to_owned()),
+        None if token.is_some() => Err("--token requires --port".to_owned()),
         None => Ok(None),
     }
 }
@@ -180,25 +198,38 @@ pub fn parse_mcp_args(args: &[String]) -> Result<Option<HttpOptions>, String> {
 /// Serve the same JSON-RPC API over HTTP: `POST /mcp` takes a request
 /// object (or batch array) as the body, and `GET /health` reports status
 /// for observability. Diagnostics go to stderr, including the actual port
-/// when a taken port falls back to a free one.
-pub fn serve_http(host: &str, port: u16) -> model::Result<()> {
+/// when a taken port falls back to a free one. When `token` is set, every
+/// request must carry it as `Authorization: Bearer <token>`.
+pub fn serve_http(host: &str, port: u16, token: Option<String>) -> model::Result<()> {
     let (listener, actual, fell_back) = bind(host, port)?;
     if fell_back {
         eprintln!("leadline: port {port} in use, using free port {actual}");
     }
-    eprintln!("leadline MCP listening on http://{host}:{actual}/mcp");
+    let auth = if token.is_some() {
+        " (bearer auth required)"
+    } else {
+        ""
+    };
+    eprintln!("leadline MCP listening on http://{host}:{actual}/mcp{auth}");
     crate::telemetry::arm();
     let _ = TRANSPORT.set("http");
-    crate::http::serve(listener, |request| {
-        let (status, body) = route_http(request);
+    crate::http::serve(listener, move |request| {
+        let (status, body) = route_http(request, token.as_deref());
         (status, JSON_CONTENT_TYPE, body.into_bytes())
     });
     Ok(())
 }
 
 /// Route one HTTP request to the shared JSON-RPC handler, after the transport
-/// guards accepted its `Host` and `Origin`.
-fn route_http(request: &Request) -> (u16, String) {
+/// guards accepted its `Host` and `Origin` and the optional bearer token was
+/// verified.
+fn route_http(request: &Request, token: Option<&str>) -> (u16, String) {
+    if let Some(token) = token
+        && !bearer_token_matches(request.authorization.as_deref(), token)
+    {
+        crate::telemetry::record_mcp_error("http", "unauthorized");
+        return (403, http_error("missing or invalid bearer token"));
+    }
     let path = request.path.split('?').next().unwrap_or(&request.path);
     match (request.method.as_str(), path) {
         ("GET", "/health") => (
@@ -227,6 +258,29 @@ fn route_http(request: &Request) -> (u16, String) {
         ("GET", "/mcp") => (405, http_error("use POST /mcp with a JSON-RPC body")),
         _ => (404, http_error("not found: try POST /mcp or GET /health")),
     }
+}
+
+/// `true` when an `Authorization` header carries exactly the configured
+/// bearer token. The scheme is case-insensitive per RFC 7235; the token is
+/// compared in constant time so a remote attacker cannot count matching
+/// bytes from response timing.
+fn bearer_token_matches(header: Option<&str>, token: &str) -> bool {
+    let Some((scheme, presented)) = header.and_then(|value| value.split_once(' ')) else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return false;
+    }
+    let presented = presented.trim().as_bytes();
+    let expected = token.as_bytes();
+    if presented.len() != expected.len() {
+        return false;
+    }
+    presented
+        .iter()
+        .zip(expected)
+        .fold(0u8, |difference, (left, right)| difference | (left ^ right))
+        == 0
 }
 
 /// Handle one raw input line, returning the response line if any.
@@ -732,14 +786,18 @@ fn agent_field(agent: &serde_json::Value, key: &str) -> serde_json::Value {
     agent.get(key).cloned().unwrap_or_default()
 }
 
-/// Optional coverage file, auto-detected by extension.
+/// Optional coverage file, auto-detected by extension. The path is contained
+/// to the working directory like every other caller-supplied read.
 fn optional_coverage(
     params: &serde_json::Value,
+    tool: &str,
 ) -> Result<Option<parse::coverage::CoverageMap>, (i64, String)> {
     opt_str(params, "coverage")?
-        .map(load_coverage_file)
+        .map(|path| {
+            let resolved = contained_path(tool, "coverage", Path::new(path))?;
+            load_coverage_file(&resolved).map_err(|message| (-32602, message))
+        })
         .transpose()
-        .map_err(|message| (-32602, message))
 }
 
 // ---------------------------------------------------------------------------
@@ -984,13 +1042,19 @@ fn tool_analyze(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
         "analyze",
         &["path", "coverage", "top", "sort_by", "min_crap", "index"],
     )?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "analyze")?;
     let budget = parse_tool_budget(params, false)?;
-    let coverage = optional_coverage(params)?;
+    let coverage = optional_coverage(params, "analyze")?;
     let config = load_config(path)?;
     let excludes = config_excludes(config.as_ref());
-    let (report, reuse) =
-        analyze_read_only(params, config.as_ref(), path, coverage.as_ref(), &excludes)?;
+    let (report, reuse) = analyze_read_only(
+        params,
+        "analyze",
+        config.as_ref(),
+        path,
+        coverage.as_ref(),
+        &excludes,
+    )?;
     let mut rows = Vec::new();
     for file in &report.files {
         for function in &file.functions {
@@ -1033,7 +1097,7 @@ fn tool_analyze_changed(params: &serde_json::Value) -> Result<serde_json::Value,
         ],
     )?;
     let base = opt_str(params, "base")?.unwrap_or("HEAD~1");
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "analyze_changed")?;
     let target = match opt_str(params, "target")? {
         None | Some("worktree") => analysis::diff::ComparisonTarget::Worktree,
         Some("index") => analysis::diff::ComparisonTarget::Index,
@@ -1127,6 +1191,7 @@ fn change_delta(
 fn tool_analyze_function(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     reject_unknown(params, "analyze_function", &["path", "function", "explain"])?;
     let path = req_str(params, "path")?;
+    contained_path("analyze_function", "path", Path::new(path))?;
     let function = req_str(params, "function")?;
     let file = PathBuf::from(path);
     let root = file
@@ -1389,7 +1454,7 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
             "regressions",
         ],
     )?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "check")?;
     let config = load_config(path)?;
     let regression_limits = parse_regression_limits(params, config.as_ref())?;
     let base = opt_str(params, "base")?;
@@ -1413,7 +1478,7 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
     if let Some(config) = config.as_ref() {
         fill_thresholds(&mut thresholds, config);
     }
-    let coverage = optional_coverage(params)?;
+    let coverage = optional_coverage(params, "check")?;
     let excludes = config_excludes(config.as_ref());
     let gate = config
         .as_ref()
@@ -1435,14 +1500,23 @@ fn tool_check(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Str
         )?
     } else {
         let baseline = match baseline_path {
-            Some(file) => Some(
-                artifacts::baseline::Baseline::read(Path::new(file))
-                    .map_err(|error| (-32602, error.to_string()))?,
-            ),
+            Some(file) => {
+                let file = contained_path("check", "baseline", Path::new(file))?;
+                Some(
+                    artifacts::baseline::Baseline::read(&file)
+                        .map_err(|error| (-32602, error.to_string()))?,
+                )
+            }
             None => None,
         };
-        let (report, reuse) =
-            analyze_read_only(params, config.as_ref(), path, coverage.as_ref(), &excludes)?;
+        let (report, reuse) = analyze_read_only(
+            params,
+            "check",
+            config.as_ref(),
+            path,
+            coverage.as_ref(),
+            &excludes,
+        )?;
         let regressed: BTreeSet<(String, String)> =
             match (baseline.as_ref(), regression_limits.as_ref()) {
                 (Some(baseline), Some(limits)) => baseline
@@ -1702,7 +1776,7 @@ fn tool_explain_metric(params: &serde_json::Value) -> Result<serde_json::Value, 
 
 fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     reject_unknown(params, "repo_summary", &["path", "top", "coverage"])?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "repo_summary")?;
     let top = match params.get("top") {
         None | Some(serde_json::Value::Null) => 5,
         Some(value) => {
@@ -1720,7 +1794,7 @@ fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i
             count
         }
     };
-    let coverage = optional_coverage(params)?;
+    let coverage = optional_coverage(params, "repo_summary")?;
     let report = {
         let config = load_config(path)?;
         let excludes = config_excludes(config.as_ref());
@@ -1780,13 +1854,14 @@ fn tool_repo_summary(params: &serde_json::Value) -> Result<serde_json::Value, (i
 
 fn tool_test_targets(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     reject_unknown(params, "test_targets", &["path", "coverage", "top"])?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "test_targets")?;
     let coverage_path = opt_str(params, "coverage")?.ok_or((
         -32602,
         "test_targets requires a coverage file path".to_owned(),
     ))?;
     let top = parse_top_param(params, MAX_ENTRIES)?;
-    let coverage = load_coverage_file(coverage_path).map_err(|message| (-32602, message))?;
+    let coverage_path = contained_path("test_targets", "coverage", Path::new(coverage_path))?;
+    let coverage = load_coverage_file(&coverage_path).map_err(|message| (-32602, message))?;
     let config = load_config(path)?;
     let excludes = config_excludes(config.as_ref());
     let report = parse::analyze_path_with_excludes(Path::new(path), Some(&coverage), &excludes)
@@ -1818,7 +1893,7 @@ fn tool_test_targets(params: &serde_json::Value) -> Result<serde_json::Value, (i
 
 fn tool_dependencies(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     reject_unknown(params, "dependencies", &["path"])?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "dependencies")?;
     let config = load_config(path)?;
     let excludes = config_excludes(config.as_ref());
     let report = analysis::graph::analyze_dependencies(Path::new(path), &excludes)
@@ -1845,7 +1920,7 @@ fn tool_dependencies(params: &serde_json::Value) -> Result<serde_json::Value, (i
 fn tool_impact(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     reject_unknown(params, "impact", &["target", "path", "top"])?;
     let target = req_str(params, "target")?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "impact")?;
     let top = parse_top_param(params, 20)?;
     let root = Path::new(path);
     if !root.is_dir() {
@@ -1891,7 +1966,7 @@ fn tool_coupling(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
         &["target", "path", "top", "min_cochanges"],
     )?;
     let target = req_str(params, "target")?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "coupling")?;
     let top = parse_top_param(params, 20)?;
     let min_cochanges = match params.get("min_cochanges") {
         None | Some(serde_json::Value::Null) => 2_u64,
@@ -1935,10 +2010,10 @@ fn tool_coupling(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
 
 fn tool_hotspots(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     reject_unknown(params, "hotspots", &["path", "top", "since", "coverage"])?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "hotspots")?;
     let top = parse_top_param(params, 10)?;
     let window = parse_since(params, codegraph::history::HistoryWindow::Days90)?;
-    let (analysis, _) = analyze_optional_coverage(params, path)?;
+    let (analysis, _) = analyze_optional_coverage(params, "hotspots", path)?;
     let history = codegraph::history::analyze_history(&config_dir(path))
         .map_err(|error| (-32602, error.to_string()))?;
     let report = analysis::hotspots::build(&analysis, &history, window, top);
@@ -1960,7 +2035,7 @@ fn tool_hotspots(params: &serde_json::Value) -> Result<serde_json::Value, (i64, 
 
 fn tool_duplication(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     reject_unknown(params, "duplication", &["path", "base"])?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "duplication")?;
     let base = opt_str(params, "base")?;
     let outcome = report::analytics::analyze_duplication(
         Path::new(path),
@@ -1981,7 +2056,7 @@ fn tool_duplication(params: &serde_json::Value) -> Result<serde_json::Value, (i6
 
 fn tool_policy(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     reject_unknown(params, "policy", &["path", "base"])?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "policy")?;
     let base = opt_str(params, "base")?;
     let report = report::analytics::analyze_policy(
         Path::new(path),
@@ -1998,10 +2073,10 @@ fn tool_policy(params: &serde_json::Value) -> Result<serde_json::Value, (i64, St
 
 fn tool_risk(params: &serde_json::Value) -> Result<serde_json::Value, (i64, String)> {
     reject_unknown(params, "risk", &["path", "top", "since", "coverage"])?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "risk")?;
     let top = parse_top_param(params, 10)?;
     let window = parse_since(params, codegraph::history::HistoryWindow::Days90)?;
-    let (analysis, excludes) = analyze_optional_coverage(params, path)?;
+    let (analysis, excludes) = analyze_optional_coverage(params, "risk", path)?;
     let mut report = report::analytics::analyze_risk(&analysis, Path::new(path), &excludes, window)
         .map_err(|error| (-32602, error.to_string()))?;
     report.risks.truncate(top);
@@ -2016,9 +2091,10 @@ fn tool_risk(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Stri
 
 fn analyze_optional_coverage(
     params: &serde_json::Value,
+    tool: &str,
     path: &str,
 ) -> Result<(model::core::AnalysisReport, Vec<String>), (i64, String)> {
-    let coverage = optional_coverage(params)?;
+    let coverage = optional_coverage(params, tool)?;
     let config = load_config(path)?;
     let excludes = config_excludes(config.as_ref());
     let analysis = parse::analyze_path_with_excludes(Path::new(path), coverage.as_ref(), &excludes)
@@ -2035,7 +2111,7 @@ fn tool_debt(params: &serde_json::Value) -> Result<serde_json::Value, (i64, Stri
         "debt",
         &["path", "base", "target", "renames", "since"],
     )?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "debt")?;
     let base = opt_str(params, "base")?.unwrap_or("HEAD~1");
     let target = match opt_str(params, "target")? {
         None | Some("worktree") => parse::source_snapshot::SnapshotTarget::Worktree,
@@ -2090,13 +2166,13 @@ fn tool_project(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
             "snapshots",
         ],
     )?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "project")?;
     let target = match opt_str(params, "target")? {
         None => parse::source_snapshot::SnapshotTarget::Worktree,
         Some(revision) => parse::source_snapshot::SnapshotTarget::Revision(revision.to_owned()),
     };
     let window = parse_since(params, codegraph::history::HistoryWindow::Days90)?;
-    let coverage = optional_coverage(params)?;
+    let coverage = optional_coverage(params, "project")?;
     let ownership_mode = match opt_str(params, "ownership")? {
         None | Some("aggregate") => codegraph::ownership::OwnershipMode::AggregateOnly,
         Some("include_authors") => codegraph::ownership::OwnershipMode::IncludeAuthors,
@@ -2154,39 +2230,56 @@ fn tool_project(params: &serde_json::Value) -> Result<serde_json::Value, (i64, S
 
 /// Load one coverage file. An `.info` path is LCOV; any other path decides by
 /// XML root element, so JaCoCo and Cobertura share one argument.
-fn load_coverage_file(path: &str) -> Result<parse::coverage::CoverageMap, String> {
+fn load_coverage_file(path: &Path) -> Result<parse::coverage::CoverageMap, String> {
     use parse::coverage::CoverageFormat;
     let text = std::fs::read_to_string(path)
-        .map_err(|error| format!("cannot read coverage '{path}': {error}"))?;
-    let is_lcov = Path::new(path)
+        .map_err(|error| format!("cannot read coverage '{}': {error}", path.display()))?;
+    let is_lcov = path
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("info"));
     let format = if is_lcov {
         CoverageFormat::Lcov
     } else {
-        CoverageFormat::detect_xml(&text)
-            .map_err(|error| format!("cannot detect coverage format for '{path}': {error}"))?
+        CoverageFormat::detect_xml(&text).map_err(|error| {
+            format!(
+                "cannot detect coverage format for '{}': {error}",
+                path.display()
+            )
+        })?
     };
     parse::coverage::parse(&text, format)
-        .map_err(|error| format!("cannot parse coverage '{path}': {error}"))
+        .map_err(|error| format!("cannot parse coverage '{}': {error}", path.display()))
 }
 
 // ---------------------------------------------------------------------------
 // Protocol helpers
 // ---------------------------------------------------------------------------
 
-/// Builds the initialize result, echoing the client's requested protocol
-/// version per the spec's negotiation rules. Everything this server
-/// implements (initialize, tools/list, tools/call, ping, notifications) is
-/// version-stable, so echoing is honest; `2024-11-05` remains the fallback
-/// for clients that send no version.
+/// Legacy MCP revisions this server implements, newest first.
+///
+/// `initialize` is the handshake of revisions up to `2025-11-25`; the
+/// `2026-07-28` revision replaced it with per-request metadata and
+/// `server/discover`, neither of which is implemented here. A client that
+/// asks for anything outside this list is answered with the newest supported
+/// revision so a version mismatch stays visible instead of being echoed back
+/// as support the server does not have.
+const SUPPORTED_PROTOCOL_VERSIONS: [&str; 4] =
+    ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// Builds the initialize result, negotiating the client's requested protocol
+/// version against [`SUPPORTED_PROTOCOL_VERSIONS`]: a supported request is
+/// echoed, an unsupported or missing one falls back to the newest supported
+/// revision per the legacy spec's negotiation rules.
 fn initialize_result(params: &serde_json::Value) -> serde_json::Value {
+    let requested = params
+        .get("protocolVersion")
+        .and_then(serde_json::Value::as_str);
+    let negotiated = requested
+        .filter(|version| SUPPORTED_PROTOCOL_VERSIONS.contains(version))
+        .unwrap_or(SUPPORTED_PROTOCOL_VERSIONS[0]);
     serde_json::json!({
-        "protocolVersion": params
-            .get("protocolVersion")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("2024-11-05"),
+        "protocolVersion": negotiated,
         "capabilities": { "tools": {} },
         "serverInfo": {
             "name": "leadline",
@@ -2313,15 +2406,20 @@ fn config_excludes(config: Option<&config::Config>) -> Vec<String> {
 /// These callers only ever read it.
 fn index_directory(
     params: &serde_json::Value,
+    tool: &str,
     config: Option<&config::Config>,
     path: &str,
 ) -> Result<Option<PathBuf>, (i64, String)> {
     if let Some(argument) = opt_str(params, "index")? {
-        return Ok(Some(PathBuf::from(argument)));
+        return contained_path(tool, "index", Path::new(argument)).map(Some);
     }
-    Ok(config
+    match config
         .and_then(|selected| selected.index.as_ref())
-        .map(|configured| config_dir(path).join(&configured.path)))
+        .map(|configured| config_dir(path).join(&configured.path))
+    {
+        Some(configured) => contained_path(tool, "index", &configured).map(Some),
+        None => Ok(None),
+    }
 }
 
 struct CachedIndex {
@@ -2375,12 +2473,13 @@ fn cached_index(dir: &std::path::Path) -> Arc<report::index::AnalysisIndex> {
 /// missing or unusable index silently falls back to the cold analysis.
 fn analyze_read_only(
     params: &serde_json::Value,
+    tool: &str,
     config: Option<&config::Config>,
     path: &str,
     coverage: Option<&parse::coverage::CoverageMap>,
     excludes: &[String],
 ) -> Result<(model::core::AnalysisReport, Option<report::index::Reuse>), (i64, String)> {
-    let index_dir = index_directory(params, config, path)?;
+    let index_dir = index_directory(params, tool, config, path)?;
     if coverage.is_none()
         && let Some(dir) = index_dir
     {
@@ -2487,13 +2586,86 @@ fn artifact_paths(
         .collect()
 }
 
+/// Canonical working directory shared by every containment check.
+fn working_directory() -> Result<PathBuf, (i64, String)> {
+    std::env::current_dir()
+        .and_then(std::fs::canonicalize)
+        .map_err(|error| {
+            (
+                -32602,
+                format!("cannot resolve the working directory: {error}"),
+            )
+        })
+}
+
+/// `true` when the nearest existing ancestor of `path` canonicalizes inside
+/// `root`. Missing components cannot hide a symlinked parent.
+fn resolves_inside(path: &Path, root: &Path) -> bool {
+    let mut ancestor = path;
+    loop {
+        if let Ok(resolved) = std::fs::canonicalize(ancestor) {
+            return resolved.starts_with(root);
+        }
+        // `Path::parent` yields an empty path at the top of a relative path;
+        // the current directory is then the last ancestor to check.
+        match ancestor.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => ancestor = parent,
+            _ => return std::fs::canonicalize(".").is_ok_and(|cwd| cwd.starts_with(root)),
+        }
+    }
+}
+
+/// Resolve a caller-supplied path against the working directory and reject
+/// anything that escapes it through `..`, an absolute path, or a symlink.
+///
+/// `..` is rejected outright instead of collapsed: lexical collapse would
+/// validate a different path than the analyzer later opens when a component
+/// is a symlink. The nearest existing ancestor is canonicalized, so a missing
+/// leaf cannot hide behind a symlinked directory, and a canonicalized working
+/// directory (verbatim on Windows, resolved through a symlink on macOS) still
+/// matches the caller's spelling. A read that follows the check resolves
+/// again, so only a local swap between the two can race.
+fn contained_path(tool: &str, key: &str, path: &Path) -> Result<PathBuf, (i64, String)> {
+    use std::path::Component;
+    let outside = || {
+        (
+            -32602,
+            format!("{tool} '{key}' must stay inside the working directory"),
+        )
+    };
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(outside());
+    }
+    let root = working_directory()?;
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    if !resolves_inside(&absolute, &root) {
+        return Err(outside());
+    }
+    Ok(absolute)
+}
+
+/// A tool's optional `path` argument, defaulting to `.` and contained to the
+/// working directory. The caller's text is returned unchanged so results echo
+/// the path that was asked for.
+fn tool_path<'a>(params: &'a serde_json::Value, tool: &str) -> Result<&'a str, (i64, String)> {
+    let path = opt_str(params, "path")?.unwrap_or(".");
+    contained_path(tool, "path", Path::new(path))?;
+    Ok(path)
+}
+
 /// Resolve one lexically normalized artifact path, rejecting paths that
 /// resolve outside the working directory.
 ///
-/// The full path is resolved when it exists; otherwise its parent directory
-/// is, so a missing artifact cannot hide behind a symlinked directory. The
-/// later read resolves again, so only a local swap between the two resolves
-/// can still race.
+/// The nearest existing ancestor is resolved, so a missing artifact cannot
+/// hide behind a symlinked directory. The later read resolves again, so only
+/// a local swap between the two can still race.
 fn contained_artifact_path(
     tool: &str,
     key: &str,
@@ -2505,17 +2677,9 @@ fn contained_artifact_path(
             format!("{tool} '{key}' must stay inside the working directory"),
         )
     };
-    let root = std::env::current_dir()
-        .and_then(std::fs::canonicalize)
-        .map_err(|_| outside())?;
+    let root = working_directory().map_err(|_| outside())?;
     let candidate = Path::new(normalized);
-    let resolved = std::fs::canonicalize(candidate).ok().or_else(|| {
-        let parent = candidate
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())?;
-        std::fs::canonicalize(parent).ok()
-    });
-    if resolved.is_some_and(|resolved| !resolved.starts_with(&root)) {
+    if !resolves_inside(candidate, &root) {
         return Err(outside());
     }
     Ok(PathBuf::from(normalized))
@@ -2548,7 +2712,7 @@ fn tool_security_findings(params: &serde_json::Value) -> Result<serde_json::Valu
             "top",
         ],
     )?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "security_findings")?;
     let sarif = artifact_paths(params, "security_findings", "sarif", true)?;
     if sarif.is_empty() {
         return Err((
@@ -2616,7 +2780,7 @@ fn tool_vulnerabilities(params: &serde_json::Value) -> Result<serde_json::Value,
             "top",
         ],
     )?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "vulnerabilities")?;
     let osv = artifact_paths(params, "vulnerabilities", "osv", false)?;
     let trivy = artifact_paths(params, "vulnerabilities", "trivy", false)?;
     if osv.is_empty() && trivy.is_empty() {
@@ -2681,7 +2845,7 @@ fn tool_sql_risks(params: &serde_json::Value) -> Result<serde_json::Value, (i64,
             "top",
         ],
     )?;
-    let path = opt_str(params, "path")?.unwrap_or(".");
+    let path = tool_path(params, "sql_risks")?;
     let config = load_config(path)?;
     let defaults = config
         .as_ref()
@@ -3369,6 +3533,64 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn initialize_negotiates_a_supported_protocol_version() {
+        let negotiated = |params: serde_json::Value| {
+            initialize_result(&params)["protocolVersion"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        // A supported request is echoed, oldest revision included.
+        assert_eq!(
+            negotiated(serde_json::json!({ "protocolVersion": "2025-06-18" })),
+            "2025-06-18"
+        );
+        assert_eq!(
+            negotiated(serde_json::json!({ "protocolVersion": "2024-11-05" })),
+            "2024-11-05"
+        );
+        // An unsupported or missing request falls back to the newest revision
+        // instead of echoing a version this server does not implement.
+        assert_eq!(
+            negotiated(serde_json::json!({ "protocolVersion": "2026-07-28" })),
+            "2025-11-25"
+        );
+        assert_eq!(
+            negotiated(serde_json::json!({ "protocolVersion": "1999-01-01" })),
+            "2025-11-25"
+        );
+        assert_eq!(negotiated(serde_json::json!({})), "2025-11-25");
+    }
+
+    #[test]
+    fn contained_paths_allow_only_the_working_directory_tree() {
+        let root = working_directory().unwrap();
+        // The working directory and every descendant are allowed, whether the
+        // caller sends a relative or an absolute path.
+        assert!(contained_path("t", "path", Path::new(".")).is_ok());
+        assert!(contained_path("t", "path", Path::new("src/lib.rs")).is_ok());
+        assert!(contained_path("t", "path", &root.join("src")).is_ok());
+        // Traversal and absolute paths outside are rejected outright; `..` is
+        // never collapsed into a different path than the read will open.
+        assert!(contained_path("t", "path", Path::new("../escape")).is_err());
+        assert!(contained_path("t", "path", Path::new("/etc")).is_err());
+        assert!(contained_path("t", "path", Path::new("src/../Cargo.toml")).is_err());
+    }
+
+    #[test]
+    fn bearer_tokens_match_exactly_the_configured_value() {
+        assert!(bearer_token_matches(Some("Bearer s3cret"), "s3cret"));
+        // RFC 7235 makes the auth scheme case-insensitive.
+        assert!(bearer_token_matches(Some("bearer s3cret"), "s3cret"));
+        assert!(!bearer_token_matches(None, "s3cret"));
+        assert!(!bearer_token_matches(Some("s3cret"), "s3cret"));
+        assert!(!bearer_token_matches(Some("Bearer wrong"), "s3cret"));
+        assert!(!bearer_token_matches(Some("Basic s3cret"), "s3cret"));
+        assert!(!bearer_token_matches(Some("Bearer s3cre"), "s3cret"));
+        assert!(!bearer_token_matches(Some("Bearer "), "s3cret"));
     }
 
     #[test]

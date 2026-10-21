@@ -76,11 +76,23 @@ fn error_of(response: &Value) -> &Value {
         .unwrap_or_else(|| panic!("expected error, got {response}"))
 }
 
-fn fixture_dir(source: &str) -> PathBuf {
+/// Fixture root inside the crate working directory, which is the MCP server's
+/// containment boundary. The ignored `.mcp-test/` parent keeps an interrupted
+/// run from showing up as a repository change.
+fn mcp_test_directory(label: &str) -> PathBuf {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("leadline-mcp-{}-{id}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let path = std::env::current_dir()
+        .unwrap()
+        .join(".mcp-test")
+        .join(format!("{label}-{}-{id}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn fixture_dir(source: &str) -> PathBuf {
+    let dir = mcp_test_directory("fixture");
     std::fs::write(dir.join("sample.ts"), source).unwrap();
     dir
 }
@@ -119,7 +131,7 @@ impl Drop for Fixture {
 }
 
 fn git_fixture() -> Fixture {
-    let root = Fixture::create(common::temporary_directory());
+    let root = Fixture::create(mcp_test_directory("fixture"));
     run_git(&root, &["init"]);
     run_git(&root, &["config", "user.email", "test@example.com"]);
     run_git(&root, &["config", "user.name", "Test"]);
@@ -421,7 +433,7 @@ fn explain_metric_covers_all_five_and_rejects_unknown() {
 
 #[test]
 fn analyze_changed_reports_deltas() {
-    let root = common::temporary_directory();
+    let root = mcp_test_directory("fixture");
     let run = |args: &[&str]| {
         let output = std::process::Command::new("git")
             .args(args)
@@ -483,7 +495,7 @@ fn analyze_changed_reports_deltas() {
 
 #[test]
 fn analyze_changed_non_worktree_targets_ignore_worktree() {
-    let root = common::temporary_directory();
+    let root = mcp_test_directory("fixture");
     let run = |args: &[&str]| {
         let output = std::process::Command::new("git")
             .args(args)
@@ -546,7 +558,7 @@ fn analyze_changed_non_worktree_targets_ignore_worktree() {
 
 #[test]
 fn analyze_changed_renames_pairs_git_detected_rename() {
-    let root = common::temporary_directory();
+    let root = mcp_test_directory("fixture");
     let run = |args: &[&str]| {
         let output = std::process::Command::new("git")
             .args(args)
@@ -601,12 +613,7 @@ fn analyze_changed_rejects_option_like_target() {
 
 #[test]
 fn analyze_truncates_large_results_explicitly() {
-    let dir = std::env::temp_dir().join(format!(
-        "leadline-mcp-trunc-{}-{}",
-        std::process::id(),
-        AtomicU64::new(0).fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mcp_test_directory("truncate");
     let mut source = String::new();
     for index in 0..250 {
         source.push_str(&format!("function fn{index}() {{ return {index}; }}\n"));
@@ -634,12 +641,7 @@ fn analyze_truncates_large_results_explicitly() {
 
 #[test]
 fn check_accepts_regression_limits_without_absolute_thresholds() {
-    let root = std::env::temp_dir().join(format!(
-        "leadline-mcp-regressions-{}-{}",
-        std::process::id(),
-        AtomicU64::new(0).fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(&root).unwrap();
+    let root = mcp_test_directory("regressions");
     let run = |args: &[&str]| {
         let output = std::process::Command::new("git")
             .args(args)
@@ -1333,7 +1335,7 @@ fn analyze_function_explains_contributions() {
 
 #[test]
 fn analyze_changed_accepts_budget_params() {
-    let root = common::temporary_directory();
+    let root = mcp_test_directory("fixture");
     let run = |args: &[&str]| {
         let output = std::process::Command::new("git")
             .args(args)
@@ -2059,6 +2061,7 @@ fn mcp_args_parse_port_and_host() {
         Ok(Some(surfaces::mcp::HttpOptions {
             host: "127.0.0.1".to_owned(),
             port: surfaces::http::DEFAULT_PORT,
+            token: None,
         }))
     );
     assert_eq!(mcp_args(&["--port", "0"]).unwrap().unwrap().port, 0);
@@ -2067,9 +2070,21 @@ fn mcp_args_parse_port_and_host() {
         .unwrap();
     assert_eq!(options.port, 8080);
     assert_eq!(options.host, "0.0.0.0");
+    assert_eq!(options.token, None);
+    assert_eq!(
+        mcp_args(&["--port", "8080", "--token", "s3cret"])
+            .unwrap()
+            .unwrap()
+            .token
+            .as_deref(),
+        Some("s3cret")
+    );
     assert!(mcp_args(&["--host"]).is_err());
     // A host configures only the HTTP transport, so it needs a port.
     assert!(mcp_args(&["--host", "0.0.0.0"]).is_err());
+    assert!(mcp_args(&["--token", "s3cret"]).is_err());
+    assert!(mcp_args(&["--port", "8080", "--token"]).is_err());
+    assert!(mcp_args(&["--port", "8080", "--token", ""]).is_err());
     assert!(mcp_args(&["--port", "abc"]).is_err());
     assert!(mcp_args(&["--bogus"]).is_err());
 }
@@ -2107,9 +2122,15 @@ impl Drop for HttpServer {
 
 /// Starts the real server on an OS-assigned port and reads its banner.
 fn spawn_http_server() -> HttpServer {
+    spawn_http_server_with(&[])
+}
+
+/// Starts the server with extra `mcp` arguments, on an OS-assigned port.
+fn spawn_http_server_with(extra: &[&str]) -> HttpServer {
     use std::io::BufRead as _;
     let mut child = common::leadline()
         .args(["mcp", "--port", "0"])
+        .args(extra)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -2154,6 +2175,60 @@ fn http_post_serves_tools_list() {
     let response = http_exchange(port, "POST /mcp HTTP/1.1\r\nHost: localhost", &body);
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
     assert!(response.contains("analyze_changed"));
+}
+
+#[test]
+fn http_requires_the_configured_bearer_token() {
+    let server = spawn_http_server_with(&["--token", "s3cret"]);
+    let port = server.port();
+    let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+        .to_string();
+    let head = "POST /mcp HTTP/1.1\r\nHost: localhost";
+    // No header, a wrong token, and the wrong scheme are all rejected.
+    for credentials in [
+        "",
+        "Authorization: Bearer wrong",
+        "Authorization: Basic s3cret",
+    ] {
+        let request = if credentials.is_empty() {
+            head.to_owned()
+        } else {
+            format!("{head}\r\n{credentials}")
+        };
+        let response = http_exchange(port, &request, &body);
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+        assert!(
+            response.contains("missing or invalid bearer token"),
+            "{response}"
+        );
+    }
+    // Even /health needs the token once auth is configured.
+    let response = http_exchange(port, "GET /health HTTP/1.1\r\nHost: localhost", "");
+    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    // The configured token is accepted and is case-insensitive in its scheme.
+    let response = http_exchange(
+        port,
+        "POST /mcp HTTP/1.1\r\nHost: localhost\r\nAuthorization: bearer s3cret",
+        &body,
+    );
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(response.contains("analyze_changed"));
+}
+
+#[test]
+fn http_refuses_a_remote_bind_without_a_token() {
+    let output = common::leadline()
+        .args(["mcp", "--port", "0", "--host", "0.0.0.0"])
+        .env_remove("LEADLINE_MCP_TOKEN")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no token is set"), "{stderr}");
+    // The same bind is allowed once a token is supplied.
+    let server = spawn_http_server_with(&["--host", "0.0.0.0", "--token", "s3cret"]);
+    assert!(server.port() > 0);
 }
 
 #[test]
@@ -2579,12 +2654,42 @@ fn artifact_paths_reject_symlinks_that_leave_the_working_directory() {
 }
 
 #[test]
+fn tool_paths_are_contained_to_the_working_directory() {
+    // Every tool's `path` argument, relative or absolute, must stay inside
+    // the working directory.
+    for path in ["..", "/etc"] {
+        let response = call_tool("analyze", serde_json::json!({ "path": path }));
+        assert_eq!(
+            error_of(&response)["code"].as_i64(),
+            Some(-32602),
+            "{response}"
+        );
+        assert!(
+            error_of(&response)["message"]
+                .as_str()
+                .unwrap()
+                .contains("inside the working directory"),
+            "{response}"
+        );
+    }
+    // Coverage files and reuse indexes are contained the same way.
+    for (tool, argument) in [
+        ("test_targets", "coverage"),
+        ("repo_summary", "coverage"),
+        ("check", "index"),
+    ] {
+        let response = call_tool(tool, serde_json::json!({ argument: "../outside" }));
+        assert_eq!(
+            error_of(&response)["code"].as_i64(),
+            Some(-32602),
+            "{tool}: {response}"
+        );
+    }
+}
+
+#[test]
 fn check_uses_config_thresholds_and_regressions() {
-    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let root =
-        std::env::temp_dir().join(format!("leadline-mcp-config-{}-{id}", std::process::id()));
-    std::fs::create_dir_all(&root).unwrap();
+    let root = mcp_test_directory("config");
     std::fs::write(
         root.join("leadline.toml"),
         "[thresholds.function]\ncyclomatic = 1\n\n[regressions]\ncognitive = 2\ncyclomatic = 1\nmax_nesting = 1\ncrap = 1.0\n",
@@ -2788,12 +2893,7 @@ fn debt_and_project_compare_a_git_repo() {
 
 /// Metrics directory for one test, following this file's fixture naming.
 fn metrics_directory() -> PathBuf {
-    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let dir =
-        std::env::temp_dir().join(format!("leadline-mcp-metrics-{}-{id}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    mcp_test_directory("metrics")
 }
 
 /// Posts one JSON-RPC body to the HTTP transport and returns the raw response.

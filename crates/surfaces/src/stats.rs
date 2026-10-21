@@ -438,6 +438,7 @@ mod tests {
         let request = |method: &str, path: &str| Request {
             method: method.to_owned(),
             path: path.to_owned(),
+            authorization: None,
             body: Vec::new(),
         };
         for path in KNOWN_PATHS {
@@ -467,6 +468,7 @@ mod tests {
         let refresh = Request {
             method: "POST".to_owned(),
             path: "/api/refresh".to_owned(),
+            authorization: None,
             body: Vec::new(),
         };
         let (status, content_type, body) = server.route(&refresh);
@@ -483,6 +485,7 @@ mod tests {
         let project = Request {
             method: "GET".to_owned(),
             path: "/api/project".to_owned(),
+            authorization: None,
             body: Vec::new(),
         };
         let (status, _, served) = server.route(&project);
@@ -514,6 +517,7 @@ mod tests {
         let request = Request {
             method: "POST".to_owned(),
             path: "/api/refresh".to_owned(),
+            authorization: None,
             body: Vec::new(),
         };
         let guard = RefreshGuard::acquire(&server.refreshing).expect("first refresh acquires");

@@ -1,0 +1,32 @@
+name: PR title
+
+# Auto-release reads the squash commit on main, which takes its title from the
+# pull request. Gate that title here so a non-conventional merge neither cuts a
+# release nor silently lands as an unreleasable change.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  conventional-title:
+    name: Conventional title
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate the pull request title
+        shell: bash
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          types='build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
+          pattern="^(${types})(\([^()]+\))?!?: .+"
+          if [[ ! "$TITLE" =~ $pattern ]]; then
+            echo "PR title must be a conventional commit: type(scope)!: summary" >&2
+            echo "allowed types: ${types//|/, }" >&2
+            echo "got: $TITLE" >&2
+            exit 1
+          fi
+          echo "conventional title: $TITLE"

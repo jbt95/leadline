@@ -58,6 +58,8 @@ static INFLIGHT_BODY_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::
 pub struct Request {
     pub method: String,
     pub path: String,
+    /// Raw `Authorization` header, when the client sent one.
+    pub authorization: Option<String>,
     pub body: Vec<u8>,
 }
 
@@ -297,6 +299,7 @@ fn read_request(
     let mut content_length: Option<usize> = None;
     let mut host = None;
     let mut origin = None;
+    let mut authorization = None;
     let mut header_bytes = 0usize;
     loop {
         let line = read_line(&mut reader, MAX_HTTP_LINE, deadline)?;
@@ -335,6 +338,8 @@ fn read_request(
             host = Some(value.trim().to_owned());
         } else if name.eq_ignore_ascii_case("origin") {
             origin = Some(value.trim().to_owned());
+        } else if name.eq_ignore_ascii_case("authorization") {
+            authorization = Some(value.trim().to_owned());
         } else if name.eq_ignore_ascii_case("transfer-encoding") {
             return Err((501, http_error("Transfer-Encoding is not supported")));
         }
@@ -362,7 +367,12 @@ fn read_request(
         filled += read;
     }
     Ok(ParsedRequest {
-        request: Request { method, path, body },
+        request: Request {
+            method,
+            path,
+            authorization,
+            body,
+        },
         host,
         origin,
         reservation,
@@ -486,6 +496,17 @@ fn is_loopback_ip(address: std::net::IpAddr) -> bool {
     }
 }
 
+/// `true` when a bind host names only loopback addresses.
+///
+/// The host is the literal `--host` value, so a DNS name other than
+/// `localhost` counts as non-loopback: resolving it here would make the
+/// authorization decision depend on whatever the resolver returns.
+pub fn is_loopback_bind(host: &str) -> bool {
+    let host = host.trim_matches(['[', ']']);
+    host.eq_ignore_ascii_case("localhost")
+        || host.parse::<std::net::IpAddr>().is_ok_and(is_loopback_ip)
+}
+
 /// Host part of one `host[:port]` authority, IPv6 brackets stripped.
 fn authority_host(authority: &str) -> &str {
     let host = match authority.rsplit_once(':') {
@@ -605,6 +626,21 @@ mod tests {
         assert!(!host_allowed(Some(""), true));
         // A wildcard-bound listener answers whatever address was reached.
         assert!(host_allowed(Some("leadline.internal"), false));
+    }
+
+    #[test]
+    fn bind_hosts_are_loopback_only_when_the_literal_is() {
+        assert!(is_loopback_bind("127.0.0.1"));
+        assert!(is_loopback_bind("127.0.0.2"));
+        assert!(is_loopback_bind("::1"));
+        assert!(is_loopback_bind("[::1]"));
+        assert!(is_loopback_bind("localhost"));
+        assert!(is_loopback_bind("LOCALHOST"));
+        assert!(!is_loopback_bind("0.0.0.0"));
+        assert!(!is_loopback_bind("::"));
+        assert!(!is_loopback_bind("192.0.2.1"));
+        // A DNS name is never resolved here, so it must count as remote.
+        assert!(!is_loopback_bind("leadline.internal"));
     }
 
     #[test]

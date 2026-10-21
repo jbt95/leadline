@@ -52,10 +52,13 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
+      - name: Install pinned Rust
+        shell: bash
+        run: bash scripts/ci-install-rust.sh exact
       - name: Install Rust target
-        run: rustup target add ${{ matrix.target }}
+        run: rustup target add --toolchain 1.90 ${{ matrix.target }}
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo +1.90 build --release --locked --target ${{ matrix.target }}
       - name: Package Unix binary
         if: runner.os != 'Windows'
         run: tar -C target/${{ matrix.target }}/release -czf ${{ matrix.archive }} leadline
